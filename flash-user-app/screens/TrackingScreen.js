@@ -1,0 +1,369 @@
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, Pressable, ActivityIndicator,
+  Platform, Linking, Animated,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { io } from 'socket.io-client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BASE_URL } from '../services/api';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+
+const STATUS_LABELS = {
+  paid:            'Finding your driver...',
+  driver_assigned: 'Driver assigned',
+  en_route:        'Driver is on the way',
+  picked_up:       'Order picked up',
+  delivered:       'Out for delivery to you',
+  completed:       'Delivered!',
+};
+
+const STATUS_COLORS = {
+  paid:            '#f59e0b',
+  driver_assigned: '#3b82f6',
+  en_route:        '#8b5cf6',
+  picked_up:       '#f97316',
+  delivered:       '#10b981',
+  completed:       '#16a34a',
+};
+
+export default function TrackingScreen() {
+  const route = useRoute();
+  const navigation = useNavigation();
+  const { orderId, isCashDelivery } = route.params || {};
+
+  const [orderStatus, setOrderStatus]       = useState('paid');
+  const [driver, setDriver]                 = useState(null);
+  const [driverLocation, setDriverLocation] = useState(null);
+  const [loading, setLoading]               = useState(true);
+  const [socketConnected, setSocketConnected] = useState(false);
+  // Arrival notification banner
+  const [arrivalBanner, setArrivalBanner]   = useState(null);
+  const [shownMilestones, setShownMilestones] = useState(new Set());
+  // Cash reminder banner
+  const [cashReminder, setCashReminder]     = useState(false);
+  const bannerOpacity = useRef(new Animated.Value(0)).current;
+
+  const socketRef = useRef(null);
+  const mapRef    = useRef(null);
+
+  // ── Show arrival banner with auto-dismiss ──────────────────────────────────
+  const showBanner = useCallback((msg) => {
+    setArrivalBanner(msg);
+    bannerOpacity.setValue(0);
+    Animated.sequence([
+      Animated.timing(bannerOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
+      Animated.delay(4000),
+      Animated.timing(bannerOpacity, { toValue: 0, duration: 400, useNativeDriver: true }),
+    ]).start(() => setArrivalBanner(null));
+  }, [bannerOpacity]);
+
+  // ── Dial button — opens phone dialler with masked number ──────────────────
+  const handleCall = () => {
+    // Real phone hidden. Opens dialler to Flash support who connects the call.
+    // In production: use a masked number from a VOIP provider.
+    Linking.openURL('tel:+27800FLASH0').catch(() => {});
+  };
+
+  // ── Message button ────────────────────────────────────────────────────────
+  const handleMessage = () => {
+    navigation.navigate('Chat', { orderId });
+  };
+
+  useEffect(() => {
+    if (!orderId) return;
+
+    const connectSocket = async () => {
+      const token = await AsyncStorage.getItem('FLASH_TOKEN');
+      if (!token) return;
+
+      const socket = io(BASE_URL, { auth: { token }, transports: ['websocket'] });
+      socketRef.current = socket;
+
+      socket.on('connect', () => {
+        setSocketConnected(true);
+        socket.emit('track_order', { orderId });
+        setLoading(false);
+      });
+
+      socket.on('disconnect', () => setSocketConnected(false));
+
+      // Live driver location → update map marker
+      socket.on('driver_location', (data) => {
+        if (data.driverId) {
+          setDriverLocation({ lat: data.lat, lng: data.lng });
+          if (mapRef.current) {
+            mapRef.current.animateToRegion({
+              latitude:      parseFloat(data.lat),
+              longitude:     parseFloat(data.lng),
+              latitudeDelta:  0.012,
+              longitudeDelta: 0.012,
+            }, 600);
+          }
+        }
+      });
+
+      // Order status changed
+      socket.on('order_update', (data) => {
+        if (data.orderId === orderId) setOrderStatus(data.status);
+      });
+
+      // ── Arrival milestones from backend (Part 2) ─────────────────────────
+      socket.on('arrival_update', (data) => {
+        if (data.orderId !== orderId) return;
+        // Deduplicate: only show each milestone once per session
+        if (shownMilestones.has(data.milestone)) return;
+        setShownMilestones(prev => new Set([...prev, data.milestone]));
+        showBanner(data.message);
+      });
+
+      // ── Cash reminder (Part 2) ────────────────────────────────────────────
+      socket.on('cash_reminder', (data) => {
+        if (data.orderId === orderId) setCashReminder(true);
+      });
+
+      socket.on('connect_error', () => {
+        setLoading(false);
+        // Fallback poll every 10s if socket fails
+        const poll = async () => {
+          try {
+            const api = (await import('../services/api')).default;
+            const data = await api.orders.getOrder(orderId);
+            if (data?.order) {
+              setOrderStatus(data.order.status);
+              if (data.order.driver_name) {
+                setDriver({
+                  name:    data.order.driver_name,
+                  vehicle: data.order.driver_vehicle,
+                  phone:   data.order.driver_phone,
+                  rating:  data.order.driver_rating,
+                });
+              }
+            }
+          } catch (_) {}
+        };
+        const timer = setInterval(poll, 10000);
+        return () => clearInterval(timer);
+      });
+    };
+
+    connectSocket();
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.emit('stop_tracking', { orderId });
+        socketRef.current.disconnect();
+      }
+    };
+  }, [orderId, showBanner]);
+
+  const statusColor = STATUS_COLORS[orderStatus] || '#6b7280';
+  const statusLabel = STATUS_LABELS[orderStatus] || orderStatus;
+  const isCompleted = orderStatus === 'completed' || orderStatus === 'delivered';
+  const statuses    = Object.keys(STATUS_LABELS);
+
+  const defaultRegion = {
+    latitude:      -33.9249,  // Port Elizabeth default
+    longitude:      25.5858,
+    latitudeDelta:  0.05,
+    longitudeDelta: 0.05,
+  };
+
+  return (
+    <View style={styles.container}>
+
+      {/* ── MAP ─────────────────────────────────────────────────────────────── */}
+      <View style={styles.mapContainer}>
+        {Platform.OS !== 'web' ? (
+          <MapView
+            ref={mapRef}
+            style={StyleSheet.absoluteFillObject}
+            provider={PROVIDER_GOOGLE}
+            initialRegion={defaultRegion}
+            showsUserLocation
+            showsMyLocationButton={false}
+          >
+            {driverLocation && (
+              <Marker
+                coordinate={{
+                  latitude:  parseFloat(driverLocation.lat),
+                  longitude: parseFloat(driverLocation.lng),
+                }}
+                title="Your Flash Driver"
+                description={driver?.name || 'Driver'}
+              >
+                <View style={styles.driverMarker}>
+                  <Ionicons name="bicycle" size={18} color="#fff" />
+                </View>
+              </Marker>
+            )}
+          </MapView>
+        ) : (
+          <View style={styles.mapPlaceholder}>
+            <Ionicons name="map-outline" size={48} color="#6b7280" />
+            <Text style={styles.mapPlaceholderText}>Map view on mobile</Text>
+          </View>
+        )}
+
+        {/* Live indicator */}
+        <View style={[styles.liveBadge, { backgroundColor: socketConnected ? '#16a34a' : '#f59e0b' }]}>
+          <View style={styles.liveDot} />
+          <Text style={styles.liveText}>{socketConnected ? 'Live' : 'Connecting...'}</Text>
+        </View>
+
+        {/* ── Arrival banner (Part 2) ────────────────────────────────────── */}
+        {arrivalBanner && (
+          <Animated.View style={[styles.arrivalBanner, { opacity: bannerOpacity }]}>
+            <Ionicons name="location" size={16} color="#fff" />
+            <Text style={styles.arrivalText}>{arrivalBanner}</Text>
+          </Animated.View>
+        )}
+      </View>
+
+      {/* ── PANEL ─────────────────────────────────────────────────────────── */}
+      <View style={styles.panel}>
+
+        {/* ── Cash reminder banner (Part 2) ─────────────────────────────── */}
+        {(isCashDelivery || cashReminder) && (
+          <View style={styles.cashBanner}>
+            <Ionicons name="cash-outline" size={18} color="#0a0a0a" />
+            <Text style={styles.cashBannerText}>
+              Please make sure that you have enough cash
+            </Text>
+          </View>
+        )}
+
+        {/* Status pill */}
+        <View style={[styles.statusPill, { backgroundColor: statusColor }]}>
+          <Ionicons name="flash" size={14} color="#fff" />
+          <Text style={styles.statusPillText}>{statusLabel}</Text>
+        </View>
+
+        {/* Driver card with call + message buttons */}
+        {driver ? (
+          <View style={styles.driverCard}>
+            <View style={styles.driverAvatar}>
+              <Ionicons name="person" size={24} color="#fff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.driverName}>{driver.name}</Text>
+              <Text style={styles.driverMeta}>
+                {driver.vehicle}  •  {driver.rating}★  •  {driver.total_deliveries} trips
+              </Text>
+            </View>
+            {/* ── Part 2: Call button (masked dialler) ─────────────────── */}
+            <Pressable style={styles.iconActionBtn} onPress={handleCall}>
+              <Ionicons name="call" size={18} color="#0a0a0a" />
+            </Pressable>
+            {/* ── Part 2: Message button ────────────────────────────────── */}
+            <Pressable style={[styles.iconActionBtn, { backgroundColor: '#0a0a0a' }]} onPress={handleMessage}>
+              <Ionicons name="chatbubble-ellipses" size={16} color="#fff" />
+            </Pressable>
+          </View>
+        ) : loading ? (
+          <View style={styles.waitingCard}>
+            <ActivityIndicator color="#0a0a0a" size="small" />
+            <Text style={styles.waitingText}>Finding a driver nearby...</Text>
+          </View>
+        ) : null}
+
+        {/* Progress steps */}
+        <View style={styles.steps}>
+          {statuses.map((key, idx) => {
+            const currentIdx = statuses.indexOf(orderStatus);
+            const done = idx <= currentIdx;
+            return (
+              <View key={key} style={styles.stepRow}>
+                <View style={[styles.stepDot, done && { backgroundColor: statusColor }]} />
+                <Text style={[styles.stepLabel, done && styles.stepLabelDone]}>
+                  {STATUS_LABELS[key]}
+                </Text>
+                {done && <Ionicons name="checkmark-circle" size={16} color={statusColor} />}
+              </View>
+            );
+          })}
+        </View>
+
+        {isCompleted && (
+          <View style={styles.completedBanner}>
+            <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
+            <Text style={styles.completedText}>Your order has been delivered! Enjoy 🎉</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container:          { flex: 1, backgroundColor: '#f7f7f7' },
+  mapContainer:       { flex: 1, backgroundColor: '#e5e7eb' },
+  mapPlaceholder:     { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  mapPlaceholderText: { color: '#9ca3af', fontWeight: '600' },
+  driverMarker: {
+    backgroundColor: '#0a0a0a', borderRadius: 20, padding: 8,
+    borderWidth: 2, borderColor: '#fff',
+  },
+  liveBadge: {
+    position: 'absolute', top: 12, right: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20,
+  },
+  liveDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' },
+  liveText: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  arrivalBanner: {
+    position: 'absolute', bottom: 16, left: 16, right: 16,
+    backgroundColor: '#1a1a1a', borderRadius: 14,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 16, paddingVertical: 12,
+    shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 12, elevation: 8,
+  },
+  arrivalText: { color: '#fff', fontWeight: '700', fontSize: 14, flex: 1 },
+  panel: {
+    backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 20, gap: 14,
+    shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 20, elevation: 10,
+  },
+  cashBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: '#fef9c3', borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderWidth: 1, borderColor: '#fde047',
+  },
+  cashBannerText: { color: '#0a0a0a', fontWeight: '600', fontSize: 13, flex: 1 },
+  statusPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+  },
+  statusPillText: { color: '#fff', fontWeight: '800' },
+  driverCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#f9fafb', borderRadius: 16, padding: 14,
+  },
+  driverAvatar: {
+    width: 46, height: 46, borderRadius: 14,
+    backgroundColor: '#0a0a0a', alignItems: 'center', justifyContent: 'center',
+  },
+  driverName:    { fontWeight: '800', color: '#111827' },
+  driverMeta:    { color: '#6b7280', fontSize: 12, marginTop: 2 },
+  iconActionBtn: {
+    width: 40, height: 40, borderRadius: 12,
+    backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center',
+  },
+  waitingCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: '#f9fafb', borderRadius: 16, padding: 14,
+  },
+  waitingText:    { color: '#6b7280', fontWeight: '600' },
+  steps:          { gap: 10 },
+  stepRow:        { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  stepDot:        { width: 10, height: 10, borderRadius: 5, backgroundColor: '#e5e7eb' },
+  stepLabel:      { flex: 1, color: '#9ca3af', fontWeight: '600' },
+  stepLabelDone:  { color: '#111827' },
+  completedBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#dcfce7', borderRadius: 14, padding: 14,
+  },
+  completedText: { color: '#15803d', fontWeight: '700', flex: 1 },
+});

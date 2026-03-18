@@ -1,0 +1,100 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Flash — Docker Compose
+# ─────────────────────────────────────────────────────────────────────────────
+# This file starts the entire backend stack locally with one command:
+#   docker-compose up -d
+#
+# It runs three services:
+#   1. postgres  — The database (stores users, orders, drivers, messages, etc.)
+#   2. redis     — In-memory store for Socket.io multi-server scaling (optional)
+#   3. backend   — The Flash Node.js API server
+#
+# First time setup:
+#   1. cp backend/.env.example backend/.env
+#   2. Fill in your values in backend/.env
+#   3. docker-compose up -d
+#   4. docker-compose exec backend node src/db/migrate.js  (creates all tables)
+#
+# Useful commands:
+#   docker-compose up -d          — Start everything in the background
+#   docker-compose down           — Stop everything
+#   docker-compose logs -f backend — Watch backend logs live
+#   docker-compose ps             — See what's running
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: '3.9'
+
+services:
+
+  # ── PostgreSQL Database ─────────────────────────────────────────────────────
+  # Stores all Flash data: users, drivers, orders, payments, messages, etc.
+  # Data is saved to a Docker volume so it survives container restarts.
+  postgres:
+    image: postgres:15-alpine
+    container_name: flash_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: flash_user
+      POSTGRES_PASSWORD: flash_password
+      POSTGRES_DB: flash_db
+    ports:
+      - "5432:5432"       # Port 5432 on your machine → port 5432 in container
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # Persistent data storage
+    healthcheck:
+      # Wait until Postgres is ready before starting the backend
+      test: ["CMD-SHELL", "pg_isready -U flash_user -d flash_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  # Used for Socket.io multi-server scaling.
+  # When REDIS_URL is set in .env, Socket.io events (driver location, messages,
+  # arrival notifications) are shared across multiple backend instances.
+  # If you only run one backend server, Redis is optional but included here
+  # so it is ready when you need to scale.
+  redis:
+    image: redis:7-alpine
+    container_name: flash_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Flash Backend ───────────────────────────────────────────────────────────
+  # The Node.js/Express API server.
+  # Built from the Dockerfile in the ./backend folder.
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: flash_backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"       # Flash API available at http://localhost:3000
+    environment:
+      NODE_ENV: production
+      # These override .env values so the backend connects to the Docker
+      # containers by name instead of localhost
+      DATABASE_URL: postgresql://flash_user:flash_password@postgres:5432/flash_db
+      REDIS_URL: redis://redis:6379
+    env_file:
+      - ./backend/.env    # All other secrets (Paystack, JWT, AWS, etc.) from .env
+    depends_on:
+      postgres:
+        condition: service_healthy   # Wait for Postgres to be ready
+      redis:
+        condition: service_healthy   # Wait for Redis to be ready
+
+# ── Named Volumes ───────────────────────────────────────────────────────────
+# Docker stores these on your machine so data is not lost when containers stop.
+volumes:
+  postgres_data:
+  redis_data:

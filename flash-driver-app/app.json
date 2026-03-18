@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Flash Driver",
+    "slug": "flash-driver-app",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": { "backgroundColor": "#0a0a0a" },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "co.za.flash.driverapp",
+      "config": {
+        "googleMapsApiKey": "YOUR_IOS_GOOGLE_MAPS_API_KEY"
+      }
+    },
+    "android": {
+      "adaptiveIcon": { "backgroundColor": "#0a0a0a" },
+      "package": "co.za.flash.driverapp",
+      "config": {
+        "googleMaps": {
+          "apiKey": "YOUR_ANDROID_GOOGLE_MAPS_API_KEY"
+        }
+      }
+    },
+    "plugins": [
+      "expo-location",
+      "expo-document-picker"
+    ]
+  }
+}

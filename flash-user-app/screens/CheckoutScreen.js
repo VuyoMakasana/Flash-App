@@ -1,0 +1,330 @@
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, Pressable, FlatList,
+  Image, ScrollView, Alert, ActivityIndicator,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
+import { useFlash } from '../context/FlashContext';
+import api from '../services/api';
+
+const TIME_SLOTS = ['ASAP', '10:00 - 12:00', '12:00 - 14:00', '17:00 - 19:00'];
+
+export default function CheckoutScreen() {
+  const navigation = useNavigation();
+  const { cart, placeOrder, profile } = useFlash();
+
+  const [deliveryMode, setDeliveryMode]     = useState('fleet');
+  const [slot, setSlot]                     = useState('ASAP');
+  const [loading, setLoading]               = useState(false);
+  const [loadingDrivers, setLoadingDrivers] = useState(false);
+  const [realDrivers, setRealDrivers]       = useState([]);
+  const [selectedDriverId, setSelectedDriverId] = useState(null);
+
+  const subtotal    = useMemo(() => cart.reduce((s, i) => s + i.price * i.quantity, 0), [cart]);
+  const selectedDrv = realDrivers.find(d => d.id === selectedDriverId);
+  const deliveryFee = useMemo(() => {
+    if (!cart.length) return 0;
+    if (deliveryMode === 'pick' && selectedDrv) return selectedDrv.estimated_fee || 35;
+    return 35;
+  }, [cart.length, deliveryMode, selectedDrv]);
+  const total = subtotal + deliveryFee;
+
+  // ── Fetch real nearby drivers when user picks "pick a driver" ─────────────
+  const fetchDrivers = useCallback(async () => {
+    setLoadingDrivers(true);
+    try {
+      const data = await api.drivers.getNearby();
+      setRealDrivers(data.drivers || []);
+      if (data.drivers?.length) setSelectedDriverId(data.drivers[0].id);
+    } catch (e) {
+      // silently fall back — fleet mode still works fine
+    } finally {
+      setLoadingDrivers(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (deliveryMode === 'pick') fetchDrivers();
+  }, [deliveryMode, fetchDrivers]);
+
+  const handleProceedToPayment = async () => {
+    if (!cart.length) return;
+    setLoading(true);
+    try {
+      const order = await placeOrder({
+        deliveryMode,
+        timeSlot:       slot,
+        subtotal,
+        deliveryFee,
+        total,
+        dropoffAddress: profile.address || 'Customer Address',
+        requestedDriverId: deliveryMode === 'pick' ? selectedDriverId : null,
+      });
+      navigation.navigate('Payment', { orderId: order.id, total });
+    } catch (err) {
+      Alert.alert('Order Failed', err.message || 'Could not place order. Check your connection.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!cart.length) {
+    return (
+      <View style={styles.empty}>
+        <Ionicons name="bag-outline" size={48} color="#9ca3af" />
+        <Text style={styles.emptyTitle}>Cart is empty</Text>
+        <Text style={styles.emptyText}>Add items before checking out.</Text>
+        <Pressable style={styles.cta} onPress={() => navigation.navigate('Home')}>
+          <Text style={styles.ctaText}>Browse drops</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+
+      {/* ── Delivery Mode Toggle ──────────────────────────────────────────── */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Delivery</Text>
+        <View style={styles.toggleRow}>
+          {['fleet', 'pick'].map(mode => (
+            <Pressable
+              key={mode}
+              style={[styles.toggle, deliveryMode === mode && styles.toggleActive]}
+              onPress={() => setDeliveryMode(mode)}
+            >
+              <Text style={[styles.toggleText, deliveryMode === mode && styles.toggleTextActive]}>
+                {mode === 'fleet' ? '⚡ Flash Fleet' : '🚗 Pick a Driver'}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {/* ── Fleet mode ───────────────────────────────────────────────── */}
+        {deliveryMode === 'fleet' && (
+          <View style={styles.fleetCard}>
+            <View>
+              <Text style={styles.fleetTitle}>Flash Fleet</Text>
+              <Text style={styles.fleetCopy}>Auto-assigns the nearest available driver.</Text>
+            </View>
+            <View style={styles.badge}>
+              <Ionicons name="flash" size={14} color="#fff" />
+              <Text style={styles.badgeText}>ASAP</Text>
+            </View>
+          </View>
+        )}
+
+        {/* ── Pick mode: real driver cards ─────────────────────────────── */}
+        {deliveryMode === 'pick' && (
+          loadingDrivers ? (
+            <View style={styles.driverLoading}>
+              <ActivityIndicator color="#0a0a0a" />
+              <Text style={styles.driverLoadingText}>Finding nearby drivers...</Text>
+            </View>
+          ) : realDrivers.length === 0 ? (
+            <View style={styles.noDrivers}>
+              <Ionicons name="alert-circle-outline" size={24} color="#9ca3af" />
+              <Text style={styles.noDriversText}>No drivers available right now. Try Flash Fleet.</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={realDrivers}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyExtractor={d => d.id}
+              contentContainerStyle={{ gap: 12 }}
+              renderItem={({ item: d }) => {
+                const active = selectedDriverId === d.id;
+                return (
+                  <Pressable
+                    style={[
+                      styles.driverCard,
+                      active && styles.driverActive,
+                      d.is_busy && styles.driverBusy,
+                    ]}
+                    onPress={() => {
+                      if (d.is_busy) {
+                        Alert.alert(
+                          'Driver Busy',
+                          `${d.name} is currently completing another delivery.\n\nWould you like to wait or pick another driver?`,
+                          [
+                            { text: 'Wait', onPress: () => setSelectedDriverId(d.id) },
+                            { text: 'Pick Another', style: 'cancel' },
+                          ]
+                        );
+                        return;
+                      }
+                      setSelectedDriverId(d.id);
+                    }}
+                  >
+                    {/* Profile photo or avatar */}
+                    {d.profile_photo_url ? (
+                      <Image source={{ uri: d.profile_photo_url }} style={styles.driverImg} />
+                    ) : (
+                      <View style={[styles.driverImg, styles.driverImgPlaceholder]}>
+                        <Ionicons name="person" size={22} color="#9ca3af" />
+                      </View>
+                    )}
+
+                    <Text style={[styles.driverName, active && styles.driverNameActive]} numberOfLines={1}>
+                      {d.name}
+                    </Text>
+                    <Text style={[styles.driverMeta, active && styles.driverMetaActive]}>
+                      {d.vehicle_type}  •  {d.distance_km ? `${d.distance_km} km` : 'nearby'}
+                    </Text>
+
+                    {/* Rating + deliveries */}
+                    <View style={styles.driverStats}>
+                      <Ionicons name="star" size={11} color={active ? '#fbbf24' : '#f59e0b'} />
+                      <Text style={[styles.driverStatText, active && { color: '#fef3c7' }]}>
+                        {parseFloat(d.rating || 5).toFixed(1)}
+                      </Text>
+                      <Text style={[styles.driverStatSep, active && { color: '#6b7280' }]}>·</Text>
+                      <Text style={[styles.driverStatText, active && { color: '#fef3c7' }]}>
+                        {d.total_deliveries} trips
+                      </Text>
+                    </View>
+
+                    {/* Fee */}
+                    <Text style={[styles.driverFee, active && styles.driverFeeActive]}>
+                      R{d.estimated_fee}
+                    </Text>
+
+                    {/* Busy overlay */}
+                    {d.is_busy && (
+                      <View style={styles.busyBadge}>
+                        <Text style={styles.busyBadgeText}>Busy</Text>
+                      </View>
+                    )}
+
+                    {active && !d.is_busy && (
+                      <Ionicons name="checkmark-circle" size={18} color="#fff" style={styles.checkIcon} />
+                    )}
+                  </Pressable>
+                );
+              }}
+            />
+          )
+        )}
+      </View>
+
+      {/* ── Time Slot ────────────────────────────────────────────────────── */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Delivery Time</Text>
+        <View style={styles.slotRow}>
+          {TIME_SLOTS.map(time => (
+            <Pressable
+              key={time}
+              style={[styles.slot, slot === time && styles.slotActive]}
+              onPress={() => setSlot(time)}
+            >
+              <Text style={[styles.slotText, slot === time && styles.slotTextActive]}>{time}</Text>
+            </Pressable>
+          ))}
+        </View>
+      </View>
+
+      {/* ── Order Summary ────────────────────────────────────────────────── */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Order Summary</Text>
+        {cart.map(item => (
+          <View key={`${item.productId}-${item.size}`} style={styles.orderRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.orderName} numberOfLines={1}>{item.name}</Text>
+              <Text style={styles.orderMeta}>Size {item.size}  ×  {item.quantity}</Text>
+            </View>
+            <Text style={styles.orderPrice}>R{item.price * item.quantity}</Text>
+          </View>
+        ))}
+
+        <View style={styles.divider} />
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Subtotal</Text>
+          <Text style={styles.summaryValue}>R{subtotal}</Text>
+        </View>
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Delivery</Text>
+          <Text style={styles.summaryValue}>R{deliveryFee}</Text>
+        </View>
+        <View style={[styles.summaryRow, { marginTop: 4 }]}>
+          <Text style={[styles.summaryLabel, styles.totalLabel]}>Total</Text>
+          <Text style={[styles.summaryValue, styles.totalLabel]}>R{total}</Text>
+        </View>
+
+        <Pressable
+          style={[styles.cta, loading && { opacity: 0.6 }]}
+          onPress={handleProceedToPayment}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <>
+              <Text style={styles.ctaText}>Proceed to Payment</Text>
+              <Ionicons name="arrow-forward" size={18} color="#fff" />
+            </>
+          )}
+        </Pressable>
+      </View>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container:        { flex: 1, backgroundColor: '#f7f7f7' },
+  content:          { padding: 16, gap: 16, paddingBottom: 40 },
+  card:             { backgroundColor: '#fff', borderRadius: 16, padding: 16, gap: 12, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 12, elevation: 3 },
+  sectionTitle:     { fontWeight: '800', color: '#111827', fontSize: 18 },
+  toggleRow:        { flexDirection: 'row', gap: 10 },
+  toggle:           { flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: '#f3f4f6', alignItems: 'center' },
+  toggleActive:     { backgroundColor: '#0a0a0a' },
+  toggleText:       { fontWeight: '700', color: '#111827' },
+  toggleTextActive: { color: '#fff' },
+  fleetCard:        { backgroundColor: '#0a0a0a', padding: 16, borderRadius: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  fleetTitle:       { color: '#fff', fontWeight: '800', fontSize: 16 },
+  fleetCopy:        { color: '#d1d5db', marginTop: 4, fontSize: 12 },
+  badge:            { backgroundColor: '#111827', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: '#374151' },
+  badgeText:        { color: '#fff', fontWeight: '700' },
+  driverLoading:    { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 16 },
+  driverLoadingText:{ color: '#9ca3af', fontWeight: '600' },
+  noDrivers:        { alignItems: 'center', gap: 8, paddingVertical: 20 },
+  noDriversText:    { color: '#9ca3af', textAlign: 'center' },
+  driverCard:       { width: 150, backgroundColor: '#f9fafb', borderRadius: 16, padding: 12, borderWidth: 1.5, borderColor: '#e5e7eb', gap: 4, position: 'relative' },
+  driverActive:     { backgroundColor: '#0a0a0a', borderColor: '#0a0a0a' },
+  driverBusy:       { opacity: 0.7 },
+  driverImg:        { width: 48, height: 48, borderRadius: 12, backgroundColor: '#e5e7eb', marginBottom: 4 },
+  driverImgPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  driverName:       { fontWeight: '800', color: '#111827', fontSize: 13 },
+  driverNameActive: { color: '#fff' },
+  driverMeta:       { color: '#6b7280', fontSize: 11 },
+  driverMetaActive: { color: '#d1d5db' },
+  driverStats:      { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
+  driverStatText:   { color: '#374151', fontSize: 11, fontWeight: '600' },
+  driverStatSep:    { color: '#d1d5db', fontSize: 11 },
+  driverFee:        { fontWeight: '800', color: '#111827', fontSize: 15, marginTop: 4 },
+  driverFeeActive:  { color: '#fff' },
+  busyBadge:        { position: 'absolute', top: 8, right: 8, backgroundColor: '#ef4444', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  busyBadgeText:    { color: '#fff', fontSize: 10, fontWeight: '700' },
+  checkIcon:        { position: 'absolute', top: 8, right: 8 },
+  slotRow:          { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  slot:             { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, backgroundColor: '#e5e7eb' },
+  slotActive:       { backgroundColor: '#0a0a0a' },
+  slotText:         { color: '#111827', fontWeight: '700' },
+  slotTextActive:   { color: '#fff' },
+  orderRow:         { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  orderName:        { fontWeight: '700', color: '#111827' },
+  orderMeta:        { color: '#6b7280', fontSize: 12, marginTop: 2 },
+  orderPrice:       { fontWeight: '800', color: '#111827' },
+  divider:          { height: 1, backgroundColor: '#e5e7eb', marginVertical: 8 },
+  summaryRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  summaryLabel:     { color: '#6b7280', fontWeight: '600' },
+  summaryValue:     { color: '#111827', fontWeight: '700' },
+  totalLabel:       { fontSize: 16, color: '#111827', fontWeight: '800' },
+  cta:              { backgroundColor: '#0a0a0a', paddingVertical: 16, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 4 },
+  ctaText:          { color: '#fff', fontWeight: '800', fontSize: 16 },
+  empty:            { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, backgroundColor: '#f7f7f7', padding: 24 },
+  emptyTitle:       { fontSize: 20, fontWeight: '800', color: '#0a0a0a' },
+  emptyText:        { color: '#6b7280' },
+});

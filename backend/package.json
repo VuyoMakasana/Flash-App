@@ -1,0 +1,35 @@
+{
+  "name": "flash-backend",
+  "version": "1.0.0",
+  "description": "Flash delivery platform backend",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "migrate": "node src/db/migrate.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "express-validator": "^7.0.1",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.7.2",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "redis": "^4.6.13",
+    "node-cron": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "pg": "^8.11.3",
+    "paystack-node": "^2.0.0",
+    "multer": "^1.4.5-lts.1",
+    "multer-s3": "^3.0.1",
+    "@aws-sdk/client-s3": "^3.454.0",
+    "uuid": "^9.0.0",
+    "helmet": "^7.1.0",
+    "express-rate-limit": "^7.1.5",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
