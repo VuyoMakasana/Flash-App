@@ -1,0 +1,327 @@
+const BaseModel = require("./BaseModel");
+const bcrypt = require("bcryptjs");
+const s3Service = require("../services/s3Service");
+
+class Driver extends BaseModel {
+  static tableName = "drivers";
+  static _pingCounters = new Map();
+
+  static async findByEmail(email) {
+    const result = await this.query("SELECT * FROM drivers WHERE email = $1", [
+      email,
+    ]);
+    return result.rows[0];
+  }
+
+  static async create(driverData) {
+    const { name, email, password, phone, vehicle_type, vehicle_plate } =
+      driverData;
+    const password_hash = await bcrypt.hash(password, 12);
+
+    return await super.create(this.tableName, {
+      name,
+      email,
+      password_hash,
+      phone,
+      vehicle_type: vehicle_type || null,
+      vehicle_plate: vehicle_plate || null,
+      status: "pending_documents",
+    });
+  }
+
+  static async verifyPassword(email, password) {
+    const driver = await this.findByEmail(email);
+    if (!driver) return null;
+
+    const isValid = await bcrypt.compare(password, driver.password_hash);
+    if (!isValid) return null;
+
+    const { password_hash, ...safeDriver } = driver;
+    return safeDriver;
+  }
+
+  static async updateProfile(driverId, data) {
+    const { name, phone, vehicle_type, vehicle_plate } = data;
+    return await super.update(this.tableName, driverId, {
+      name,
+      phone,
+      vehicle_type,
+      vehicle_plate,
+    });
+  }
+
+  static async getDocuments(driverId) {
+    const result = await this.query(
+      "SELECT document_type, verified, uploaded_at FROM driver_documents WHERE driver_id = $1",
+      [driverId],
+    );
+    return result.rows;
+  }
+
+  static async uploadDocument(driverId, documentType, file) {
+    const REQUIRED_DOCS = [
+      "government_id",
+      "drivers_license",
+      "police_certified",
+      "profile_photo",
+      "vehicle_registration",
+    ];
+
+    const filename = `${driverId}-${documentType}-${Date.now()}`;
+    const fileUrl = await s3Service.uploadFile(
+      file.buffer,
+      filename,
+      file.mimetype,
+    );
+
+    const result = await this.query(
+      `INSERT INTO driver_documents (driver_id, document_type, file_url, file_name)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (driver_id, document_type) DO UPDATE
+       SET file_url=$3, file_name=$4, verified=false, uploaded_at=NOW()
+       RETURNING *`,
+      [driverId, documentType, fileUrl, file.originalname],
+    );
+
+    const allDocs = await this.query(
+      "SELECT document_type FROM driver_documents WHERE driver_id = $1",
+      [driverId],
+    );
+
+    const uploadedTypes = allDocs.rows.map((r) => r.document_type);
+    const allUploaded = REQUIRED_DOCS.every((d) => uploadedTypes.includes(d));
+
+    if (allUploaded) {
+      await this.query(
+        "UPDATE drivers SET status='documents_submitted', updated_at=NOW() WHERE id=$1 AND status='pending_documents'",
+        [driverId],
+      );
+    }
+
+    return {
+      document: result.rows[0],
+      uploadedDocuments: uploadedTypes,
+      allUploaded,
+      message: allUploaded
+        ? "All documents uploaded! Your application is now under review."
+        : `Document uploaded. Still needed: ${REQUIRED_DOCS.filter((d) => !uploadedTypes.includes(d)).join(", ")}`,
+    };
+  }
+
+  static async setOnlineStatus(driverId, online) {
+    await this.query(
+      "UPDATE drivers SET is_online=$1, updated_at=NOW() WHERE id=$2",
+      [!!online, driverId],
+    );
+  }
+
+  static async updateLocation(driverId, lat, lng, orderId, io) {
+    await this.query(
+      "UPDATE drivers SET current_lat=$1, current_lng=$2, updated_at=NOW() WHERE id=$3",
+      [lat, lng, driverId],
+    );
+
+    const pingCount = (this._pingCounters.get(driverId) || 0) + 1;
+    this._pingCounters.set(driverId, pingCount);
+
+    if (pingCount % 5 === 0) {
+      await this.query(
+        "INSERT INTO driver_locations (driver_id, order_id, lat, lng) VALUES ($1, $2, $3, $4)",
+        [driverId, orderId || null, lat, lng],
+      );
+    }
+
+    if (io && orderId) {
+      io.to(`order:${orderId}`).emit("driver_location", {
+        driverId,
+        orderId,
+        lat,
+        lng,
+        timestamp: new Date().toISOString(),
+      });
+
+      await this.sendArrivalNotifications(driverId, orderId, lat, lng, io);
+    }
+  }
+
+  static async sendArrivalNotifications(driverId, orderId, lat, lng, io) {
+    const orderRow = await this.query(
+      "SELECT user_id, dropoff_lat, dropoff_lng, is_cash_delivery, status FROM orders WHERE id=$1",
+      [orderId],
+    );
+
+    if (orderRow.rows.length) {
+      const order = orderRow.rows[0];
+      const distKm = this.calculateDistance(
+        lat,
+        lng,
+        order.dropoff_lat,
+        order.dropoff_lng,
+      );
+      const mins = this.estimateMinutes(distKm);
+
+      if (distKm !== null && order.status === "en_route") {
+        let milestone = null;
+        if (distKm <= 0.15) {
+          milestone = {
+            key: "arrived",
+            message: "🚗 Your driver has arrived!",
+          };
+        } else if (mins <= 2) {
+          milestone = { key: "2min", message: "⚡ Driver is 2 minutes away!" };
+        } else if (mins <= 5) {
+          milestone = { key: "5min", message: "📍 Driver is 5 minutes away" };
+        } else if (mins <= 10) {
+          milestone = {
+            key: "10min",
+            message: "🕐 Driver is about 10 minutes away",
+          };
+        } else if (mins <= 15) {
+          milestone = {
+            key: "15min",
+            message: "🕐 Driver is about 15 minutes away",
+          };
+        }
+
+        if (milestone) {
+          io.to(`user:${order.user_id}`).emit("arrival_update", {
+            orderId,
+            milestone: milestone.key,
+            message: milestone.message,
+            distanceKm: distKm.toFixed(2),
+            estimatedMins: mins,
+          });
+
+          if (order.is_cash_delivery && milestone.key === "5min") {
+            io.to(`user:${order.user_id}`).emit("cash_reminder", {
+              orderId,
+              message:
+                "💵 Please have your cash ready — driver is almost there!",
+            });
+          }
+        }
+      }
+    }
+  }
+
+  static calculateDistance(lat1, lng1, lat2, lng2) {
+    if (!lat1 || !lng1 || !lat2 || !lng2) return null;
+    const R = 6371;
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLng = ((lng2 - lng1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  static estimateMinutes(km) {
+    return Math.max(1, Math.round((km / 25) * 60));
+  }
+
+  static async getAvailableOrders(driverId) {
+    const sql = `
+      SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
+             o.total, o.driver_payout, o.pickup_address, o.dropoff_address,
+             o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng,
+             o.is_cash_delivery, o.created_at,
+             COUNT(oi.id) as item_count
+      FROM orders o
+      LEFT JOIN order_items oi ON oi.order_id = o.id
+      WHERE o.status = 'paid' AND o.driver_id IS NULL
+      GROUP BY o.id
+      ORDER BY o.created_at DESC
+      LIMIT 20
+    `;
+    const result = await this.query(sql);
+    return result.rows;
+  }
+
+  static async acceptOrder(driverId, orderId) {
+    return await this.transaction(async (client) => {
+      const result = await client.query(
+        `UPDATE orders SET driver_id=$1, status='driver_assigned', updated_at=NOW()
+         WHERE id=$2 AND status='paid' AND driver_id IS NULL
+         RETURNING *`,
+        [driverId, orderId],
+      );
+      return result.rows[0];
+    });
+  }
+
+  static async getEarnings(driverId) {
+    const result = await this.query(
+      `SELECT o.order_number, o.driver_payout, o.status, o.created_at,
+              COUNT(oi.id) as item_count
+       FROM orders o
+       LEFT JOIN order_items oi ON oi.order_id = o.id
+       WHERE o.driver_id = $1 AND o.status IN ('completed', 'delivered')
+       GROUP BY o.id
+       ORDER BY o.created_at DESC`,
+      [driverId],
+    );
+
+    const total = result.rows.reduce(
+      (sum, r) => sum + parseFloat(r.driver_payout || 0),
+      0,
+    );
+    return { orders: result.rows, totalEarnings: total.toFixed(2) };
+  }
+
+  static async getNearby(lat, lng, limit = 10) {
+    if (!lat || !lng) {
+      const result = await this.query(
+        `
+        SELECT id, name, rating, total_deliveries, vehicle_type,
+               profile_photo_url, is_online,
+               NULL as distance_km,
+               EXISTS(
+                 SELECT 1 FROM orders o
+                 WHERE o.driver_id = drivers.id
+                   AND o.status IN ('driver_assigned','en_route','picked_up')
+               ) as is_busy
+        FROM drivers
+        WHERE is_online = true AND status = 'approved'
+        ORDER BY rating DESC LIMIT $1
+      `,
+        [limit],
+      );
+      return result.rows.map((d) => ({ ...d, estimated_fee: 35 }));
+    }
+
+    const sql = `
+      SELECT d.id, d.name, d.rating, d.total_deliveries, d.vehicle_type,
+             d.profile_photo_url, d.is_online,
+             ROUND((6371 * acos(
+               cos(radians($1)) * cos(radians(d.current_lat)) *
+               cos(radians(d.current_lng) - radians($2)) +
+               sin(radians($1)) * sin(radians(d.current_lat))
+             ))::numeric, 1) AS distance_km,
+             EXISTS(
+               SELECT 1 FROM orders o
+               WHERE o.driver_id = d.id
+                 AND o.status IN ('driver_assigned','en_route','picked_up')
+             ) as is_busy
+      FROM drivers d
+      WHERE d.is_online = true AND d.status = 'approved'
+        AND d.current_lat IS NOT NULL AND d.current_lng IS NOT NULL
+      ORDER BY distance_km ASC
+      LIMIT $3
+    `;
+    const result = await this.query(sql, [
+      parseFloat(lat),
+      parseFloat(lng),
+      limit,
+    ]);
+    return result.rows.map((d) => ({
+      ...d,
+      estimated_fee: d.distance_km
+        ? Math.round(35 + parseFloat(d.distance_km || 0) * 2)
+        : 35,
+    }));
+  }
+}
+
+module.exports = Driver;
