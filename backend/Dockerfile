@@ -36,4 +36,4 @@ EXPOSE 3000
 
 # Use dumb-init as the process manager so signals (SIGTERM) work correctly.
 # This ensures graceful shutdown (draining DB connections) works as intended.
-CMD ["dumb-init", "node", "src/index.js"]
+CMD ["dumb-init", "node", "src/server.js"]

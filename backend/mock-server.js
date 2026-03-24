@@ -162,6 +162,15 @@ app.post('/api/payments/create-intent', (req, res) => {
   });
 });
 
+app.post('/api/payments/initialize', (req, res) => {
+  res.json({
+    authorizationUrl: 'https://checkout.paystack.com/mock',
+    reference: 'flash_mock_ref_' + Date.now(),
+    accessCode: 'mock_access_code_' + Date.now(),
+    amount: req.body?.amount || 0,
+  });
+});
+
 app.post('/api/payments/cash-on-delivery', (req, res) => {
   res.json({ success: true, message: 'Cash on delivery confirmed' });
 });

@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const BASE_URL = 'http://172.20.10.9:3000'; // ← Change to your LAN IP
+export const BASE_URL = 'http://100.66.42.15:3000'; // ← Change to your LAN IP
 
 const getToken = async () => AsyncStorage.getItem('FLASH_DRIVER_TOKEN');
 

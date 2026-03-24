@@ -256,7 +256,7 @@ Open 3 separate terminal windows:
 cd backend
 node mock-server.js       # ← use this for dev (no real DB needed)
 # OR
-node src/index.js         # ← use this when you have PostgreSQL running
+node src/server.js         # ← use this when you have PostgreSQL running
 ```
 You should see: `⚡ Flash Backend v3.0 on port 3000`
 
@@ -283,7 +283,7 @@ Scan the QR code with Expo Go on your phone (different QR than the user app).
 Once set up, you only need to run:
 ```bash
 # Terminal 1
-cd backend && node src/index.js
+cd backend && node src/server.js
 
 # Terminal 2
 cd flash-user-app && npx expo start --clear
@@ -665,7 +665,7 @@ Render has data centers in Cape Town (af-south-1) making it fast for SA users.
 2. Go to **render.com** → New → Web Service → connect your GitHub repo
 3. Set **Root Directory** to `backend`
 4. Set **Build Command** to `npm install`
-5. Set **Start Command** to `node src/index.js`
+5. Set **Start Command** to `node src/server.js`
 6. Under **Environment**, add all your `.env` variables
 7. Add a **PostgreSQL** service from Render and copy the Internal Database URL into `DATABASE_URL`
 8. After deploy, run the migration: open the Render Shell and run `node src/db/migrate.js`
@@ -676,7 +676,7 @@ Render has data centers in Cape Town (af-south-1) making it fast for SA users.
 
 **App shows "Request failed" or "Network Error"**
 - Check that your IP in `api.js` matches your current WiFi IP
-- Make sure the backend is running (`node src/index.js` or `node mock-server.js`)
+- Make sure the backend is running (`node src/server.js` or `node mock-server.js`)
 - Make sure your phone and computer are on the same WiFi network
 
 **Map is blank on the tracking screen**
