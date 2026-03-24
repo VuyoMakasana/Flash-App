@@ -81,7 +81,7 @@ npm install
 node src/db/migrate.js
 
 # 2. Start the backend
-node src/index.js
+node src/server.js
 # (or: node mock-server.js for dev without a database)
 
 # 3. Start the user app
@@ -178,7 +178,7 @@ Recommended: **Render** (has Cape Town region, low latency for SA users)
 
 1. Push to GitHub
 2. Render → New Web Service → connect repo → set root dir to `backend`
-3. Build: `npm install` / Start: `node src/index.js`
+3. Build: `npm install` / Start: `node src/server.js`
 4. Add a Render Postgres database, copy the internal URL to `DATABASE_URL`
 5. Add all `.env` variables in Render's environment settings
 6. After first deploy, open Render Shell and run `node src/db/migrate.js`
@@ -190,7 +190,7 @@ For the apps: build with `eas build` (Expo Application Services) for Play Store 
 ## Contributing / Understanding the Code
 
 Every file has comments explaining what it does. Start here:
-- `backend/src/index.js` — server startup, middleware, routes, cron jobs
+- `backend/src/server.js` — server startup, middleware, routes, cron jobs
 - `backend/src/routes/payments.js` — Paystack payment flow with inline comments
 - `backend/src/socket/socketServer.js` — all real-time events documented
 - `flash-user-app/context/FlashContext.js` — global state, product loading, order creation

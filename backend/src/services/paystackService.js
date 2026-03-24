@@ -3,6 +3,15 @@ const pool = require("../config/database");
 
 class PaystackService {
   async request(method, path, body = null) {
+    if (
+      !process.env.PAYSTACK_SECRET_KEY ||
+      process.env.PAYSTACK_SECRET_KEY === "sk_test_placeholder"
+    ) {
+      throw new Error(
+        "PAYSTACK_SECRET_KEY is not configured. Set it in backend/.env before using payment endpoints.",
+      );
+    }
+
     return new Promise((resolve, reject) => {
       const options = {
         hostname: "api.paystack.co",

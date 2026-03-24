@@ -3,11 +3,23 @@ const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 class S3Service {
   constructor() {
     this.s3 = null;
-    if (
+    const hasRealS3Config =
       process.env.AWS_ACCESS_KEY_ID &&
-      process.env.AWS_ACCESS_KEY_ID !== "your_aws_access_key"
+      process.env.AWS_ACCESS_KEY_ID !== "placeholder" &&
+      process.env.AWS_ACCESS_KEY_ID !== "your_aws_access_key" &&
+      process.env.AWS_SECRET_ACCESS_KEY &&
+      process.env.AWS_SECRET_ACCESS_KEY !== "placeholder" &&
+      process.env.AWS_REGION &&
+      process.env.AWS_S3_BUCKET;
+
+    if (
+      hasRealS3Config
     ) {
       this.s3 = new S3Client({ region: process.env.AWS_REGION });
+    } else {
+      console.warn(
+        "[Config] AWS S3 credentials are not fully configured. Driver documents will use dev placeholder URLs.",
+      );
     }
   }
 
