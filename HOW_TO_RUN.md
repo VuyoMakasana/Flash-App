@@ -272,7 +272,7 @@ Scan the QR code with Expo Go on your phone.
 ```bash
 cd flash-driver-app
 npm install               # only needed first time
-npx expo start --clear --port 8082
+npm start
 ```
 Scan the QR code with Expo Go on your phone (different QR than the user app).
 
@@ -289,7 +289,7 @@ cd backend && node src/server.js
 cd flash-user-app && npx expo start --clear
 
 # Terminal 3
-cd flash-driver-app && npx expo start --clear --port 8082
+cd flash-driver-app && npm start
 ```
 
 ---
