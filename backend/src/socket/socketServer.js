@@ -1,13 +1,21 @@
 const jwt = require('jsonwebtoken');
+const { getRequired } = require('../config/env');
 
 module.exports = function setupSocket(io) {
 
+  // Get JWT secret at startup
+  const jwtSecret = getRequired('JWT_SECRET', 'socket');
+
   // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────
   io.use((socket, next) => {
+    if (!jwtSecret) {
+      return next(new Error('Socket authentication system misconfigured'));
+    }
+
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Authentication required'));
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, jwtSecret);
       socket.userId   = decoded.id;
       socket.userRole = decoded.role;
       next();

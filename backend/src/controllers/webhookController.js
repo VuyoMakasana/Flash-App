@@ -1,19 +1,39 @@
 const crypto = require("crypto");
 const pool = require("../config/database");
+const { getOptional, isProd } = require("../config/env");
 
 class WebhookController {
   static async handlePaystack(req, res) {
     res.sendStatus(200);
 
     try {
-      const hash = crypto
-        .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY)
-        .update(JSON.stringify(req.body))
-        .digest("hex");
+      const secretKey = getOptional("PAYSTACK_SECRET_KEY", "webhook");
 
-      if (hash !== req.headers["x-paystack-signature"]) {
-        console.warn("[Webhook] Paystack signature mismatch — ignoring");
+      // Require secret in production
+      if (!secretKey && isProd) {
+        console.error(
+          "[Webhook] CRITICAL: Cannot verify Paystack webhooks without PAYSTACK_SECRET_KEY",
+        );
         return;
+      }
+
+      if (!secretKey) {
+        console.warn(
+          "[Webhook] ℹ️  Skipping webhook verification - PAYSTACK_SECRET_KEY not configured",
+        );
+        // In dev without key, just skip verification but still process
+      } else {
+        const hash = crypto
+          .createHmac("sha512", secretKey)
+          .update(JSON.stringify(req.body))
+          .digest("hex");
+
+        if (hash !== req.headers["x-paystack-signature"]) {
+          console.warn(
+            "[Webhook] Paystack signature mismatch — ignoring suspicious request",
+          );
+          return;
+        }
       }
 
       const event = req.body;
