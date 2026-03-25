@@ -1,8 +1,40 @@
 const https = require("https");
 const pool = require("../config/database");
+const { getOptional, isProd } = require("../config/env");
 
 class PaystackService {
+  constructor() {
+    // Validate Paystack configuration at startup
+    const secretKey = getOptional("PAYSTACK_SECRET_KEY", "paystack");
+    if (!secretKey && isProd) {
+      console.error(
+        "[Paystack] CRITICAL: PAYSTACK_SECRET_KEY required in production for payment processing",
+      );
+    } else if (!secretKey) {
+      console.warn(
+        "[Paystack] ℹ️  PAYSTACK_SECRET_KEY not configured. Payment features will be unavailable.",
+      );
+    }
+  }
+
   async request(method, path, body = null) {
+    const secretKey = process.env.PAYSTACK_SECRET_KEY;
+
+    // Check if secret is available and not placeholder
+    if (!secretKey || secretKey.startsWith("sk_test_")) {
+      if (isProd) {
+        throw new Error(
+          "[Paystack] CRITICAL: PAYSTACK_SECRET_KEY not configured for production. Payment processing unavailable.",
+        );
+      }
+      // In dev, allow test keys but warn
+      if (secretKey?.startsWith("sk_test_")) {
+        console.warn(
+          "[Paystack] Using test secret key. Payments are simulated.",
+        );
+      }
+    }
+
     return new Promise((resolve, reject) => {
       const options = {
         hostname: "api.paystack.co",
@@ -10,7 +42,7 @@ class PaystackService {
         path,
         method,
         headers: {
-          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          Authorization: `Bearer ${secretKey || "sk_test_placeholder"}`,
           "Content-Type": "application/json",
         },
       };
@@ -50,12 +82,26 @@ class PaystackService {
     const email = userResult.rows[0]?.email;
     const amountInCents = Math.round(parseFloat(order.total) * 100);
 
+    // Ensure APP_URL is configured
+    let callbackUrl = process.env.APP_URL;
+    if (!callbackUrl) {
+      if (isProd) {
+        throw new Error(
+          "[Paystack] APP_URL must be configured in production for payment callbacks",
+        );
+      }
+      callbackUrl = "http://localhost:8081/payment/callback"; // Safe dev fallback
+      console.warn(
+        "[Paystack] ℹ️  APP_URL not set. Using development default.",
+      );
+    }
+
     const paystackRes = await this.request("POST", "/transaction/initialize", {
       email,
       amount: amountInCents,
       currency: "ZAR",
       reference: `flash_${orderId}_${Date.now()}`,
-      callback_url: `${process.env.APP_URL || "https://your-app.com"}/payment/callback`,
+      callback_url: `${callbackUrl}/payment/callback`,
       metadata: {
         orderId,
         userId,
