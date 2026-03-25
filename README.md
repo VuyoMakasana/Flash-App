@@ -92,7 +92,7 @@ npx expo start --clear
 # 4. Start the driver app
 cd ../flash-driver-app
 npm install
-npx expo start --clear --port 8082
+npm start
 ```
 
 See `HOW_TO_RUN.md` for the complete step-by-step setup guide.
