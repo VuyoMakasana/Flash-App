@@ -11,7 +11,7 @@ import { useDriver } from '../../context/DriverContext';
 
 const REQUIRED_DOCS = [
   {
-    id: 'SA government_id',
+    id: 'government_id',
     label: 'Government ID / Passport',
     description: 'Clear photo of your ID or passport',
     icon: 'id-card-outline',
@@ -58,7 +58,7 @@ export default function OnboardingScreen() {
     try {
       const data = await driverApi.profile.getMe();
       setUploadedDocs(data.documents?.map(d => d.document_type) || []);
-    } catch (e) {
+    } catch (_e) {
       // Use local state if API fails
     } finally {
       setLoading(false);

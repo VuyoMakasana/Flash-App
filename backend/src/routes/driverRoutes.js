@@ -6,6 +6,7 @@ const {
   requireRole,
   requireApprovedDriver,
 } = require("../middleware/auth");
+const { locationLimiter } = require("../middleware/rateLimiter");
 const DriverController = require("../controllers/driverController");
 
 const upload = multer({
@@ -51,6 +52,7 @@ router.post(
   "/location",
   authenticate,
   requireRole("driver"),
+  locationLimiter,
   DriverController.updateLocation,
 );
 router.get(
