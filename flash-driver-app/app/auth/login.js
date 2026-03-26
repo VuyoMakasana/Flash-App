@@ -24,7 +24,7 @@ export default function DriverLoginScreen() {
 
     setLoading(true);
     try {
-      const data = await login(email.trim().toLowerCase(), password);
+      await login(email.trim().toLowerCase(), password);
 
       // Backend returns status in error for non-approved — login() will throw
       // If we're here, driver is approved

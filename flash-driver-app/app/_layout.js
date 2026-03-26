@@ -24,7 +24,7 @@ function RootLayoutNav() {
         router.replace('/auth/onboarding');
       }
     }
-  }, [isAuthenticated, loading, segments, driver?.status]);
+  }, [isAuthenticated, loading, segments, driver?.status, router]);
 
   if (loading) {
     return (
