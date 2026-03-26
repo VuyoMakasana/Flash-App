@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const { getRequired } = require("../config/env");
 
 /**
  * Generate JWT token for user/driver
@@ -7,7 +8,14 @@ const jwt = require("jsonwebtoken");
  * @returns {string} JWT token
  */
 const generateToken = (id, role) => {
-  return jwt.sign({ id, role }, process.env.JWT_SECRET, {
+  const jwtSecret = getRequired("JWT_SECRET", "auth");
+  if (!jwtSecret) {
+    throw new Error(
+      "[auth] Cannot generate token: JWT_SECRET not configured. Set JWT_SECRET environment variable.",
+    );
+  }
+
+  return jwt.sign({ id, role }, jwtSecret, {
     expiresIn: process.env.JWT_EXPIRES_IN || "30d",
   });
 };
