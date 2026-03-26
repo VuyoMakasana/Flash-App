@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, Pressable, FlatList,
-  Image, ScrollView, Alert, ActivityIndicator,
+  Image, ScrollView, Alert, ActivityIndicator, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -12,7 +12,7 @@ const TIME_SLOTS = ['ASAP', '10:00 - 12:00', '12:00 - 14:00', '17:00 - 19:00'];
 
 export default function CheckoutScreen() {
   const navigation = useNavigation();
-  const { cart, placeOrder, profile } = useFlash();
+  const { cart, placeOrder, profile, updateProfile } = useFlash();
 
   const [deliveryMode, setDeliveryMode]     = useState('fleet');
   const [slot, setSlot]                     = useState('ASAP');
@@ -20,6 +20,10 @@ export default function CheckoutScreen() {
   const [loadingDrivers, setLoadingDrivers] = useState(false);
   const [realDrivers, setRealDrivers]       = useState([]);
   const [selectedDriverId, setSelectedDriverId] = useState(null);
+  const [name, setName] = useState(profile.name || '');
+  const [phone, setPhone] = useState(profile.phone || '');
+  const [email, setEmail] = useState(profile.email || '');
+  const [address, setAddress] = useState(profile.address || '');
 
   const subtotal    = useMemo(() => cart.reduce((s, i) => s + i.price * i.quantity, 0), [cart]);
   const selectedDrv = realDrivers.find(d => d.id === selectedDriverId);
@@ -50,18 +54,38 @@ export default function CheckoutScreen() {
 
   const handleProceedToPayment = async () => {
     if (!cart.length) return;
+    if (!name.trim() || !phone.trim() || !email.trim() || !address.trim()) {
+      Alert.alert('Missing info', 'Please fill in name, phone, email and delivery address before continuing.');
+      return;
+    }
+    if (deliveryMode === 'pick' && !selectedDriverId) {
+      Alert.alert('Choose driver', 'Please select a driver or switch to Flash Fleet.');
+      return;
+    }
+
     setLoading(true);
     try {
+      await updateProfile({
+        name: name.trim(),
+        phone: phone.trim(),
+        email: email.trim().toLowerCase(),
+        address: address.trim(),
+      });
+
       const order = await placeOrder({
         deliveryMode,
         timeSlot:       slot,
         subtotal,
         deliveryFee,
         total,
-        dropoffAddress: profile.address || 'Customer Address',
+        dropoffAddress: address.trim(),
         requestedDriverId: deliveryMode === 'pick' ? selectedDriverId : null,
       });
-      navigation.navigate('Payment', { orderId: order.id, total });
+      navigation.navigate('Payment', {
+        orderId: order.id,
+        total,
+        requestedDriverId: deliveryMode === 'pick' ? selectedDriverId : null,
+      });
     } catch (err) {
       Alert.alert('Order Failed', err.message || 'Could not place order. Check your connection.');
     } finally {
@@ -86,6 +110,39 @@ export default function CheckoutScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
 
       {/* ── Delivery Mode Toggle ──────────────────────────────────────────── */}
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Verification Details</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Full name"
+          value={name}
+          onChangeText={setName}
+          autoCapitalize="words"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="Phone"
+          value={phone}
+          onChangeText={setPhone}
+          keyboardType="phone-pad"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="Email"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+        />
+        <TextInput
+          style={[styles.input, styles.inputMultiline]}
+          placeholder="Delivery address"
+          value={address}
+          onChangeText={setAddress}
+          multiline
+        />
+      </View>
+
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Delivery</Text>
         <View style={styles.toggleRow}>
@@ -276,6 +333,8 @@ const styles = StyleSheet.create({
   container:        { flex: 1, backgroundColor: '#f7f7f7' },
   content:          { padding: 16, gap: 16, paddingBottom: 40 },
   card:             { backgroundColor: '#fff', borderRadius: 16, padding: 16, gap: 12, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 12, elevation: 3 },
+  input:            { backgroundColor: '#f9fafb', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, color: '#111827' },
+  inputMultiline:   { minHeight: 72, textAlignVertical: 'top' },
   sectionTitle:     { fontWeight: '800', color: '#111827', fontSize: 18 },
   toggleRow:        { flexDirection: 'row', gap: 10 },
   toggle:           { flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: '#f3f4f6', alignItems: 'center' },

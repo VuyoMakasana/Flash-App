@@ -93,6 +93,88 @@ class PaymentController {
       res.status(500).json({ error: "Failed to set default card" });
     }
   }
+
+  static async chargeSavedCard(req, res) {
+    const { orderId, cardId } = req.body;
+    const io = req.app.get("io");
+
+    if (!orderId || !cardId) {
+      return res.status(400).json({ error: "orderId and cardId are required" });
+    }
+
+    try {
+      const card = await Payment.getSavedCardById(cardId, req.userId);
+      if (!card) {
+        return res.status(404).json({ error: "Saved card not found" });
+      }
+
+      const order = await Order.getByIdWithDetails(orderId, req.userId);
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+      if (order.payment_status === "paid") {
+        return res.status(409).json({ error: "Order already paid" });
+      }
+
+      const userResult = await require("../config/database").query(
+        "SELECT email FROM users WHERE id=$1",
+        [req.userId],
+      );
+      const email = userResult.rows[0]?.email;
+      const amountInCents = Math.round(parseFloat(order.total) * 100);
+
+      const paystackRes = await paystackService.chargeAuthorization(
+        card.paystack_authorization_code,
+        email,
+        amountInCents,
+        {
+          orderId,
+          userId: req.userId,
+          cardId: card.id,
+          source: "saved_card",
+        },
+      );
+
+      if (!paystackRes?.status) {
+        return res
+          .status(400)
+          .json({ error: paystackRes?.message || "Card charge failed" });
+      }
+
+      if (paystackRes.data?.status !== "success") {
+        return res.status(202).json({
+          success: false,
+          status: paystackRes.data?.status || "pending",
+          message: paystackRes.data?.gateway_response || "Payment pending",
+        });
+      }
+
+      await Payment.markOrderPaidByCard(
+        orderId,
+        req.userId,
+        parseFloat(order.total),
+        paystackRes.data?.id || paystackRes.data?.reference,
+      );
+
+      if (io) {
+        io.to(`user:${req.userId}`).emit("payment_confirmed", { orderId });
+        io.to("driver_pool").emit("new_order_available", {
+          orderId,
+          isCashDelivery: false,
+        });
+      }
+
+      res.json({
+        success: true,
+        orderId,
+        reference: paystackRes.data?.reference,
+        message: "Payment successful",
+      });
+    } catch (err) {
+      console.error("[Paystack] Saved card charge error:", err.message);
+      res.status(500).json({ error: "Failed to charge saved card" });
+    }
+  }
 }
 
 module.exports = PaymentController;

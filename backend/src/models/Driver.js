@@ -227,11 +227,13 @@ class Driver extends BaseModel {
              o.total, o.driver_payout, o.pickup_address, o.dropoff_address,
              o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng,
              o.is_cash_delivery, o.created_at,
+             u.name as customer_name, u.phone as customer_phone,
              COUNT(oi.id) as item_count
       FROM orders o
+      LEFT JOIN users u ON u.id = o.user_id
       LEFT JOIN order_items oi ON oi.order_id = o.id
       WHERE o.status = 'paid' AND o.driver_id IS NULL
-      GROUP BY o.id
+      GROUP BY o.id, u.id
       ORDER BY o.created_at DESC
       LIMIT 20
     `;
@@ -268,6 +270,28 @@ class Driver extends BaseModel {
       0,
     );
     return { orders: result.rows, totalEarnings: total.toFixed(2) };
+  }
+
+  static async getActiveOrder(driverId) {
+    const result = await this.query(
+      `SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
+              o.total, o.driver_payout, o.pickup_address, o.dropoff_address,
+              o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng,
+              o.is_cash_delivery, o.created_at,
+              u.name as customer_name, u.phone as customer_phone,
+              COUNT(oi.id) as item_count
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.user_id
+       LEFT JOIN order_items oi ON oi.order_id = o.id
+       WHERE o.driver_id = $1
+         AND o.status IN ('driver_assigned', 'en_route', 'picked_up', 'delivered')
+       GROUP BY o.id, u.id
+       ORDER BY o.updated_at DESC
+       LIMIT 1`,
+      [driverId],
+    );
+
+    return result.rows[0] || null;
   }
 
   static async getNearby(lat, lng, limit = 10) {

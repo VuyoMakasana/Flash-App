@@ -7,7 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { io } from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BASE_URL } from '../services/api';
+import api, { BASE_URL } from '../services/api';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
 const STATUS_LABELS = {
@@ -74,6 +74,31 @@ export default function TrackingScreen() {
   useEffect(() => {
     if (!orderId) return;
 
+    const hydrateOrder = async () => {
+      try {
+        const data = await api.orders.getOrder(orderId);
+        if (!data?.order) return;
+
+        setOrderStatus(data.order.status || 'paid');
+        if (data.order.driver_name) {
+          setDriver({
+            name: data.order.driver_name,
+            vehicle: data.order.driver_vehicle,
+            phone: data.order.driver_phone,
+            rating: data.order.driver_rating,
+            total_deliveries: data.order.driver_total_deliveries || 0,
+          });
+        }
+        if (data.order.driver_lat && data.order.driver_lng) {
+          setDriverLocation({ lat: data.order.driver_lat, lng: data.order.driver_lng });
+        }
+      } catch (_) {
+        // Socket fallback will still keep tracking live updates.
+      }
+    };
+
+    hydrateOrder();
+
     const connectSocket = async () => {
       const token = await AsyncStorage.getItem('FLASH_TOKEN');
       if (!token) return;
@@ -112,10 +137,14 @@ export default function TrackingScreen() {
       // ── Arrival milestones from backend (Part 2) ─────────────────────────
       socket.on('arrival_update', (data) => {
         if (data.orderId !== orderId) return;
-        // Deduplicate: only show each milestone once per session
-        if (shownMilestones.has(data.milestone)) return;
-        setShownMilestones(prev => new Set([...prev, data.milestone]));
-        showBanner(data.message);
+        // Deduplicate milestones within the session.
+        setShownMilestones(prev => {
+          if (prev.has(data.milestone)) return prev;
+          const next = new Set(prev);
+          next.add(data.milestone);
+          showBanner(data.message);
+          return next;
+        });
       });
 
       // ── Cash reminder (Part 2) ────────────────────────────────────────────

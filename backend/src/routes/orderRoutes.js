@@ -28,5 +28,11 @@ router.post(
   requireRole("user"),
   OrderController.requestReturn,
 );
+router.post(
+  "/:orderId/select-driver",
+  authenticate,
+  requireRole("user"),
+  OrderController.selectDriver,
+);
 
 module.exports = router;

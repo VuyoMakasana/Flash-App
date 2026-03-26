@@ -75,6 +75,12 @@ router.get(
   requireRole("driver"),
   DriverController.getEarnings,
 );
+router.get(
+  "/active-order",
+  authenticate,
+  requireRole("driver"),
+  DriverController.getActiveOrder,
+);
 router.get("/nearby", DriverController.getNearbyDrivers);
 
 module.exports = router;
