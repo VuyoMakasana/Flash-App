@@ -99,7 +99,13 @@ export default function OrderStatusScreen() {
 
       {/* Track button */}
       {['driver_assigned', 'en_route', 'picked_up'].includes(order.status) && (
-        <Pressable style={styles.trackBtn} onPress={() => navigation.navigate('Tracking', { orderId: order.id })}>
+        <Pressable
+          style={styles.trackBtn}
+          onPress={() => navigation.navigate('Tracking', {
+            orderId: order.id,
+            isCashDelivery: !!order.is_cash_delivery,
+          })}
+        >
           <Ionicons name="location" size={18} color="#fff" />
           <Text style={styles.trackText}>Track Driver Live</Text>
         </Pressable>

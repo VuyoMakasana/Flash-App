@@ -46,5 +46,11 @@ router.patch(
   requireRole("user"),
   PaymentController.setDefaultCard,
 );
+router.post(
+  "/charge-saved-card",
+  authenticate,
+  requireRole("user"),
+  PaymentController.chargeSavedCard,
+);
 
 module.exports = router;

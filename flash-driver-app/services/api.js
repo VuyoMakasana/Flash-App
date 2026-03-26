@@ -118,6 +118,7 @@ export const driverApi = {
   },
   orders: {
     getAvailable: () => request('GET', '/api/drivers/available-orders'),
+    getActive: () => request('GET', '/api/drivers/active-order'),
     acceptOrder: (orderId) => request('POST', `/api/drivers/orders/${orderId}/accept`),
     updateStatus: (orderId, status) => request('PUT', `/api/orders/${orderId}/status`, { status }),
   },
