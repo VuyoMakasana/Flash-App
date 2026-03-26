@@ -1,6 +1,7 @@
 // src/middleware/auth.js
 const jwt = require("jsonwebtoken");
-const pool = require("../config/database"); 
+const pool = require("../config/database");
+const { getRequired } = require("../config/env");
 
 // Verify JWT and attach user to request
 const authenticate = async (req, res, next) => {
@@ -11,7 +12,15 @@ const authenticate = async (req, res, next) => {
     }
 
     const token = header.replace("Bearer ", "");
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const jwtSecret = getRequired("JWT_SECRET", "auth");
+    if (!jwtSecret) {
+      return res.status(500).json({
+        error:
+          "Authentication system misconfigured. Please contact support. [ERR_JWT_CONFIG]",
+      });
+    }
+
+    const decoded = jwt.verify(token, jwtSecret);
 
     // Validate role in token
     req.userId = decoded.id;
