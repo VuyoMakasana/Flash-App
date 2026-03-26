@@ -1,22 +1,78 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// ← Change this to your computer's LAN IP when testing on device
-export const BASE_URL = 'http://172.20.10.9:3000';
+const DEFAULT_BASE_URL = 'http://172.20.10.9:3000';
+export const BASE_URL =
+  process.env.EXPO_PUBLIC_API_BASE_URL ||
+  process.env.REACT_NATIVE_API_BASE_URL ||
+  DEFAULT_BASE_URL;
+const REQUEST_TIMEOUT_MS = 15000;
 
 const getToken = async () => AsyncStorage.getItem('FLASH_TOKEN');
 
-async function request(method, path, body = null, isPublic = false) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (!isPublic) {
-    const token = await getToken();
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const parseResponse = async (response) => {
+  const text = await response.text();
+  if (!text) return {};
+
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return { error: text };
   }
-  const options = { method, headers };
-  if (body) options.body = JSON.stringify(body);
-  const response = await fetch(`${BASE_URL}${path}`, options);
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Request failed');
-  return data;
+};
+
+const shouldRetry = (method, responseStatus, errName) => {
+  if (method !== 'GET') return false;
+  if (responseStatus >= 500 || responseStatus === 429) return true;
+  if (errName === 'AbortError' || errName === 'TypeError') return true;
+  return false;
+};
+
+async function request(method, path, body = null, isPublic = false) {
+  const maxAttempts = method === 'GET' ? 3 : 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (!isPublic) {
+        const token = await getToken();
+        if (token) headers.Authorization = `Bearer ${token}`;
+      }
+
+      const options = { method, headers, signal: controller.signal };
+      if (body) options.body = JSON.stringify(body);
+
+      const response = await fetch(`${BASE_URL}${path}`, options);
+      const data = await parseResponse(response);
+
+      if (!response.ok) {
+        if (attempt < maxAttempts && shouldRetry(method, response.status, '')) {
+          await sleep(attempt * 250);
+          continue;
+        }
+        throw new Error(data.error || data.message || `Request failed (${response.status})`);
+      }
+
+      return data;
+    } catch (err) {
+      if (attempt < maxAttempts && shouldRetry(method, 0, err.name)) {
+        await sleep(attempt * 250);
+        continue;
+      }
+      if (err.name === 'AbortError') {
+        throw new Error('Request timed out. Please try again.');
+      }
+      throw new Error(err.message || 'Network request failed');
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error('Request failed');
 }
 
 export const api = {

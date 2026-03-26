@@ -40,9 +40,16 @@ const messagesRoutes = require("./routes/messageRoutes");
 const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
 
 const app = express();
+// Trust reverse proxy headers in production deployments (Render/Railway/Nginx).
+if (process.env.NODE_ENV === "production") {
+  app.set("trust proxy", 1);
+}
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: "*", methods: ["GET", "POST"] },
+  maxHttpBufferSize: 1e6,
+  perMessageDeflate: false,
   pingTimeout: 60000,
   pingInterval: 25000,
 });

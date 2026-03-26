@@ -36,7 +36,7 @@ export default function DriverProfileScreen() {
     try {
       const data = await driverApi.profile.getMe();
       setDocuments(data.documents || []);
-    } catch (e) {}
+    } catch (_e) {}
   };
 
   const handleSave = async () => {
