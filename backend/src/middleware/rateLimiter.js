@@ -7,6 +7,9 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later." },
+  // Exclude high-frequency endpoints that have dedicated limiters/controls.
+  skip: (req) =>
+    req.path === "/drivers/location" || req.path.startsWith("/webhooks"),
 });
 
 // Auth endpoints rate limiter - stricter: 10 requests per 15 minutes

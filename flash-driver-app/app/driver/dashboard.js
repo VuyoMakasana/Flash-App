@@ -6,9 +6,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useDriver } from '../../context/DriverContext';
-import driverApi from '../../services/api';
+import driverApi, { BASE_URL } from '../../services/api';
 import { io } from 'socket.io-client';
-import { BASE_URL } from '../../services/api';
 
 const STATUS_COLORS = {
   paid: '#f59e0b',
@@ -41,7 +40,7 @@ const NEXT_LABEL = {
 };
 
 export default function DriverDashboard() {
-  const { driver, token, isOnline, setOnline, logout, refreshProfile } = useDriver();
+  const { driver, token, isOnline, setOnline, logout } = useDriver();
   const router = useRouter();
 
   const [availableOrders, setAvailableOrders] = useState([]);
@@ -54,6 +53,22 @@ export default function DriverDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [togglingOnline, setTogglingOnline] = useState(false);
   const socketRef = useRef(null);
+
+  const toNumber = (value, fallback = 0) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const fetchAvailableOrders = useCallback(async () => {
+    try {
+      const data = await driverApi.orders.getAvailable();
+      const allOrders = data.orders || [];
+      // Keep render bounded for mobile stability under high traffic spikes.
+      setAvailableOrders(allOrders.slice(0, 50));
+    } catch (_e) {
+      // silently fail — subscription gate might block this
+    }
+  }, []);
 
   // ─── SOCKET SETUP ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -82,33 +97,34 @@ export default function DriverDashboard() {
     });
 
     return () => socket.disconnect();
-  }, [token]);
+  }, [token, fetchAvailableOrders]);
 
   // ─── DATA LOADING ──────────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     try {
-      const [earningsData, subData] = await Promise.all([
+      const [earningsRes, subRes] = await Promise.allSettled([
         driverApi.earnings.get(),
         driverApi.subscription.get(),
       ]);
-      setEarnings({ total: earningsData.totalEarnings, orders: earningsData.orders });
-      setSubscription(subData.subscription);
+
+      if (earningsRes.status === 'fulfilled') {
+        setEarnings({
+          total: earningsRes.value.totalEarnings || '0.00',
+          orders: earningsRes.value.orders || [],
+        });
+      }
+
+      if (subRes.status === 'fulfilled') {
+        setSubscription(subRes.value.subscription || null);
+      }
+
       await fetchAvailableOrders();
     } catch (e) {
       console.warn('Load failed:', e.message);
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  const fetchAvailableOrders = useCallback(async () => {
-    try {
-      const data = await driverApi.orders.getAvailable();
-      setAvailableOrders(data.orders || []);
-    } catch (e) {
-      // silently fail — subscription gate might block this
-    }
-  }, []);
+  }, [fetchAvailableOrders]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -203,7 +219,7 @@ export default function DriverDashboard() {
   const subscriptionExpired = !subscription;
   const todayEarnings = earnings.orders
     .filter(o => new Date(o.created_at).toDateString() === new Date().toDateString())
-    .reduce((sum, o) => sum + parseFloat(o.driver_payout || 0), 0);
+    .reduce((sum, o) => sum + toNumber(o.driver_payout, 0), 0);
 
   return (
     <ScrollView
@@ -436,7 +452,7 @@ export default function DriverDashboard() {
               </View>
               <View style={styles.row}>
                 <Text style={styles.payoutText}>
-                  Earn R{parseFloat(order.driver_payout || 0).toFixed(2)}
+                  Earn R{toNumber(order.driver_payout, 0).toFixed(2)}
                 </Text>
                 <Text style={styles.itemCount}>
                   {order.item_count} item{order.item_count !== '1' ? 's' : ''}
