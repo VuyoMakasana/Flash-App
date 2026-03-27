@@ -148,6 +148,116 @@ class OrderController {
       res.status(500).json({ error: "Failed to request return" });
     }
   }
+
+  static async selectDriver(req, res) {
+    const { orderId } = req.params;
+    const { driverId } = req.body;
+    const io = req.app.get("io");
+
+    if (!driverId) {
+      return res.status(400).json({ error: "driverId is required" });
+    }
+
+    try {
+      const order = await Order.getByIdWithDetails(orderId, req.userId);
+      if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      if (order.status !== "paid") {
+        return res.status(409).json({
+          error: "Order must be paid before selecting a driver",
+        });
+      }
+
+      if (order.driver_id) {
+        return res.status(409).json({ error: "Order already assigned" });
+      }
+
+      const driverResult = await Order.query(
+        `SELECT id, name, phone, vehicle_type, rating, is_online, status,
+                EXISTS(
+                  SELECT 1 FROM orders o2
+                  WHERE o2.driver_id = drivers.id
+                    AND o2.status IN ('driver_assigned','en_route','picked_up')
+                ) as is_busy
+         FROM drivers
+         WHERE id = $1`,
+        [driverId],
+      );
+
+      const driver = driverResult.rows[0];
+      if (!driver) {
+        return res.status(404).json({ error: "Driver not found" });
+      }
+      if (!driver.is_online || driver.status !== "approved" || driver.is_busy) {
+        return res.status(409).json({
+          error: "Selected driver is not currently available",
+        });
+      }
+
+      const assigned = await Order.query(
+        `UPDATE orders
+         SET driver_id = $1, status = 'driver_assigned', updated_at = NOW()
+         WHERE id = $2 AND user_id = $3 AND status = 'paid' AND driver_id IS NULL
+         RETURNING id, order_number, user_id, driver_id, status`,
+        [driverId, orderId, req.userId],
+      );
+
+      if (!assigned.rows.length) {
+        return res
+          .status(409)
+          .json({ error: "Driver assignment failed. Please try again." });
+      }
+
+      if (io) {
+        io.to(`driver:${driverId}`).emit("new_order_available", {
+          orderId,
+          isCashDelivery: order.is_cash_delivery,
+          preferredAssignment: true,
+        });
+        io.to(`user:${req.userId}`).emit("order_update", {
+          orderId,
+          status: "driver_assigned",
+          driver: {
+            id: driver.id,
+            name: driver.name,
+            phone: driver.phone,
+            vehicle_type: driver.vehicle_type,
+            rating: driver.rating,
+          },
+        });
+        io.to(`order:${orderId}`).emit("order_update", {
+          orderId,
+          status: "driver_assigned",
+          driver: {
+            id: driver.id,
+            name: driver.name,
+            phone: driver.phone,
+            vehicle_type: driver.vehicle_type,
+            rating: driver.rating,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      return res.json({
+        success: true,
+        orderId,
+        status: "driver_assigned",
+        driver: {
+          id: driver.id,
+          name: driver.name,
+          phone: driver.phone,
+          vehicle_type: driver.vehicle_type,
+          rating: driver.rating,
+        },
+      });
+    } catch (err) {
+      console.error("[Order] Driver selection error:", err.message);
+      return res.status(500).json({ error: "Failed to assign selected driver" });
+    }
+  }
 }
 
 module.exports = OrderController;

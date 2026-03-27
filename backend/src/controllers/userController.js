@@ -16,16 +16,20 @@ class UserController {
   }
 
   static async updateProfile(req, res) {
-    const { name, phone, address } = req.body;
+    const { name, phone, address, email } = req.body;
     try {
       const user = await User.updateProfile(req.userId, {
         name,
         phone,
         address,
+        email,
       });
       const { password_hash, ...safeUser } = user;
       res.json({ user: safeUser });
     } catch (err) {
+      if (err.message === "Email already in use") {
+        return res.status(409).json({ error: "Email already in use" });
+      }
       res.status(500).json({ error: "Failed to update profile" });
     }
   }
