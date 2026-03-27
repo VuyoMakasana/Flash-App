@@ -34,6 +34,33 @@ class Payment extends BaseModel {
     return result.rows;
   }
 
+  static async getSavedCardById(cardId, userId) {
+    const result = await this.query(
+      `SELECT id, paystack_authorization_code, last4, card_type as brand,
+              exp_month, exp_year, bank, nickname, is_default
+       FROM saved_cards WHERE id=$1 AND user_id=$2`,
+      [cardId, userId],
+    );
+    return result.rows[0] || null;
+  }
+
+  static async markOrderPaidByCard(orderId, userId, amount, transactionId) {
+    return await this.transaction(async (client) => {
+      await client.query(
+        `UPDATE orders
+         SET status='paid', payment_status='paid', payment_method='card', updated_at=NOW()
+         WHERE id=$1 AND user_id=$2`,
+        [orderId, userId],
+      );
+
+      await client.query(
+        `INSERT INTO payments (order_id, user_id, amount, method, provider, provider_transaction_id, status, type)
+         VALUES ($1,$2,$3,'card','paystack',$4,'paid','store')`,
+        [orderId, userId, amount, transactionId],
+      );
+    });
+  }
+
   static async saveCard(userId, auth) {
     const result = await this.query(
       `INSERT INTO saved_cards

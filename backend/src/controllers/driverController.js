@@ -153,6 +153,15 @@ class DriverController {
     }
   }
 
+  static async getActiveOrder(req, res) {
+    try {
+      const order = await Driver.getActiveOrder(req.userId);
+      res.json({ order });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch active order" });
+    }
+  }
+
   static async getNearbyDrivers(req, res) {
     const { lat, lng } = req.query;
     try {

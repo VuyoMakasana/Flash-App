@@ -40,7 +40,7 @@ export const FlashProvider = ({ children }) => {
   const [orders, setOrders]             = useState([]);
   const [subscription, setSubscription] = useState('payg');
   const [hydrated, setHydrated]         = useState(false);
-  const [profile, setProfile]           = useState({ name: '', address: '', phone: '' });
+  const [profile, setProfileState]      = useState({ name: '', address: '', phone: '', email: '' });
   const [products, setProducts]         = useState(FALLBACK_PRODUCTS);
 
   // Hydrate from storage on mount
@@ -56,7 +56,7 @@ export const FlashProvider = ({ children }) => {
         if (storedUser) {
           const u = JSON.parse(storedUser);
           setUser(u);
-          setProfile({ name: u.name || '', address: u.address || '', phone: u.phone || '' });
+          setProfileState({ name: u.name || '', address: u.address || '', phone: u.phone || '', email: u.email || '' });
         }
         if (storedCart) setCart(JSON.parse(storedCart));
       } catch (e) {
@@ -101,6 +101,49 @@ export const FlashProvider = ({ children }) => {
 
   const isAuthenticated = !!token && !!user;
 
+  const updateProfile = useCallback(async (data) => {
+    const payload = {
+      name: data?.name ?? profile.name,
+      phone: data?.phone ?? profile.phone,
+      address: data?.address ?? profile.address,
+      email: data?.email ?? profile.email,
+    };
+
+    const result = await api.user.updateProfile(payload);
+    const nextUser = result.user;
+
+    setUser(nextUser);
+    setProfileState({
+      name: nextUser.name || '',
+      phone: nextUser.phone || '',
+      address: nextUser.address || '',
+      email: nextUser.email || '',
+    });
+    await AsyncStorage.setItem(STORAGE_KEYS.user, JSON.stringify(nextUser));
+
+    return nextUser;
+  }, [profile]);
+
+  useEffect(() => {
+    if (!token || !hydrated) return;
+
+    api.user.getProfile()
+      .then(async (data) => {
+        if (!data?.user) return;
+        setUser(data.user);
+        setProfileState({
+          name: data.user.name || '',
+          address: data.user.address || '',
+          phone: data.user.phone || '',
+          email: data.user.email || '',
+        });
+        await AsyncStorage.setItem(STORAGE_KEYS.user, JSON.stringify(data.user));
+      })
+      .catch(() => {
+        // Keep local snapshot when profile fetch fails.
+      });
+  }, [token, hydrated]);
+
   // ─── AUTH ─────────────────────────────
   const login = useCallback(async (email, password) => {
     const data = await api.auth.login(email, password);
@@ -110,7 +153,7 @@ export const FlashProvider = ({ children }) => {
     ]);
     setToken(data.token);
     setUser(data.user);
-    setProfile({ name: data.user.name || '', address: data.user.address || '', phone: data.user.phone || '' });
+    setProfileState({ name: data.user.name || '', address: data.user.address || '', phone: data.user.phone || '', email: data.user.email || '' });
     return data;
   }, []);
 
@@ -212,7 +255,8 @@ export const FlashProvider = ({ children }) => {
     user,
     token,
     profile,
-    setProfile,
+    updateProfile,
+    setProfile: setProfileState,
     subscription,
     setSubscription,
     cart,
@@ -230,11 +274,12 @@ export const FlashProvider = ({ children }) => {
     register,
     acceptTermsAndAuthenticate,
     logout,
+    updateProfile,
   }), [
     hydrated, isAuthenticated, user, token, profile, subscription,
     cart, addToCart, updateCartQuantity, removeCartItem, clearCart,
     placeOrder, fetchOrders, orders, requestReturn, products,
-    login, register, acceptTermsAndAuthenticate, logout,
+    login, register, acceptTermsAndAuthenticate, logout, updateProfile,
   ]);
 
   return <FlashContext.Provider value={value}>{children}</FlashContext.Provider>;

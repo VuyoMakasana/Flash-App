@@ -102,9 +102,10 @@ export default function DriverDashboard() {
   // ─── DATA LOADING ──────────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     try {
-      const [earningsRes, subRes] = await Promise.allSettled([
+      const [earningsRes, subRes, activeOrderRes] = await Promise.allSettled([
         driverApi.earnings.get(),
         driverApi.subscription.get(),
+        driverApi.orders.getActive(),
       ]);
 
       if (earningsRes.status === 'fulfilled') {
@@ -116,6 +117,10 @@ export default function DriverDashboard() {
 
       if (subRes.status === 'fulfilled') {
         setSubscription(subRes.value.subscription || null);
+      }
+
+      if (activeOrderRes.status === 'fulfilled') {
+        setActiveOrder(activeOrderRes.value.order || null);
       }
 
       await fetchAvailableOrders();

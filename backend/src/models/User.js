@@ -36,8 +36,22 @@ class User extends BaseModel {
   }
 
   static async updateProfile(userId, data) {
-    const { name, phone, address } = data;
-    return await super.update(this.tableName, userId, { name, phone, address });
+    const { name, phone, address, email } = data;
+
+    const payload = { name, phone, address };
+
+    if (email) {
+      const existing = await this.query(
+        "SELECT id FROM users WHERE email = $1 AND id != $2",
+        [email, userId],
+      );
+      if (existing.rows.length) {
+        throw new Error("Email already in use");
+      }
+      payload.email = email;
+    }
+
+    return await super.update(this.tableName, userId, payload);
   }
 
   static async acceptTerms(userId) {

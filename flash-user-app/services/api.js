@@ -91,6 +91,8 @@ export const api = {
     create: (orderData) => request('POST', '/api/orders', orderData),
     getMyOrders: () => request('GET', '/api/orders/my-orders'),
     getOrder: (orderId) => request('GET', `/api/orders/${orderId}`),
+    selectDriver: (orderId, driverId) =>
+      request('POST', `/api/orders/${orderId}/select-driver`, { driverId }),
   },
   payments: {
     // Initialize a Paystack payment — returns { authorizationUrl, reference }
@@ -107,6 +109,8 @@ export const api = {
       request('GET', `/api/payments/status/${orderId}`),
     getSavedCards: () =>
       request('GET', '/api/payments/cards'),
+    chargeSavedCard: (orderId, cardId) =>
+      request('POST', '/api/payments/charge-saved-card', { orderId, cardId }),
     removeCard: (cardId) =>
       request('DELETE', `/api/payments/cards/${cardId}`),
     setDefaultCard: (cardId) =>

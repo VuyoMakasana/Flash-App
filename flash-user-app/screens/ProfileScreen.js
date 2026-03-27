@@ -6,17 +6,18 @@ import { useFlash } from '../context/FlashContext';
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
-  const { user, profile, setProfile, logout } = useFlash();
+  const { user, profile, updateProfile, logout } = useFlash();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile.name || user?.name || '');
   const [phone, setPhone] = useState(profile.phone || user?.phone || '');
   const [address, setAddress] = useState(profile.address || user?.address || '');
+  const [email, setEmail] = useState(profile.email || user?.email || '');
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      setProfile({ name, phone, address });
+      await updateProfile({ name, phone, address, email: email.trim().toLowerCase() });
       setEditing(false);
       Alert.alert('Saved', 'Profile updated successfully.');
     } catch (e) {
@@ -55,6 +56,7 @@ export default function ProfileScreen() {
 
         {[
           { label: 'Full Name', value: name, setter: setName, icon: 'person-outline' },
+          { label: 'Email', value: email, setter: setEmail, icon: 'mail-outline' },
           { label: 'Phone', value: phone, setter: setPhone, icon: 'call-outline' },
           { label: 'Delivery Address', value: address, setter: setAddress, icon: 'location-outline' },
         ].map(field => (
