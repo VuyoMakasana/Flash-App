@@ -35,6 +35,27 @@ export default function OrderStatusScreen() {
     }
   }, [routeOrder, orderId]);
 
+  // While payment is pending, poll briefly so the screen can move to
+  // confirmed as soon as webhook finalization is complete.
+  useEffect(() => {
+    const id = order?.id || orderId;
+    const isPendingPayment =
+      order?.payment_status === 'pending' || order?.status === 'payment_pending';
+
+    if (!id || !isPendingPayment) return;
+
+    const timer = setInterval(async () => {
+      try {
+        const data = await api.orders.getOrder(id);
+        if (data?.order) {
+          setOrder(data.order);
+        }
+      } catch (_) {}
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [order?.id, order?.payment_status, order?.status, orderId]);
+
   const currentRank = ORDER_RANK[order?.status] || 0;
 
   const handleReturn = () => {
@@ -77,6 +98,13 @@ export default function OrderStatusScreen() {
       <View style={styles.card}>
         <Text style={styles.orderNum}>Order #{order.order_number || order.id?.slice(0, 8)}</Text>
         <Text style={styles.total}>R{order.total}</Text>
+
+        {(order.payment_status === 'pending' || order.status === 'payment_pending') && (
+          <View style={styles.pendingBanner}>
+            <Ionicons name="time-outline" size={16} color="#b45309" />
+            <Text style={styles.pendingBannerText}>Waiting for payment confirmation...</Text>
+          </View>
+        )}
 
         <View style={styles.steps}>
           {STEPS.map((step, idx) => {
@@ -145,6 +173,8 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', borderRadius: 16, padding: 16, gap: 12, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 },
   orderNum: { fontWeight: '700', color: '#6b7280' },
   total: { fontSize: 28, fontWeight: '900', color: '#0a0a0a' },
+  pendingBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
+  pendingBannerText: { color: '#92400e', fontWeight: '700', fontSize: 12 },
   steps: { gap: 0, marginTop: 8 },
   stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   stepLeft: { alignItems: 'center', width: 28 },

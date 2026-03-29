@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const Payment = require("../models/Payment");
 const Order = require("../models/Order");
 const paystackService = require("../services/paystackService");
+const db = require("../config/database");
 
 class PaymentController {
   static async initializePayment(req, res) {
@@ -98,7 +99,6 @@ class PaymentController {
   static async chargeSavedCard(req, res) {
     const { orderId, cardId } = req.body;
     const io = req.app.get("io");
-    const db = require("../config/database");
 
     if (!orderId || !cardId) {
       return res.status(400).json({ error: "orderId and cardId are required" });
@@ -109,7 +109,6 @@ class PaymentController {
       if (!card) {
         return res.status(404).json({ error: "Saved card not found" });
       }
-
       const userResult = await db.query(
         "SELECT email FROM users WHERE id=$1",
         [req.userId],
@@ -142,15 +141,19 @@ class PaymentController {
         }
 
         // Reject concurrent charge attempts while a charge is already in flight.
-        if (order.payment_status === "payment_pending" && order.paystack_reference) {
+        if (order.payment_status === "pending" && order.paystack_reference) {
           await client.query("ROLLBACK");
-          return res.status(409).json({ error: "Payment already in progress" });
+          return res.status(409).json({
+            error: "Payment already pending confirmation",
+            awaitingWebhook: true,
+            reference: order.paystack_reference,
+          });
         }
 
         reference = `flash_sc_${orderId}_${crypto.randomBytes(8).toString("hex")}`;
         await client.query(
           `UPDATE orders
-           SET paystack_reference = $1, payment_status = 'payment_pending', updated_at = NOW()
+           SET paystack_reference = $1, status = 'payment_pending', payment_status = 'pending', updated_at = NOW()
            WHERE id = $2`,
           [reference, orderId],
         );

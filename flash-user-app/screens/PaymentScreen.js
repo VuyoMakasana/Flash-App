@@ -99,6 +99,12 @@ export default function PaymentScreen() {
       // After returning, we verify the payment with our backend.
       const data = await api.payments.initialize(orderId);
 
+      if (data.awaitingWebhook) {
+        Alert.alert('Waiting for confirmation', data.message || 'Your payment is still being confirmed.');
+        await goToOrderStatus(orderId);
+        return;
+      }
+
       if (data.authorizationUrl) {
         // Open Paystack payment page in the device browser
         const supported = await Linking.canOpenURL(data.authorizationUrl);
@@ -108,7 +114,10 @@ export default function PaymentScreen() {
           // order status even if immediate verification is not ready yet.
           let verified = false;
           try {
-            await api.payments.verify(data.reference);
+            const verifyRes = await api.payments.verify(data.reference);
+            if (verifyRes?.awaitingWebhook) {
+              Alert.alert('Waiting for confirmation', 'Payment submitted. We are waiting for secure confirmation.');
+            }
             verified = true;
           } catch (_) {}
           if (verified) {
