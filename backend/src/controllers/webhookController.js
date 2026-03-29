@@ -5,29 +5,28 @@ const { getOptional, isProd } = require('../config/env');
 class WebhookController {
 
   static async handlePaystack(req, res) {
-    res.sendStatus(200);
-
     try {
       const secretKey = getOptional('PAYSTACK_SECRET_KEY', 'webhook');
 
       if (!secretKey && isProd) {
         console.error('[Webhook] CRITICAL: Cannot verify Paystack webhooks without PAYSTACK_SECRET_KEY');
-        return;
+        return res.status(500).send('Webhook secret not configured');
+      }
+
+      if (!Buffer.isBuffer(req.body)) {
+        console.warn('[Webhook] Paystack request body was not raw bytes');
+        return res.status(400).send('Invalid webhook body');
       }
 
       if (secretKey) {
-        const rawBody = Buffer.isBuffer(req.body)
-          ? req.body
-          : Buffer.from(JSON.stringify(req.body));
-
         const hash = crypto
           .createHmac('sha512', secretKey)
-          .update(rawBody)
+          .update(req.body)
           .digest('hex');
 
         if (hash !== req.headers['x-paystack-signature']) {
-          console.warn('[Webhook] Paystack signature mismatch — ignoring request');
-          return;
+          console.warn('[Webhook] Paystack signature mismatch — rejecting request');
+          return res.status(400).send('Invalid signature');
         }
       } else {
         console.warn('[Webhook] Skipping signature check — PAYSTACK_SECRET_KEY not configured');
@@ -35,13 +34,10 @@ class WebhookController {
 
       let event;
       try {
-        const bodyStr = Buffer.isBuffer(req.body)
-          ? req.body.toString('utf8')
-          : JSON.stringify(req.body);
-        event = JSON.parse(bodyStr);
+        event = JSON.parse(req.body.toString('utf8'));
       } catch (e) {
         console.error('[Webhook] Failed to parse Paystack body:', e.message);
-        return;
+        return res.status(400).send('Invalid payload');
       }
 
       console.log(
@@ -55,8 +51,11 @@ class WebhookController {
         await WebhookController.handleChargeFailed(event, io);
       }
 
+      return res.sendStatus(200);
+
     } catch (err) {
       console.error('[Webhook] Paystack processing error:', err.message);
+      return res.status(500).send('Webhook processing failed');
     }
   }
 
