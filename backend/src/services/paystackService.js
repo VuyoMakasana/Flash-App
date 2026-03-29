@@ -126,7 +126,7 @@ class PaystackService {
     };
   }
 
-  async verifyPayment(reference, io) {
+  async verifyPayment(reference, io, callerUserId) {
     // Verify with Paystack directly. Never trust the frontend.
     const paystackRes = await this.request(
       "GET",
@@ -138,7 +138,6 @@ class PaystackService {
     }
 
     const orderId = paystackRes.data?.metadata?.orderId;
-    const userId = paystackRes.data?.metadata?.userId;
 
     if (!orderId) throw new Error("No order linked to this payment");
 
@@ -157,7 +156,8 @@ class PaystackService {
 
     const order = orderCheck.rows[0];
 
-    if (userId && order.user_id !== userId) {
+    // Enforce ownership against the authenticated caller, not untrusted metadata.
+    if (order.user_id !== callerUserId) {
       throw new Error("Not your order");
     }
 
@@ -174,14 +174,16 @@ class PaystackService {
     };
   }
 
-  async chargeAuthorization(authCode, email, amount, metadata) {
-    return await this.request("POST", "/transaction/charge_authorization", {
+  async chargeAuthorization(authCode, email, amount, metadata, reference) {
+    const body = {
       authorization_code: authCode,
       email,
       amount,
       currency: "ZAR",
       metadata,
-    });
+    };
+    if (reference) body.reference = reference;
+    return await this.request("POST", "/transaction/charge_authorization", body);
   }
 }
 

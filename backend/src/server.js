@@ -60,12 +60,9 @@ app.set("io", io);
 app.use(helmet());
 app.use(corsMiddleware);
 
-// Webhooks need raw body BEFORE express.json()
-app.use(
-  "/api/webhooks",
-  express.raw({ type: "application/json" }),
-  webhookRoutes,
-);
+// Webhook routes: each route applies its own body parser (raw for Paystack,
+// JSON for Payflex) so we mount the router directly without global raw parsing.
+app.use("/api/webhooks", webhookRoutes);
 
 // Body parsing
 app.use(express.json({ limit: "10mb" }));

@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const Payment = require("../models/Payment");
 const Order = require("../models/Order");
 const paystackService = require("../services/paystackService");
@@ -22,7 +23,7 @@ class PaymentController {
     const io = req.app.get("io");
 
     try {
-      const result = await paystackService.verifyPayment(reference, io);
+      const result = await paystackService.verifyPayment(reference, io, req.userId);
       res.json(result);
     } catch (err) {
       console.error("[Paystack] Verify error:", err);
@@ -97,6 +98,7 @@ class PaymentController {
   static async chargeSavedCard(req, res) {
     const { orderId, cardId } = req.body;
     const io = req.app.get("io");
+    const db = require("../config/database");
 
     if (!orderId || !cardId) {
       return res.status(400).json({ error: "orderId and cardId are required" });
@@ -108,19 +110,59 @@ class PaymentController {
         return res.status(404).json({ error: "Saved card not found" });
       }
 
-      const order = await Order.getByIdWithDetails(orderId, req.userId);
-      if (!order) {
-        return res.status(404).json({ error: "Order not found" });
-      }
-      if (order.payment_status === "paid") {
-        return res.status(409).json({ error: "Order already paid" });
-      }
-
-      const userResult = await require("../config/database").query(
+      const userResult = await db.query(
         "SELECT email FROM users WHERE id=$1",
         [req.userId],
       );
       const email = userResult.rows[0]?.email;
+
+      // Lock the order row to prevent concurrent charge attempts and to persist
+      // the reference atomically before calling Paystack.
+      const client = await db.connect();
+      let order, reference;
+      try {
+        await client.query("BEGIN");
+
+        const lockedResult = await client.query(
+          `SELECT id, total, payment_status, paystack_reference, user_id
+           FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+          [orderId, req.userId],
+        );
+
+        if (!lockedResult.rows.length) {
+          await client.query("ROLLBACK");
+          return res.status(404).json({ error: "Order not found" });
+        }
+
+        order = lockedResult.rows[0];
+
+        if (order.payment_status === "paid") {
+          await client.query("ROLLBACK");
+          return res.status(409).json({ error: "Order already paid" });
+        }
+
+        // Reject concurrent charge attempts while a charge is already in flight.
+        if (order.payment_status === "payment_pending" && order.paystack_reference) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({ error: "Payment already in progress" });
+        }
+
+        reference = `flash_sc_${orderId}_${crypto.randomBytes(8).toString("hex")}`;
+        await client.query(
+          `UPDATE orders
+           SET paystack_reference = $1, payment_status = 'payment_pending', updated_at = NOW()
+           WHERE id = $2`,
+          [reference, orderId],
+        );
+
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+
       const amountInCents = Math.round(parseFloat(order.total) * 100);
 
       const paystackRes = await paystackService.chargeAuthorization(
@@ -133,15 +175,30 @@ class PaymentController {
           cardId: card.id,
           source: "saved_card",
         },
+        reference,
       );
 
       if (!paystackRes?.status) {
+        // Paystack rejected the charge outright — revert so the client can retry.
+        await db.query(
+          `UPDATE orders
+           SET payment_status = 'pending', paystack_reference = NULL, updated_at = NOW()
+           WHERE id = $1`,
+          [orderId],
+        );
         return res
           .status(400)
           .json({ error: paystackRes?.message || "Card charge failed" });
       }
 
       if (paystackRes.data?.status !== "success") {
+        // Non-immediate-success (e.g. send_otp, pending) — revert so the client can retry.
+        await db.query(
+          `UPDATE orders
+           SET payment_status = 'pending', paystack_reference = NULL, updated_at = NOW()
+           WHERE id = $1`,
+          [orderId],
+        );
         return res.status(202).json({
           success: false,
           status: paystackRes.data?.status || "pending",
@@ -149,12 +206,11 @@ class PaymentController {
         });
       }
 
-      // Webhook is the source of truth for final payment state. We return
-      // accepted/processing here and wait for webhook finalization.
+      // Charge accepted — webhook is the source of truth for final paid transition.
       res.status(202).json({
         success: true,
         orderId,
-        reference: paystackRes.data?.reference,
+        reference,
         message: "Charge accepted. Awaiting webhook confirmation.",
         awaitingWebhook: true,
       });

@@ -21,10 +21,29 @@ async function migrate() {
     
     // Phase 1 Fix 1: Add UNIQUE constraint on provider_transaction_id if it does not exist yet.
     // This prevents two payment records being inserted for the same Paystack transaction ID.
-    // The DO NOTHING handles the case where the constraint already exists on a live database.
+    // Before adding the constraint, remove any duplicate rows (keeping the earliest by ctid)
+    // so that existing databases with duplicates are not blocked from starting.
     await client.query(`
       DO $$
+      DECLARE
+        v_has_duplicates BOOLEAN;
       BEGIN
+        SELECT EXISTS (
+          SELECT provider_transaction_id
+          FROM payments
+          WHERE provider_transaction_id IS NOT NULL
+          GROUP BY provider_transaction_id
+          HAVING COUNT(*) > 1
+        ) INTO v_has_duplicates;
+
+        IF v_has_duplicates THEN
+          DELETE FROM payments p
+          USING payments p2
+          WHERE p.provider_transaction_id IS NOT NULL
+            AND p.provider_transaction_id = p2.provider_transaction_id
+            AND p.ctid > p2.ctid;
+        END IF;
+
         IF NOT EXISTS (
           SELECT 1 FROM pg_constraint
           WHERE conname = 'payments_provider_transaction_id_key'
@@ -118,8 +137,8 @@ async function migrate() {
       `CREATE INDEX IF NOT EXISTS idx_feed_comments_post ON feed_comments(post_id, created_at ASC)`,
       `CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(order_id, sender_role, read_at)`,
       `CREATE INDEX IF NOT EXISTS idx_trusted_status ON trusted_drivers(driver_id, status)`,
-      `CREATE INDEX IF NOT EXISTS idx_webhook_events_id ON webhook_events(paystack_event_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_payments_provider_txn ON payments(provider_transaction_id)`,
+      // idx_webhook_events_id and idx_payments_provider_txn are intentionally omitted:
+      // UNIQUE constraints on those columns already create implicit indexes.
     ];
     for (const idx of indexes) await client.query(idx);
 

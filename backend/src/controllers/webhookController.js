@@ -44,22 +44,6 @@ class WebhookController {
         return;
       }
 
-      if (event.id) {
-        try {
-          await pool.query(
-            `INSERT INTO webhook_events (paystack_event_id, event_type) VALUES ($1, $2)`,
-            [String(event.id), event.event || 'unknown'],
-          );
-        } catch (dupErr) {
-          if (dupErr.code === '23505') {
-            console.log(`[Webhook] Duplicate event ${event.id} — already processed, skipping`);
-            return;
-          }
-          console.error('[Webhook] Failed to record event ID:', dupErr.message);
-          return;
-        }
-      }
-
       const io = req.app.get('io');
 
       if (event.event === 'charge.success') {
@@ -101,6 +85,24 @@ class WebhookController {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+
+      // Idempotency: insert event ID within the transaction so a rollback also
+      // removes the marker, allowing safe retries on processing failures.
+      if (event.id) {
+        try {
+          await client.query(
+            `INSERT INTO webhook_events (paystack_event_id, event_type) VALUES ($1, $2)`,
+            [String(event.id), event.event || 'unknown'],
+          );
+        } catch (dupErr) {
+          if (dupErr.code === '23505') {
+            await client.query('ROLLBACK');
+            console.log(`[Webhook] Duplicate event ${event.id} — already processed, skipping`);
+            return;
+          }
+          throw dupErr;
+        }
+      }
 
       const orderCheck = await client.query(
         `SELECT id, payment_status FROM orders WHERE id = $1 FOR UPDATE`,
@@ -160,10 +162,44 @@ class WebhookController {
     const orderId = event.data?.metadata?.orderId;
     if (!orderId) return;
 
-    await pool.query(
-      `UPDATE orders SET payment_status = 'failed', updated_at = NOW() WHERE id = $1`,
-      [orderId],
-    );
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Idempotency: insert event ID within the transaction so retries are
+      // safe if processing rolls back before completing.
+      if (event.id) {
+        try {
+          await client.query(
+            `INSERT INTO webhook_events (paystack_event_id, event_type) VALUES ($1, $2)`,
+            [String(event.id), event.event || 'unknown'],
+          );
+        } catch (dupErr) {
+          if (dupErr.code === '23505') {
+            await client.query('ROLLBACK');
+            console.log(`[Webhook] Duplicate event ${event.id} — already processed, skipping`);
+            return;
+          }
+          throw dupErr;
+        }
+      }
+
+      // Only mark failed when not already paid to prevent out-of-order overwrites.
+      await client.query(
+        `UPDATE orders
+         SET payment_status = 'failed', updated_at = NOW()
+         WHERE id = $1 AND payment_status <> 'paid'`,
+        [orderId],
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[Webhook] handleChargeFailed error:', err.message);
+      return;
+    } finally {
+      client.release();
+    }
 
     const orderRow = await pool.query('SELECT user_id FROM orders WHERE id = $1', [orderId]);
     if (io && orderRow.rows.length) {
@@ -240,10 +276,30 @@ class WebhookController {
         }
 
       } else if (status === 'DECLINED' || status === 'CANCELLED') {
-        await pool.query(
-          `UPDATE orders SET payment_status = 'failed', updated_at = NOW() WHERE id = $1`,
-          [orderId],
-        );
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+
+          const orderCheck = await client.query(
+            `SELECT id, payment_status FROM orders WHERE id = $1 FOR UPDATE`,
+            [orderId],
+          );
+
+          // Only mark failed when not already paid to prevent out-of-order overwrites.
+          if (orderCheck.rows.length && orderCheck.rows[0].payment_status !== 'paid') {
+            await client.query(
+              `UPDATE orders SET payment_status = 'failed', updated_at = NOW() WHERE id = $1`,
+              [orderId],
+            );
+          }
+
+          await client.query('COMMIT');
+        } catch (err) {
+          await client.query('ROLLBACK');
+          throw err;
+        } finally {
+          client.release();
+        }
       }
 
       res.json({ received: true });
