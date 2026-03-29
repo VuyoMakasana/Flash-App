@@ -149,26 +149,14 @@ class PaymentController {
         });
       }
 
-      await Payment.markOrderPaidByCard(
-        orderId,
-        req.userId,
-        parseFloat(order.total),
-        paystackRes.data?.id || paystackRes.data?.reference,
-      );
-
-      if (io) {
-        io.to(`user:${req.userId}`).emit("payment_confirmed", { orderId });
-        io.to("driver_pool").emit("new_order_available", {
-          orderId,
-          isCashDelivery: false,
-        });
-      }
-
-      res.json({
+      // Webhook is the source of truth for final payment state. We return
+      // accepted/processing here and wait for webhook finalization.
+      res.status(202).json({
         success: true,
         orderId,
         reference: paystackRes.data?.reference,
-        message: "Payment successful",
+        message: "Charge accepted. Awaiting webhook confirmation.",
+        awaitingWebhook: true,
       });
     } catch (err) {
       console.error("[Paystack] Saved card charge error:", err.message);

@@ -127,7 +127,7 @@ class PaystackService {
   }
 
   async verifyPayment(reference, io) {
-    // Step 1: Verify with Paystack directly. Never trust the frontend.
+    // Verify with Paystack directly. Never trust the frontend.
     const paystackRes = await this.request(
       "GET",
       `/transaction/verify/${encodeURIComponent(reference)}`,
@@ -142,90 +142,36 @@ class PaystackService {
 
     if (!orderId) throw new Error("No order linked to this payment");
 
-    // Step 2: Use a transaction with SELECT FOR UPDATE to prevent race conditions.
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
+    // Webhook is the source of truth for finalization. Verify endpoint only
+    // checks provider status and current server-side order state.
+    const orderCheck = await pool.query(
+      `SELECT id, user_id, payment_status, paystack_reference
+       FROM orders
+       WHERE id = $1`,
+      [orderId],
+    );
 
-      // Lock the order row so two simultaneous verify calls cannot both pass
-      // the status check at the same time.
-      const orderCheck = await client.query(
-        `SELECT id, payment_status, user_id FROM orders WHERE id = $1 FOR UPDATE`,
-        [orderId],
-      );
-
-      if (!orderCheck.rows.length) {
-        await client.query("ROLLBACK");
-        throw new Error("Order not found");
-      }
-
-      const order = orderCheck.rows[0];
-
-      // Ownership check — the caller must own the order.
-      if (userId && order.user_id !== userId) {
-        await client.query("ROLLBACK");
-        throw new Error("Not your order");
-      }
-
-      // Idempotency — if already paid (webhook beat us here), return success.
-      if (order.payment_status === "paid") {
-        await client.query("ROLLBACK");
-        return { success: true, orderId, alreadyProcessed: true };
-      }
-
-      // Mark the order as paid using the reference to ensure it matches.
-      const result = await client.query(
-        `UPDATE orders
-         SET status = 'paid', payment_status = 'paid', payment_method = 'card', updated_at = NOW()
-         WHERE id = $1 AND paystack_reference = $2
-         RETURNING user_id`,
-        [orderId, reference],
-      );
-
-      if (!result.rows.length) {
-        await client.query("ROLLBACK");
-        throw new Error("Payment reference does not match this order");
-      }
-
-      // Insert payment record. ON CONFLICT DO NOTHING prevents duplicate if
-      // webhook already inserted a record for this transaction ID.
-      await client.query(
-        `INSERT INTO payments
-           (order_id, user_id, amount, method, provider, provider_transaction_id, status, type)
-         VALUES ($1, $2, $3, 'card', 'paystack', $4, 'paid', 'store')
-         ON CONFLICT (provider_transaction_id) DO NOTHING`,
-        [
-          orderId,
-          result.rows[0].user_id,
-          paystackRes.data.amount / 100,
-          String(paystackRes.data.id),
-        ],
-      );
-
-      await client.query("COMMIT");
-
-      // Emit Socket.io events only after successful DB commit.
-      if (io) {
-        io.to(`user:${result.rows[0].user_id}`).emit("payment_confirmed", {
-          orderId,
-        });
-        io.to(`order:${orderId}`).emit("order_update", {
-          orderId,
-          status: "paid",
-        });
-        io.to("driver_pool").emit("new_order_available", {
-          orderId,
-          isCashDelivery: false,
-        });
-      }
-
-      return { success: true, orderId };
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
+    if (!orderCheck.rows.length) {
+      throw new Error("Order not found");
     }
+
+    const order = orderCheck.rows[0];
+
+    if (userId && order.user_id !== userId) {
+      throw new Error("Not your order");
+    }
+
+    if (order.paystack_reference !== reference) {
+      throw new Error("Payment reference does not match this order");
+    }
+
+    return {
+      success: order.payment_status === "paid",
+      orderId,
+      paymentStatus: order.payment_status,
+      providerStatus: paystackRes.data.status,
+      awaitingWebhook: order.payment_status !== "paid",
+    };
   }
 
   async chargeAuthorization(authCode, email, amount, metadata) {
