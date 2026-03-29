@@ -64,7 +64,7 @@ class WebhookController {
 
       if (event.event === 'charge.success') {
         await WebhookController.handleChargeSuccess(event, io);
-      } else if (event.event === 'charge.failed') {
+      } else if (event.event === 'charge.failed' || event.event === 'charge.abandoned') {
         await WebhookController.handleChargeFailed(event, io);
       }
 
@@ -186,6 +186,10 @@ class WebhookController {
         return res.status(401).json({ error: 'Unauthorized' });
       }
     } else {
+      if (isProd) {
+        console.error('[Webhook] CRITICAL: PAYFLEX_WEBHOOK_SECRET is required in production');
+        return res.status(500).json({ error: 'Webhook secret not configured' });
+      }
       console.warn('[Webhook] PAYFLEX_WEBHOOK_SECRET not set — set before going live');
     }
 
