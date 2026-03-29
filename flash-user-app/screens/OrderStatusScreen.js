@@ -44,16 +44,28 @@ export default function OrderStatusScreen() {
 
     if (!id || !isPendingPayment) return;
 
-    const timer = setInterval(async () => {
+    let cancelled = false;
+    let timeoutId;
+
+    const poll = async () => {
       try {
         const data = await api.orders.getOrder(id);
         if (data?.order) {
           setOrder(data.order);
         }
       } catch (_) {}
-    }, 5000);
 
-    return () => clearInterval(timer);
+      if (!cancelled) {
+        timeoutId = setTimeout(poll, 5000);
+      }
+    };
+
+    timeoutId = setTimeout(poll, 5000);
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
   }, [order?.id, order?.payment_status, order?.status, orderId]);
 
   const currentRank = ORDER_RANK[order?.status] || 0;

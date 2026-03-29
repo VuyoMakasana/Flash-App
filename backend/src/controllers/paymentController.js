@@ -182,7 +182,7 @@ class PaymentController {
       );
 
       if (!paystackRes?.status) {
-        // Paystack rejected the charge outright — revert so the client can retry.
+        // Paystack explicitly rejected the charge — clear the reference so the client can retry.
         await db.query(
           `UPDATE orders
            SET payment_status = 'pending', paystack_reference = NULL, updated_at = NOW()
@@ -195,17 +195,15 @@ class PaymentController {
       }
 
       if (paystackRes.data?.status !== "success") {
-        // Non-immediate-success (e.g. send_otp, pending) — revert so the client can retry.
-        await db.query(
-          `UPDATE orders
-           SET payment_status = 'pending', paystack_reference = NULL, updated_at = NOW()
-           WHERE id = $1`,
-          [orderId],
-        );
+        // Non-immediate-success statuses (e.g. send_otp, pending) mean Paystack may still
+        // complete the charge asynchronously and send a webhook. Keep the reference so the
+        // webhook finalization path can match the order.
         return res.status(202).json({
           success: false,
           status: paystackRes.data?.status || "pending",
           message: paystackRes.data?.gateway_response || "Payment pending",
+          reference,
+          awaitingWebhook: true,
         });
       }
 
@@ -219,6 +217,18 @@ class PaymentController {
       });
     } catch (err) {
       console.error("[Paystack] Saved card charge error:", err.message);
+      // If chargeAuthorization threw (network/API error), the request may or may
+      // not have reached Paystack. Conditionally revert only when the reference
+      // still matches (paystack_reference = $2), so we don't overwrite state that
+      // was already advanced by an arriving webhook.
+      if (reference) {
+        await db.query(
+          `UPDATE orders
+           SET payment_status = 'pending', paystack_reference = NULL, updated_at = NOW()
+           WHERE id = $1 AND paystack_reference = $2`,
+          [orderId, reference],
+        ).catch((e) => console.error("[Paystack] Cleanup revert failed:", e.message));
+      }
       res.status(500).json({ error: "Failed to charge saved card" });
     }
   }

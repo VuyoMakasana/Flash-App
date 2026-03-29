@@ -24,7 +24,25 @@ class WebhookController {
           .update(req.body)
           .digest('hex');
 
-        if (hash !== req.headers['x-paystack-signature']) {
+        const signatureHeaderRaw = req.headers['x-paystack-signature'];
+        const signatureHeader = signatureHeaderRaw == null ? '' : String(signatureHeaderRaw);
+
+        if (!signatureHeader) {
+          console.warn('[Webhook] Paystack signature missing — rejecting request');
+          return res.status(400).send('Invalid signature');
+        }
+
+        let receivedBuf;
+        try {
+          receivedBuf = Buffer.from(signatureHeader, 'hex');
+        } catch (e) {
+          console.warn('[Webhook] Paystack signature not valid hex — rejecting request');
+          return res.status(400).send('Invalid signature');
+        }
+
+        const computedBuf = Buffer.from(hash, 'hex');
+        if (computedBuf.length !== receivedBuf.length ||
+            !crypto.timingSafeEqual(computedBuf, receivedBuf)) {
           console.warn('[Webhook] Paystack signature mismatch — rejecting request');
           return res.status(400).send('Invalid signature');
         }
@@ -159,17 +177,20 @@ class WebhookController {
     } catch (err) {
       await client.query('ROLLBACK');
       console.error('[Webhook] handleChargeSuccess error:', err.message);
+      throw err;
     } finally {
       client.release();
     }
   }
 
   static async handleChargeFailed(event, io) {
-    const orderId = event.data?.metadata?.orderId;
+    const orderId  = event.data?.metadata?.orderId;
+    const eventRef = event.data?.reference || null;
+
     if (!orderId) return;
 
     console.log(
-      `[Webhook] Payment transition pending->failed orderId=${orderId} reference=${event.data?.reference || 'n/a'} event=${event.event || 'unknown'}`,
+      `[Webhook] Payment transition pending->failed orderId=${orderId} reference=${eventRef || 'n/a'} event=${event.event || 'unknown'}`,
     );
 
     const client = await pool.connect();
@@ -194,19 +215,52 @@ class WebhookController {
         }
       }
 
-      // Only mark failed when not already paid to prevent out-of-order overwrites.
-      await client.query(
-        `UPDATE orders
-         SET payment_status = 'failed', updated_at = NOW()
-         WHERE id = $1 AND payment_status <> 'paid'`,
+      if (!eventRef) {
+        console.warn(`[Webhook] handleChargeFailed: no reference in event for orderId=${orderId}, skipping`);
+        await client.query('COMMIT');
+        return;
+      }
+
+      // Lock the row and validate that the failure reference matches the
+      // current order reference before applying the failed transition.
+      // This prevents a stale failure webhook from an older attempt from
+      // overwriting the state of a newer charge attempt.
+      const orderResult = await client.query(
+        `SELECT paystack_reference, payment_status FROM orders WHERE id = $1 FOR UPDATE`,
         [orderId],
       );
+
+      if (!orderResult.rows.length) {
+        console.warn(`[Webhook] handleChargeFailed: order not found id=${orderId}, skipping`);
+        await client.query('COMMIT');
+        return;
+      }
+
+      const { paystack_reference: dbRef, payment_status: currentStatus } = orderResult.rows[0];
+
+      if (dbRef && dbRef !== eventRef) {
+        console.log(
+          `[Webhook] handleChargeFailed: reference mismatch orderId=${orderId} dbRef=${dbRef} eventRef=${eventRef} — stale failure, not updating`,
+        );
+        await client.query('COMMIT');
+        return;
+      }
+
+      // Only mark failed when not already paid and the reference matches.
+      if (currentStatus !== 'paid') {
+        await client.query(
+          `UPDATE orders
+           SET payment_status = 'failed', updated_at = NOW()
+           WHERE id = $1 AND payment_status <> 'paid' AND paystack_reference = $2`,
+          [orderId, eventRef],
+        );
+      }
 
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
       console.error('[Webhook] handleChargeFailed error:', err.message);
-      return;
+      throw err;
     } finally {
       client.release();
     }
@@ -226,8 +280,16 @@ class WebhookController {
 
     const payflexSecret = process.env.PAYFLEX_WEBHOOK_SECRET;
     if (payflexSecret) {
-      const incomingSecret = req.headers['x-payflex-signature'];
-      if (incomingSecret !== payflexSecret) {
+      const headerValue = req.headers['x-payflex-signature'];
+      const incomingSecret = typeof headerValue === 'string'
+        ? headerValue
+        : Array.isArray(headerValue) ? headerValue[0] : '';
+
+      const expectedBuf = Buffer.from(String(payflexSecret), 'utf8');
+      const incomingBuf = Buffer.from(String(incomingSecret), 'utf8');
+
+      if (incomingBuf.length !== expectedBuf.length ||
+          !crypto.timingSafeEqual(incomingBuf, expectedBuf)) {
         console.warn('[Webhook] Payflex signature mismatch — ignoring request');
         return res.status(401).json({ error: 'Unauthorized' });
       }

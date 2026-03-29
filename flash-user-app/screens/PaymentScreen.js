@@ -90,10 +90,12 @@ export default function PaymentScreen() {
         const data = await api.payments.chargeSavedCard(orderId, selectedCardId);
         if (data?.awaitingWebhook) {
           Alert.alert('Waiting for confirmation', data.message || 'Payment submitted. We are waiting for secure confirmation.');
+          await assignPreferredDriverIfNeeded(orderId);
           await goToOrderStatus(orderId);
           return;
         }
 
+        await assignPreferredDriverIfNeeded(orderId);
         await goToOrderStatus(orderId);
         return;
       }
