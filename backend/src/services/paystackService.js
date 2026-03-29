@@ -67,7 +67,7 @@ class PaystackService {
 
   async initializePayment(orderId, userId) {
     const orderResult = await pool.query(
-      "SELECT id, total, subtotal, user_id, payment_status FROM orders WHERE id=$1",
+      "SELECT id, total, subtotal, user_id, payment_status, paystack_reference FROM orders WHERE id=$1",
       [orderId],
     );
 
@@ -75,6 +75,17 @@ class PaystackService {
     const order = orderResult.rows[0];
     if (order.user_id !== userId) throw new Error("Not your order");
     if (order.payment_status === "paid") throw new Error("Order already paid");
+
+    // If a payment is already pending with a reference, avoid re-initializing
+    // and risking duplicate charge attempts while webhook confirmation is in-flight.
+    if (order.payment_status === "pending" && order.paystack_reference) {
+      return {
+        reference: order.paystack_reference,
+        amount: order.total,
+        awaitingWebhook: true,
+        message: "Payment already initiated. Waiting for confirmation.",
+      };
+    }
 
     const userResult = await pool.query("SELECT email FROM users WHERE id=$1", [
       userId,

@@ -44,6 +44,9 @@ class WebhookController {
         return;
       }
 
+      console.log(
+        `[Webhook] Paystack received event=${event.event || 'unknown'} eventId=${event.id || 'n/a'} orderId=${event.data?.metadata?.orderId || 'n/a'} reference=${event.data?.reference || 'n/a'}`,
+      );
       const io = req.app.get('io');
 
       if (event.event === 'charge.success') {
@@ -134,6 +137,10 @@ class WebhookController {
 
       const userId = result.rows[0].user_id;
 
+      console.log(
+        `[Webhook] Payment transition pending->paid orderId=${orderId} reference=${data.reference}`,
+      );
+
       await client.query(
         `INSERT INTO payments
            (order_id, user_id, amount, method, provider, provider_transaction_id, status, type)
@@ -161,6 +168,10 @@ class WebhookController {
   static async handleChargeFailed(event, io) {
     const orderId = event.data?.metadata?.orderId;
     if (!orderId) return;
+
+    console.log(
+      `[Webhook] Payment transition pending->failed orderId=${orderId} reference=${event.data?.reference || 'n/a'} event=${event.event || 'unknown'}`,
+    );
 
     const client = await pool.connect();
     try {
