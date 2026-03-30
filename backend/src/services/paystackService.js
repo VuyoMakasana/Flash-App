@@ -67,7 +67,7 @@ class PaystackService {
 
   async initializePayment(orderId, userId) {
     const orderResult = await pool.query(
-      "SELECT id, total, subtotal, user_id, payment_status FROM orders WHERE id=$1",
+      "SELECT id, total, subtotal, user_id, payment_status, paystack_reference FROM orders WHERE id=$1",
       [orderId],
     );
 
@@ -75,6 +75,17 @@ class PaystackService {
     const order = orderResult.rows[0];
     if (order.user_id !== userId) throw new Error("Not your order");
     if (order.payment_status === "paid") throw new Error("Order already paid");
+
+    // If a payment is already pending with a reference, avoid re-initializing
+    // and risking duplicate charge attempts while webhook confirmation is in-flight.
+    if (order.payment_status === "pending" && order.paystack_reference) {
+      return {
+        reference: order.paystack_reference,
+        amount: order.total,
+        awaitingWebhook: true,
+        message: "Payment already initiated. Waiting for confirmation.",
+      };
+    }
 
     const userResult = await pool.query("SELECT email FROM users WHERE id=$1", [
       userId,
@@ -126,7 +137,8 @@ class PaystackService {
     };
   }
 
-  async verifyPayment(reference, io) {
+  async verifyPayment(reference, io, callerUserId) {
+    // Verify with Paystack directly. Never trust the frontend.
     const paystackRes = await this.request(
       "GET",
       `/transaction/verify/${encodeURIComponent(reference)}`,
@@ -137,52 +149,52 @@ class PaystackService {
     }
 
     const orderId = paystackRes.data?.metadata?.orderId;
+
     if (!orderId) throw new Error("No order linked to this payment");
 
-    const result = await pool.query(
-      `UPDATE orders SET status='paid', payment_status='paid', payment_method='card', updated_at=NOW()
-       WHERE id=$1 AND paystack_reference=$2 RETURNING user_id`,
-      [orderId, reference],
+    // Webhook is the source of truth for finalization. Verify endpoint only
+    // checks provider status and current server-side order state.
+    const orderCheck = await pool.query(
+      `SELECT id, user_id, payment_status, paystack_reference
+       FROM orders
+       WHERE id = $1`,
+      [orderId],
     );
 
-    if (result.rows.length) {
-      await pool.query(
-        `INSERT INTO payments (order_id, user_id, amount, method, provider, provider_transaction_id, status, type)
-         VALUES ($1,$2,$3,'card','paystack',$4,'paid','store')`,
-        [
-          orderId,
-          result.rows[0].user_id,
-          paystackRes.data.amount / 100,
-          paystackRes.data.id,
-        ],
-      );
-
-      if (io) {
-        io.to(`user:${result.rows[0].user_id}`).emit("payment_confirmed", {
-          orderId,
-        });
-        io.to(`order:${orderId}`).emit("order_update", {
-          orderId,
-          status: "paid",
-        });
-        io.to("driver_pool").emit("new_order_available", {
-          orderId,
-          isCashDelivery: false,
-        });
-      }
+    if (!orderCheck.rows.length) {
+      throw new Error("Order not found");
     }
 
-    return { success: true, orderId };
+    const order = orderCheck.rows[0];
+
+    // Enforce ownership against the authenticated caller, not untrusted metadata.
+    if (order.user_id !== callerUserId) {
+      throw new Error("Not your order");
+    }
+
+    if (order.paystack_reference !== reference) {
+      throw new Error("Payment reference does not match this order");
+    }
+
+    return {
+      success: order.payment_status === "paid",
+      orderId,
+      paymentStatus: order.payment_status,
+      providerStatus: paystackRes.data.status,
+      awaitingWebhook: order.payment_status !== "paid",
+    };
   }
 
-  async chargeAuthorization(authCode, email, amount, metadata) {
-    return await this.request("POST", "/transaction/charge_authorization", {
+  async chargeAuthorization(authCode, email, amount, metadata, reference) {
+    const body = {
       authorization_code: authCode,
       email,
       amount,
       currency: "ZAR",
       metadata,
-    });
+    };
+    if (reference) body.reference = reference;
+    return await this.request("POST", "/transaction/charge_authorization", body);
   }
 }
 

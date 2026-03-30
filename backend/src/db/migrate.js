@@ -16,6 +16,56 @@ async function migrate() {
     await client.query(`CREATE TABLE IF NOT EXISTS return_requests (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_id UUID REFERENCES orders(id), user_id UUID REFERENCES users(id), driver_id UUID REFERENCES drivers(id), reason TEXT, status VARCHAR(50) DEFAULT 'requested', credit_issued BOOLEAN DEFAULT false, credit_amount DECIMAL(10,2), pickup_scheduled_at TIMESTAMP, picked_up_at TIMESTAMP, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), UNIQUE(order_id))`);
     await client.query(`CREATE TABLE IF NOT EXISTS driver_locations (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), driver_id UUID REFERENCES drivers(id) ON DELETE CASCADE, order_id UUID REFERENCES orders(id), lat DECIMAL(10,8) NOT NULL, lng DECIMAL(11,8) NOT NULL, recorded_at TIMESTAMP DEFAULT NOW())`);
     await client.query(`CREATE TABLE IF NOT EXISTS payments (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_id UUID REFERENCES orders(id), user_id UUID REFERENCES users(id), amount DECIMAL(10,2) NOT NULL, currency VARCHAR(10) DEFAULT 'ZAR', method VARCHAR(50), provider VARCHAR(50), provider_transaction_id VARCHAR(255), status VARCHAR(50) DEFAULT 'pending', type VARCHAR(20) DEFAULT 'store', metadata JSONB, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())`);
+
+
+    
+    // Phase 1 Fix 1: Add UNIQUE constraint on provider_transaction_id if it does not exist yet.
+    // This prevents two payment records being inserted for the same Paystack transaction ID.
+    // Before adding the constraint, remove any duplicate rows (keeping the earliest by ctid)
+    // so that existing databases with duplicates are not blocked from starting.
+    await client.query(`
+      DO $$
+      DECLARE
+        v_has_duplicates BOOLEAN;
+      BEGIN
+        SELECT EXISTS (
+          SELECT provider_transaction_id
+          FROM payments
+          WHERE provider_transaction_id IS NOT NULL
+          GROUP BY provider_transaction_id
+          HAVING COUNT(*) > 1
+        ) INTO v_has_duplicates;
+
+        IF v_has_duplicates THEN
+          DELETE FROM payments p
+          USING payments p2
+          WHERE p.provider_transaction_id IS NOT NULL
+            AND p.provider_transaction_id = p2.provider_transaction_id
+            AND p.ctid > p2.ctid;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'payments_provider_transaction_id_key'
+        ) THEN
+          ALTER TABLE payments
+            ADD CONSTRAINT payments_provider_transaction_id_key
+            UNIQUE (provider_transaction_id);
+        END IF;
+      END $$;
+    `);
+
+    // Phase 1 Fix 2: Webhook idempotency table.
+    // Before processing any webhook event, we insert its paystack_event_id here.
+    // If the INSERT fails (duplicate), we know it was already processed and skip it.
+    await client.query(`CREATE TABLE IF NOT EXISTS webhook_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      paystack_event_id VARCHAR(255) NOT NULL UNIQUE,
+      event_type VARCHAR(100) NOT NULL,
+      processed_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+
     await client.query(`CREATE TABLE IF NOT EXISTS saved_cards (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, paystack_authorization_code VARCHAR(255) UNIQUE, last4 VARCHAR(4) NOT NULL, card_type VARCHAR(50), bank VARCHAR(100), exp_month INTEGER NOT NULL, exp_year INTEGER NOT NULL, nickname VARCHAR(100), is_default BOOLEAN DEFAULT false, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`);
     await client.query(`CREATE TABLE IF NOT EXISTS driver_subscriptions (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE, plan_type VARCHAR(20) NOT NULL, price DECIMAL(10,2) NOT NULL, deliveries_limit INTEGER, deliveries_used INTEGER DEFAULT 0, starts_at TIMESTAMPTZ DEFAULT NOW(), expires_at TIMESTAMPTZ NOT NULL, status VARCHAR(20) DEFAULT 'active', paystack_reference VARCHAR(255), created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`);
     await client.query(`CREATE TABLE IF NOT EXISTS size_profiles (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE, height_cm INTEGER, weight_kg DECIMAL(5,1), chest_cm DECIMAL(5,1), waist_cm DECIMAL(5,1), hips_cm DECIMAL(5,1), shoulder_cm DECIMAL(5,1), inseam_cm DECIMAL(5,1), reference_brand_1 VARCHAR(100), reference_size_1 VARCHAR(20), reference_brand_2 VARCHAR(100), reference_size_2 VARCHAR(20), created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`);
@@ -87,6 +137,8 @@ async function migrate() {
       `CREATE INDEX IF NOT EXISTS idx_feed_comments_post ON feed_comments(post_id, created_at ASC)`,
       `CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(order_id, sender_role, read_at)`,
       `CREATE INDEX IF NOT EXISTS idx_trusted_status ON trusted_drivers(driver_id, status)`,
+      // idx_webhook_events_id and idx_payments_provider_txn are intentionally omitted:
+      // UNIQUE constraints on those columns already create implicit indexes.
     ];
     for (const idx of indexes) await client.query(idx);
 

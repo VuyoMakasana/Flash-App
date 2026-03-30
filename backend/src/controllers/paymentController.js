@@ -1,6 +1,8 @@
+const crypto = require("crypto");
 const Payment = require("../models/Payment");
 const Order = require("../models/Order");
 const paystackService = require("../services/paystackService");
+const db = require("../config/database");
 
 class PaymentController {
   static async initializePayment(req, res) {
@@ -22,7 +24,7 @@ class PaymentController {
     const io = req.app.get("io");
 
     try {
-      const result = await paystackService.verifyPayment(reference, io);
+      const result = await paystackService.verifyPayment(reference, io, req.userId);
       res.json(result);
     } catch (err) {
       console.error("[Paystack] Verify error:", err);
@@ -107,20 +109,63 @@ class PaymentController {
       if (!card) {
         return res.status(404).json({ error: "Saved card not found" });
       }
-
-      const order = await Order.getByIdWithDetails(orderId, req.userId);
-      if (!order) {
-        return res.status(404).json({ error: "Order not found" });
-      }
-      if (order.payment_status === "paid") {
-        return res.status(409).json({ error: "Order already paid" });
-      }
-
-      const userResult = await require("../config/database").query(
+      const userResult = await db.query(
         "SELECT email FROM users WHERE id=$1",
         [req.userId],
       );
       const email = userResult.rows[0]?.email;
+
+      // Lock the order row to prevent concurrent charge attempts and to persist
+      // the reference atomically before calling Paystack.
+      const client = await db.connect();
+      let order, reference;
+      try {
+        await client.query("BEGIN");
+
+        const lockedResult = await client.query(
+          `SELECT id, total, payment_status, paystack_reference, user_id
+           FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+          [orderId, req.userId],
+        );
+
+        if (!lockedResult.rows.length) {
+          await client.query("ROLLBACK");
+          return res.status(404).json({ error: "Order not found" });
+        }
+
+        order = lockedResult.rows[0];
+
+        if (order.payment_status === "paid") {
+          await client.query("ROLLBACK");
+          return res.status(409).json({ error: "Order already paid" });
+        }
+
+        // Reject concurrent charge attempts while a charge is already in flight.
+        if (order.payment_status === "pending" && order.paystack_reference) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            error: "Payment already pending confirmation",
+            awaitingWebhook: true,
+            reference: order.paystack_reference,
+          });
+        }
+
+        reference = `flash_sc_${orderId}_${crypto.randomBytes(8).toString("hex")}`;
+        await client.query(
+          `UPDATE orders
+           SET paystack_reference = $1, status = 'payment_pending', payment_status = 'pending', updated_at = NOW()
+           WHERE id = $2`,
+          [reference, orderId],
+        );
+
+        await client.query("COMMIT");
+      } catch (err) {
+        await client.query("ROLLBACK");
+        throw err;
+      } finally {
+        client.release();
+      }
+
       const amountInCents = Math.round(parseFloat(order.total) * 100);
 
       const paystackRes = await paystackService.chargeAuthorization(
@@ -133,45 +178,57 @@ class PaymentController {
           cardId: card.id,
           source: "saved_card",
         },
+        reference,
       );
 
       if (!paystackRes?.status) {
+        // Paystack explicitly rejected the charge — clear the reference so the client can retry.
+        await db.query(
+          `UPDATE orders
+           SET payment_status = 'pending', paystack_reference = NULL, updated_at = NOW()
+           WHERE id = $1`,
+          [orderId],
+        );
         return res
           .status(400)
           .json({ error: paystackRes?.message || "Card charge failed" });
       }
 
       if (paystackRes.data?.status !== "success") {
+        // Non-immediate-success statuses (e.g. send_otp, pending) mean Paystack may still
+        // complete the charge asynchronously and send a webhook. Keep the reference so the
+        // webhook finalization path can match the order.
         return res.status(202).json({
           success: false,
           status: paystackRes.data?.status || "pending",
           message: paystackRes.data?.gateway_response || "Payment pending",
+          reference,
+          awaitingWebhook: true,
         });
       }
 
-      await Payment.markOrderPaidByCard(
-        orderId,
-        req.userId,
-        parseFloat(order.total),
-        paystackRes.data?.id || paystackRes.data?.reference,
-      );
-
-      if (io) {
-        io.to(`user:${req.userId}`).emit("payment_confirmed", { orderId });
-        io.to("driver_pool").emit("new_order_available", {
-          orderId,
-          isCashDelivery: false,
-        });
-      }
-
-      res.json({
+      // Charge accepted — webhook is the source of truth for final paid transition.
+      res.status(202).json({
         success: true,
         orderId,
-        reference: paystackRes.data?.reference,
-        message: "Payment successful",
+        reference,
+        message: "Charge accepted. Awaiting webhook confirmation.",
+        awaitingWebhook: true,
       });
     } catch (err) {
       console.error("[Paystack] Saved card charge error:", err.message);
+      // If chargeAuthorization threw (network/API error), the request may or may
+      // not have reached Paystack. Conditionally revert only when the reference
+      // still matches (paystack_reference = $2), so we don't overwrite state that
+      // was already advanced by an arriving webhook.
+      if (reference) {
+        await db.query(
+          `UPDATE orders
+           SET payment_status = 'pending', paystack_reference = NULL, updated_at = NOW()
+           WHERE id = $1 AND paystack_reference = $2`,
+          [orderId, reference],
+        ).catch((e) => console.error("[Paystack] Cleanup revert failed:", e.message));
+      }
       res.status(500).json({ error: "Failed to charge saved card" });
     }
   }
