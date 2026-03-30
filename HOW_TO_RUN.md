@@ -23,7 +23,6 @@ It has three parts that all work together:
 ```
 Flash/
 ├── backend/
-│   ├── src/
 │   ├── server.js                ← Thin backend entry point used by npm start and Docker.
 │   ├── src/
 │   │   ├── server.js            ← Server startup. Starts Express, Socket.io,
@@ -151,6 +150,8 @@ Flash/
 │           └── subscription.js   ← Buy daily/weekly/monthly delivery plans
 │
 ├── docker-compose.yml            ← Starts Postgres + Redis + Backend together
+├── scripts/
+│   └── start-all-dev.ps1         ← One-command startup for backend + both Expo apps
 └── HOW_TO_RUN.md                 ← This file
 ```
 
@@ -296,6 +297,22 @@ npm install               # only needed first time
 npx expo start --clear --port 8082
 ```
 Scan the QR code with Expo Go on your phone (different QR than the user app).
+
+---
+
+## Quick One-Command Startup
+
+From the project root:
+
+```powershell
+# Starts backend + user app + driver app in separate PowerShell windows
+powershell -ExecutionPolicy Bypass -File .\scripts\start-all-dev.ps1
+
+# Optional: use mock backend instead of docker backend
+powershell -ExecutionPolicy Bypass -File .\scripts\start-all-dev.ps1 -UseMockBackend
+```
+
+Comment/Note: the script defaults to `8081` for the user app and `8084` for the driver app to reduce Expo port conflicts.
 
 ---
 

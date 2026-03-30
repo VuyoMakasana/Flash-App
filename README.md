@@ -91,6 +91,18 @@ npx expo start --clear --port 8082
 
 See `HOW_TO_RUN.md` for the complete step-by-step setup guide.
 
+### One Command Start (Backend + Both Apps)
+
+```powershell
+# Docker backend + user app + driver app
+powershell -ExecutionPolicy Bypass -File .\scripts\start-all-dev.ps1
+
+# Optional: mock backend + user app + driver app
+powershell -ExecutionPolicy Bypass -File .\scripts\start-all-dev.ps1 -UseMockBackend
+```
+
+Note: The starter uses `8081` for the user app and `8084` for the driver app by default to avoid port collisions.
+
 ### Docker-First Local Stack
 
 - Docker now runs the backend, Postgres, and Redis together through `docker compose`.
