@@ -2,7 +2,7 @@
 # Flash — Docker Compose
 # ─────────────────────────────────────────────────────────────────────────────
 # This file starts the entire backend stack locally with one command:
-#   docker-compose up -d
+#   docker compose up -d --build
 #
 # It runs three services:
 #   1. postgres  — The database (stores users, orders, drivers, messages, etc.)
@@ -12,17 +12,15 @@
 # First time setup:
 #   1. cp backend/.env.example backend/.env
 #   2. Fill in your values in backend/.env
-#   3. docker-compose up -d
-#   4. docker-compose exec backend node src/db/migrate.js  (creates all tables)
+#   3. docker compose up -d --build
+#   4. docker compose exec backend npm run migrate  (creates all tables)
 #
 # Useful commands:
-#   docker-compose up -d          — Start everything in the background
-#   docker-compose down           — Stop everything
-#   docker-compose logs -f backend — Watch backend logs live
-#   docker-compose ps             — See what's running
+#   docker compose up -d --build   — Start everything in the background
+#   docker compose down            — Stop everything
+#   docker compose logs -f backend — Watch backend logs live
+#   docker compose ps              — See what's running
 # ─────────────────────────────────────────────────────────────────────────────
-
-version: '3.9'
 
 services:
 
@@ -37,10 +35,10 @@ services:
       POSTGRES_USER: flash_user
       POSTGRES_PASSWORD: flash_password
       POSTGRES_DB: flash_db
-    ports:
-      - "5432:5432"       # Port 5432 on your machine → port 5432 in container
     volumes:
       - postgres_data:/var/lib/postgresql/data   # Persistent data storage
+    expose:
+      - "5432"
     healthcheck:
       # Wait until Postgres is ready before starting the backend
       test: ["CMD-SHELL", "pg_isready -U flash_user -d flash_db"]
@@ -58,8 +56,8 @@ services:
     image: redis:7-alpine
     container_name: flash_redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
     volumes:
       - redis_data:/data
     healthcheck:
