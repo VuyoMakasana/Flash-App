@@ -46,17 +46,38 @@ class Payment extends BaseModel {
 
   static async markOrderPaidByCard(orderId, userId, amount, transactionId) {
     return await this.transaction(async (client) => {
-      await client.query(
-        `UPDATE orders
-         SET status='paid', payment_status='paid', payment_method='card', updated_at=NOW()
-         WHERE id=$1 AND user_id=$2`,
+      // Lock the order row first. If two saved-card charge requests arrive
+      // simultaneously, the second waits here until the first commits.
+      // After the first commits, the second sees payment_status = 'paid'
+      // and throws safely — preventing a double charge.
+      const orderCheck = await client.query(
+        `SELECT id, payment_status FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [orderId, userId],
       );
 
+      if (!orderCheck.rows.length) {
+        throw new Error("Order not found");
+      }
+
+      if (orderCheck.rows[0].payment_status === "paid") {
+        throw new Error("Order already paid");
+      }
+
       await client.query(
-        `INSERT INTO payments (order_id, user_id, amount, method, provider, provider_transaction_id, status, type)
-         VALUES ($1,$2,$3,'card','paystack',$4,'paid','store')`,
-        [orderId, userId, amount, transactionId],
+        `UPDATE orders
+         SET status = 'paid', payment_status = 'paid', payment_method = 'card', updated_at = NOW()
+         WHERE id = $1 AND user_id = $2`,
+        [orderId, userId],
+      );
+
+      // ON CONFLICT DO NOTHING: if the webhook already inserted a record for
+      // this transaction, skip the duplicate safely.
+      await client.query(
+        `INSERT INTO payments
+           (order_id, user_id, amount, method, provider, provider_transaction_id, status, type)
+         VALUES ($1, $2, $3, 'card', 'paystack', $4, 'paid', 'store')
+         ON CONFLICT (provider_transaction_id) DO NOTHING`,
+        [orderId, userId, amount, String(transactionId)],
       );
     });
   }
