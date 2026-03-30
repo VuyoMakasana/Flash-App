@@ -24,7 +24,9 @@ It has three parts that all work together:
 Flash/
 ├── backend/
 │   ├── src/
-│   │   ├── index.js              ← Server entry point. Starts Express, Socket.io,
+│   ├── server.js                ← Thin backend entry point used by npm start and Docker.
+│   ├── src/
+│   │   ├── server.js            ← Server startup. Starts Express, Socket.io,
 │   │   │                           Redis adapter, and cron jobs.
 │   │   ├── db/
 │   │   │   ├── pool.js           ← PostgreSQL connection pool (size set by DB_POOL_MAX)
@@ -172,7 +174,7 @@ You should see something like `v20.x.x`.
 
 ---
 
-### Step 2 — Set your IP address
+### Step 2 — Set your API base URL for Expo
 
 Your phone and your computer need to be on the same WiFi network.
 
@@ -180,17 +182,19 @@ Find your computer's IP address:
 - **Windows:** Open Command Prompt → type `ipconfig` → look for "IPv4 Address" (looks like `192.168.x.x`)
 - **Mac:** Open Terminal → type `ifconfig | grep "inet "` → look for a `192.168.x.x` address
 
-Open these two files and replace the IP:
+Set the API base URL in the shell before starting Expo so you do not have to edit source files:
 
-`flash-user-app/services/api.js` — line 4:
-```js
-export const BASE_URL = 'http://192.168.1.5:3000';  // ← your IP here
+**PowerShell (Windows):**
+```powershell
+$env:EXPO_PUBLIC_API_BASE_URL = "http://192.168.1.5:3000"
 ```
 
-`flash-driver-app/services/api.js` — line 3:
-```js
-export const BASE_URL = 'http://192.168.1.5:3000';  // ← same IP here
+**bash/zsh (macOS/Linux):**
+```bash
+export EXPO_PUBLIC_API_BASE_URL="http://192.168.1.5:3000"
 ```
+
+Both apps already read `EXPO_PUBLIC_API_BASE_URL` automatically.
 
 ---
 
@@ -220,10 +224,13 @@ npm install
 
 **Option A — Using Docker (easiest, recommended):**
 ```bash
-# From the root Flash folder (not inside backend/)
-docker-compose up -d postgres redis
+# One-time on Windows: make Docker Desktop launch when you sign in
+powershell -ExecutionPolicy Bypass -File .\scripts\enable-docker-desktop-autostart.ps1
+
+# From the root Flash folder
+powershell -ExecutionPolicy Bypass -File .\scripts\ensure-docker.ps1
 ```
-Wait about 10 seconds for Postgres to start.
+This starts Docker Desktop if needed, waits for the daemon, then brings up Postgres, Redis, and the backend API.
 
 **Option B — Using a local PostgreSQL installation:**
 Make sure PostgreSQL is running, then create the database:
@@ -239,6 +246,13 @@ CREATE DATABASE flash_db OWNER flash_user;
 ### Step 5 — Create all database tables
 
 This only needs to run once. It is safe to run again — it uses `CREATE TABLE IF NOT EXISTS` so it never destroys existing data:
+
+**If you are using Docker:**
+```bash
+docker compose exec backend npm run migrate
+```
+
+**If you are running PostgreSQL locally:**
 ```bash
 cd backend
 node src/db/migrate.js
@@ -251,17 +265,23 @@ You should see: `Flash database migration v3 completed successfully`
 
 Open 3 separate terminal windows:
 
-**Terminal 1 — Backend:**
+**Terminal 1 — Backend (Docker):**
+```bash
+docker compose logs -f backend
+```
+
+**Terminal 1 — Backend (without Docker):**
 ```bash
 cd backend
 node mock-server.js       # ← use this for dev (no real DB needed)
 # OR
-node src/index.js         # ← use this when you have PostgreSQL running
+node server.js            # ← use this when you have PostgreSQL running
 ```
-You should see: `⚡ Flash Backend v3.0 on port 3000`
+You should see: ` Flash Backend v3.0 on port 3000`
 
 **Terminal 2 — User App:**
 ```bash
+$env:EXPO_PUBLIC_API_BASE_URL="http://YOUR-COMPUTER-IP:3000"
 cd flash-user-app
 npm install               # only needed first time
 npx expo start --clear
@@ -270,6 +290,7 @@ Scan the QR code with Expo Go on your phone.
 
 **Terminal 3 — Driver App:**
 ```bash
+$env:EXPO_PUBLIC_API_BASE_URL="http://YOUR-COMPUTER-IP:3000"
 cd flash-driver-app
 npm install               # only needed first time
 npx expo start --clear --port 8082
@@ -283,12 +304,14 @@ Scan the QR code with Expo Go on your phone (different QR than the user app).
 Once set up, you only need to run:
 ```bash
 # Terminal 1
-cd backend && node src/index.js
+powershell -ExecutionPolicy Bypass -File .\scripts\ensure-docker.ps1 -SkipBuild
 
 # Terminal 2
+$env:EXPO_PUBLIC_API_BASE_URL="http://YOUR-COMPUTER-IP:3000"
 cd flash-user-app && npx expo start --clear
 
 # Terminal 3
+$env:EXPO_PUBLIC_API_BASE_URL="http://YOUR-COMPUTER-IP:3000"
 cd flash-driver-app && npx expo start --clear --port 8082
 ```
 
@@ -665,7 +688,7 @@ Render has data centers in Cape Town (af-south-1) making it fast for SA users.
 2. Go to **render.com** → New → Web Service → connect your GitHub repo
 3. Set **Root Directory** to `backend`
 4. Set **Build Command** to `npm install`
-5. Set **Start Command** to `node src/index.js`
+5. Set **Start Command** to `node server.js`
 6. Under **Environment**, add all your `.env` variables
 7. Add a **PostgreSQL** service from Render and copy the Internal Database URL into `DATABASE_URL`
 8. After deploy, run the migration: open the Render Shell and run `node src/db/migrate.js`
@@ -675,8 +698,8 @@ Render has data centers in Cape Town (af-south-1) making it fast for SA users.
 ## Troubleshooting
 
 **App shows "Request failed" or "Network Error"**
-- Check that your IP in `api.js` matches your current WiFi IP
-- Make sure the backend is running (`node src/index.js` or `node mock-server.js`)
+- Check that `EXPO_PUBLIC_API_BASE_URL` matches your current WiFi IP
+- Make sure the backend is running (`docker compose ps`, `node server.js`, or `node mock-server.js`)
 - Make sure your phone and computer are on the same WiFi network
 
 **Map is blank on the tracking screen**

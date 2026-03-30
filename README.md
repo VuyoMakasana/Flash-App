@@ -73,19 +73,13 @@ Customers order clothing from local stores and drivers deliver it same-day.
 ## Quick Start
 
 ```bash
-# 1. Set up the backend
-cd backend
-cp .env.example .env
-# Edit .env — add your Paystack keys at minimum
-npm install
-node src/db/migrate.js
+# 1. Copy backend/.env.example to backend/.env and fill in your secrets
 
-# 2. Start the backend
-node src/index.js
-# (or: node mock-server.js for dev without a database)
+# 2. Start Docker Desktop + backend stack from the repo root
+powershell -ExecutionPolicy Bypass -File .\scripts\ensure-docker.ps1 -RunMigrations
 
 # 3. Start the user app
-cd ../flash-user-app
+cd flash-user-app
 npm install
 npx expo start --clear
 
@@ -96,6 +90,13 @@ npx expo start --clear --port 8082
 ```
 
 See `HOW_TO_RUN.md` for the complete step-by-step setup guide.
+
+### Docker-First Local Stack
+
+- Docker now runs the backend, Postgres, and Redis together through `docker compose`.
+- `scripts/ensure-docker.ps1` starts Docker Desktop if needed, waits for the daemon, and brings the stack up safely.
+- `scripts/enable-docker-desktop-autostart.ps1` adds Docker Desktop to the current Windows user's sign-in startup so Docker comes back automatically after a reboot.
+- The Expo apps are not containerized. They connect to the Dockerized backend through `EXPO_PUBLIC_API_BASE_URL`, so you do not need to edit the app source files every time your IP changes.
 
 ---
 
@@ -178,7 +179,7 @@ Recommended: **Render** (has Cape Town region, low latency for SA users)
 
 1. Push to GitHub
 2. Render → New Web Service → connect repo → set root dir to `backend`
-3. Build: `npm install` / Start: `node src/index.js`
+3. Build: `npm install` / Start: `node server.js`
 4. Add a Render Postgres database, copy the internal URL to `DATABASE_URL`
 5. Add all `.env` variables in Render's environment settings
 6. After first deploy, open Render Shell and run `node src/db/migrate.js`
@@ -190,7 +191,8 @@ For the apps: build with `eas build` (Expo Application Services) for Play Store 
 ## Contributing / Understanding the Code
 
 Every file has comments explaining what it does. Start here:
-- `backend/src/index.js` — server startup, middleware, routes, cron jobs
+- `backend/server.js` — thin backend entrypoint used by npm start and Docker
+- `backend/src/server.js` — server startup, middleware, routes, cron jobs
 - `backend/src/routes/payments.js` — Paystack payment flow with inline comments
 - `backend/src/socket/socketServer.js` — all real-time events documented
 - `flash-user-app/context/FlashContext.js` — global state, product loading, order creation
