@@ -1,7 +1,15 @@
 const crypto = require("crypto");
 
 function getKey() {
-  const source = process.env.PAYMENT_METHOD_ENCRYPTION_KEY || process.env.JWT_SECRET || "flash-dev-fallback-key";
+  const source = process.env.PAYMENT_METHOD_ENCRYPTION_KEY;
+  if (!source) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("PAYMENT_METHOD_ENCRYPTION_KEY environment variable is required in production");
+    }
+    // Non-production fallback — never use in production
+    const fallback = process.env.JWT_SECRET || "flash-dev-fallback-key";
+    return crypto.createHash("sha256").update(String(fallback)).digest();
+  }
   return crypto.createHash("sha256").update(String(source)).digest();
 }
 

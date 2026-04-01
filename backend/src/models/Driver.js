@@ -225,6 +225,7 @@ class Driver extends BaseModel {
     const sql = `
       SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
               o.total, o.driver_payout,
+             o.pickup_address, o.dropoff_address,
              o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng,
               o.is_cash_delivery, o.cash_to_collect, o.created_at,
              COUNT(oi.id) as item_count

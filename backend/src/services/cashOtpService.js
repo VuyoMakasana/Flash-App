@@ -12,7 +12,7 @@ function otpSecret() {
 function createOtpCode() {
   const min = 10 ** (OTP_LENGTH - 1);
   const max = (10 ** OTP_LENGTH) - 1;
-  return String(Math.floor(Math.random() * (max - min + 1)) + min);
+  return String(crypto.randomInt(min, max + 1));
 }
 
 function hashOtp(orderId, otp) {

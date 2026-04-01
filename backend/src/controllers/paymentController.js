@@ -316,8 +316,8 @@ class PaymentController {
       if (order.payment_method !== "cash" || order.payment_status !== "pending_cash") {
         return res.status(409).json({ error: "Order is not awaiting cash payment" });
       }
-      if (order.status !== "delivered") {
-        return res.status(409).json({ error: "Cash OTP can only be sent after delivery" });
+      if (!["in_transit", "delivered"].includes(order.status)) {
+        return res.status(409).json({ error: "Cash OTP can only be sent once the order is in transit or delivered" });
       }
 
       const otpResult = await cashOtpService.generateOtp(orderId);

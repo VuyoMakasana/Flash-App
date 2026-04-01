@@ -151,6 +151,7 @@ class DriverController {
     const io = req.app.get("io");
 
     try {
+      // Read-only preflight check (no lock needed yet).
       const result = await db.query(
         `SELECT * FROM orders WHERE id = $1`,
         [orderId],
@@ -170,26 +171,31 @@ class DriverController {
         return res.status(409).json({ error: "Cannot cancel after pickup without admin override" });
       }
 
-      await db.query(
-        `UPDATE orders
-         SET driver_id = NULL,
-             status = 'waiting_for_driver',
-             delivery_payment_status = 'pending_driver',
-             updated_at = NOW()
-         WHERE id = $1`,
-        [orderId],
-      );
-
-      await db.query(
-        `UPDATE drivers SET cancel_count = COALESCE(cancel_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
-        [req.userId],
-      );
-
       const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
+
+      // All mutations in a single transaction so that a failure in any step
+      // leaves the DB in a consistent state (order remains assigned, wallet
+      // pending balance unchanged, no partial penalty row).
       await DriverWallet.transaction(async (client) => {
+        await client.query(
+          `UPDATE orders
+           SET driver_id = NULL,
+               status = 'waiting_for_driver',
+               delivery_payment_status = 'pending_driver',
+               updated_at = NOW()
+           WHERE id = $1`,
+          [orderId],
+        );
+
+        await client.query(
+          `UPDATE drivers SET cancel_count = COALESCE(cancel_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
+          [req.userId],
+        );
+
         if (payout > 0) {
           await DriverWallet.reversePending(client, req.userId, payout, orderId, "driver_cancel_before_pickup");
         }
+
         await client.query(
           `INSERT INTO driver_penalties (driver_id, order_id, amount, reason)
            VALUES ($1, $2, $3, $4)`,

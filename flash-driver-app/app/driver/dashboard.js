@@ -30,14 +30,16 @@ const STATUS_LABELS = {
 const NEXT_STATUS = {
   driver_assigned: 'driver_arrived_store',
   driver_arrived_store: 'picked_up',
-  picked_up: 'delivered',
+  picked_up: 'in_transit',
+  in_transit: 'delivered',
   delivered: 'completed',
 };
 
 const NEXT_LABEL = {
   driver_assigned: 'Arrived At Store',
   driver_arrived_store: 'Picked Up',
-  picked_up: 'Mark Delivered',
+  picked_up: 'Mark In Transit',
+  in_transit: 'Mark Delivered',
   delivered: 'Complete',
 };
 

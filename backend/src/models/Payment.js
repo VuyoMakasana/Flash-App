@@ -1,4 +1,5 @@
 const BaseModel = require("./BaseModel");
+const crypto = require("crypto");
 const { encrypt, decrypt } = require("../utils/paymentCrypto");
 
 class Payment extends BaseModel {
@@ -113,17 +114,27 @@ class Payment extends BaseModel {
     });
   }
 
+  static authCodeFingerprint(userId, authorizationCode) {
+    const secret = process.env.PAYMENT_METHOD_ENCRYPTION_KEY || process.env.JWT_SECRET || "flash-dev-fallback-key";
+    return crypto
+      .createHmac("sha256", secret)
+      .update(`${userId}:${authorizationCode}`)
+      .digest("hex");
+  }
+
   static async saveCard(userId, auth) {
     const encryptedAuthorizationCode = encrypt(auth.authorization_code);
+    const fingerprint = this.authCodeFingerprint(userId, auth.authorization_code);
     const result = await this.query(
       `INSERT INTO payment_methods
-         (user_id, provider, authorization_code, last4, brand, exp_month, exp_year, is_default)
-       VALUES ($1,'paystack',$2,$3,$4,$5,$6,false)
-       ON CONFLICT DO NOTHING
+         (user_id, provider, authorization_code, auth_fingerprint, last4, brand, exp_month, exp_year, is_default)
+       VALUES ($1,'paystack',$2,$3,$4,$5,$6,$7,false)
+       ON CONFLICT (user_id, provider, auth_fingerprint) DO NOTHING
        RETURNING *`,
       [
         userId,
         encryptedAuthorizationCode,
+        fingerprint,
         auth.last4,
         auth.card_type,
         auth.exp_month,
@@ -155,11 +166,21 @@ class Payment extends BaseModel {
     await this.query(`DELETE FROM ${sourceTable} WHERE id=$1`, [cardId]);
 
     if (cardResult.rows[0].is_default) {
-      await this.query(
-        `UPDATE payment_methods SET is_default=true
-         WHERE user_id=$1 AND id=(SELECT id FROM payment_methods WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1)`,
+      // Try to promote a new default in the same source table first, then fall back to the other.
+      const promoteSameTable = await this.query(
+        `UPDATE ${sourceTable} SET is_default=true
+         WHERE user_id=$1 AND id=(SELECT id FROM ${sourceTable} WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1)
+         RETURNING id`,
         [userId],
       );
+      if (!promoteSameTable.rows.length) {
+        const otherTable = sourceTable === "payment_methods" ? "saved_cards" : "payment_methods";
+        await this.query(
+          `UPDATE ${otherTable} SET is_default=true
+           WHERE user_id=$1 AND id=(SELECT id FROM ${otherTable} WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1)`,
+          [userId],
+        );
+      }
     }
   }
 
