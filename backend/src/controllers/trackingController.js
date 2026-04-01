@@ -4,9 +4,13 @@ class TrackingController {
   static async getOrderLocation(req, res) {
     const { orderId } = req.params;
     try {
-      const location = await Tracking.getOrderLocation(orderId);
+      const location = await Tracking.getOrderLocation(
+        orderId,
+        req.userId,
+        req.userRole,
+      );
       if (!location) {
-        return res.status(404).json({ error: "Order not found" });
+        return res.status(404).json({ error: "Order not found or access denied" });
       }
       res.json(location);
     } catch (err) {

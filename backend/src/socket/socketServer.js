@@ -1,5 +1,19 @@
 const jwt = require('jsonwebtoken');
 const { getRequired } = require('../config/env');
+const pool = require('../config/database');
+
+async function canAccessOrderRoom(orderId, userId, userRole) {
+  if (!orderId || !userId || !userRole) return false;
+  const result = await pool.query(
+    `SELECT user_id, driver_id FROM orders WHERE id = $1`,
+    [orderId],
+  );
+  if (!result.rows.length) return false;
+  if (userRole === 'admin') return true;
+  if (userRole === 'user') return String(result.rows[0].user_id) === String(userId);
+  if (userRole === 'driver') return String(result.rows[0].driver_id) === String(userId);
+  return false;
+}
 
 module.exports = function setupSocket(io) {
 
@@ -29,8 +43,8 @@ module.exports = function setupSocket(io) {
     socket.join(`${socket.userRole}:${socket.userId}`);
 
     // ── USER: Track an order ──────────────────────────────────────────────────
-    socket.on('track_order', ({ orderId }) => {
-      if (socket.userRole === 'user') {
+    socket.on('track_order', async ({ orderId }) => {
+      if (socket.userRole === 'user' && await canAccessOrderRoom(orderId, socket.userId, socket.userRole)) {
         socket.join(`order:${orderId}`);
         socket.join(`chat:${orderId}`);   // also join chat room
       }
@@ -44,8 +58,9 @@ module.exports = function setupSocket(io) {
     // ── DRIVER: Live location update ──────────────────────────────────────────
     // The HTTP route POST /api/drivers/location handles DB write + arrival alerts.
     // This event is for pure socket-only clients that bypass the HTTP route.
-    socket.on('driver_location_update', ({ lat, lng, orderId }) => {
+    socket.on('driver_location_update', async ({ lat, lng, orderId }) => {
       if (socket.userRole !== 'driver') return;
+      if (orderId && !(await canAccessOrderRoom(orderId, socket.userId, socket.userRole))) return;
       const payload = { driverId: socket.userId, lat, lng, timestamp: new Date().toISOString() };
       if (orderId) io.to(`order:${orderId}`).emit('driver_location', payload);
       io.to('admin').emit('driver_location', { ...payload, orderId });
@@ -72,8 +87,8 @@ module.exports = function setupSocket(io) {
     });
 
     // ── DRIVER: Join order chat room ──────────────────────────────────────────
-    socket.on('join_order_chat', ({ orderId }) => {
-      if (socket.userRole === 'driver') {
+    socket.on('join_order_chat', async ({ orderId }) => {
+      if ((socket.userRole === 'driver' || socket.userRole === 'user') && await canAccessOrderRoom(orderId, socket.userId, socket.userRole)) {
         socket.join(`order:${orderId}`);
         socket.join(`chat:${orderId}`);
       }

@@ -11,7 +11,7 @@ async function migrate() {
     await client.query(`CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name VARCHAR(255) NOT NULL, email VARCHAR(255) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL, phone VARCHAR(50), address TEXT, terms_accepted BOOLEAN DEFAULT false, terms_accepted_at TIMESTAMP, paystack_customer_code VARCHAR(255), created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())`);
     await client.query(`CREATE TABLE IF NOT EXISTS drivers (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), name VARCHAR(255) NOT NULL, email VARCHAR(255) UNIQUE NOT NULL, password_hash VARCHAR(255) NOT NULL, phone VARCHAR(50), vehicle_type VARCHAR(100), vehicle_plate VARCHAR(50), profile_photo_url TEXT, status VARCHAR(50) DEFAULT 'pending_documents', is_online BOOLEAN DEFAULT false, current_lat DECIMAL(10,8), current_lng DECIMAL(11,8), paystack_customer_code VARCHAR(255), rating DECIMAL(3,2) DEFAULT 5.00, total_deliveries INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())`);
     await client.query(`CREATE TABLE IF NOT EXISTS driver_documents (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), driver_id UUID REFERENCES drivers(id) ON DELETE CASCADE, document_type VARCHAR(100) NOT NULL, file_url TEXT NOT NULL, file_name VARCHAR(255), verified BOOLEAN DEFAULT false, verified_at TIMESTAMP, verified_by UUID, notes TEXT, uploaded_at TIMESTAMP DEFAULT NOW(), UNIQUE(driver_id, document_type))`);
-    await client.query(`CREATE TABLE IF NOT EXISTS orders (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_number VARCHAR(50) UNIQUE NOT NULL, user_id UUID REFERENCES users(id), driver_id UUID REFERENCES drivers(id), store_id VARCHAR(100), status VARCHAR(50) DEFAULT 'created', delivery_mode VARCHAR(20) DEFAULT 'fleet', time_slot VARCHAR(50), subtotal DECIMAL(10,2) NOT NULL, delivery_fee DECIMAL(10,2) NOT NULL, total DECIMAL(10,2) NOT NULL, driver_payout DECIMAL(10,2), payment_method VARCHAR(50), payment_status VARCHAR(50) DEFAULT 'pending', delivery_payment_method VARCHAR(20), delivery_payment_status VARCHAR(30), is_cash_delivery BOOLEAN DEFAULT false, paystack_reference VARCHAR(255), payflex_order_id VARCHAR(255), pickup_address TEXT, dropoff_address TEXT, pickup_lat DECIMAL(10,8), pickup_lng DECIMAL(11,8), dropoff_lat DECIMAL(10,8), dropoff_lng DECIMAL(11,8), created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())`);
+    await client.query(`CREATE TABLE IF NOT EXISTS orders (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_number VARCHAR(50) UNIQUE NOT NULL, user_id UUID REFERENCES users(id), driver_id UUID REFERENCES drivers(id), store_id VARCHAR(100), preferred_driver_id UUID REFERENCES drivers(id), status VARCHAR(50) DEFAULT 'created', delivery_mode VARCHAR(20) DEFAULT 'fleet', time_slot VARCHAR(50), subtotal DECIMAL(10,2) NOT NULL, delivery_fee DECIMAL(10,2) NOT NULL, total DECIMAL(10,2) NOT NULL, driver_payout DECIMAL(10,2), payment_method VARCHAR(50), payment_status VARCHAR(50) DEFAULT 'pending', delivery_payment_method VARCHAR(20), delivery_payment_status VARCHAR(30), store_paid BOOLEAN DEFAULT false, driver_paid BOOLEAN DEFAULT false, cash_to_collect DECIMAL(10,2), cash_received_at TIMESTAMPTZ, is_return_order BOOLEAN DEFAULT false, parent_order_id UUID REFERENCES orders(id), is_cash_delivery BOOLEAN DEFAULT false, paystack_reference VARCHAR(255), payflex_order_id VARCHAR(255), pickup_address TEXT, dropoff_address TEXT, pickup_lat DECIMAL(10,8), pickup_lng DECIMAL(11,8), dropoff_lat DECIMAL(10,8), dropoff_lng DECIMAL(11,8), created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW())`);
     await client.query(`CREATE TABLE IF NOT EXISTS order_items (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_id UUID REFERENCES orders(id) ON DELETE CASCADE, product_id VARCHAR(100) NOT NULL, product_name VARCHAR(255) NOT NULL, size VARCHAR(20), quantity INTEGER NOT NULL, unit_price DECIMAL(10,2) NOT NULL, total_price DECIMAL(10,2) NOT NULL)`);
     await client.query(`CREATE TABLE IF NOT EXISTS return_requests (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_id UUID REFERENCES orders(id), user_id UUID REFERENCES users(id), driver_id UUID REFERENCES drivers(id), reason TEXT, status VARCHAR(50) DEFAULT 'requested', credit_issued BOOLEAN DEFAULT false, credit_amount DECIMAL(10,2), pickup_scheduled_at TIMESTAMP, picked_up_at TIMESTAMP, created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), UNIQUE(order_id))`);
     await client.query(`CREATE TABLE IF NOT EXISTS driver_locations (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), driver_id UUID REFERENCES drivers(id) ON DELETE CASCADE, order_id UUID REFERENCES orders(id), lat DECIMAL(10,8) NOT NULL, lng DECIMAL(11,8) NOT NULL, recorded_at TIMESTAMP DEFAULT NOW())`);
@@ -67,6 +67,68 @@ async function migrate() {
 
 
     await client.query(`CREATE TABLE IF NOT EXISTS saved_cards (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, paystack_authorization_code VARCHAR(255) UNIQUE, last4 VARCHAR(4) NOT NULL, card_type VARCHAR(50), bank VARCHAR(100), exp_month INTEGER NOT NULL, exp_year INTEGER NOT NULL, nickname VARCHAR(100), is_default BOOLEAN DEFAULT false, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`);
+    await client.query(`CREATE TABLE IF NOT EXISTS payment_methods (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider VARCHAR(50) NOT NULL,
+      authorization_code TEXT NOT NULL,
+      last4 VARCHAR(4) NOT NULL,
+      brand VARCHAR(50),
+      exp_month INTEGER NOT NULL,
+      exp_year INTEGER NOT NULL,
+      is_default BOOLEAN DEFAULT false,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_methods_user_provider_auth
+      ON payment_methods(user_id, provider, authorization_code)`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS driver_wallets (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE UNIQUE,
+      wallet_balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+      pending_balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS driver_wallet_ledger (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+      order_id UUID REFERENCES orders(id),
+      amount DECIMAL(12,2) NOT NULL,
+      entry_type VARCHAR(30) NOT NULL,
+      note TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS driver_payout_requests (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+      amount DECIMAL(12,2) NOT NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'requested',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS driver_penalties (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+      order_id UUID REFERENCES orders(id),
+      amount DECIMAL(10,2) NOT NULL DEFAULT 0,
+      reason TEXT NOT NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'applied',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS order_cancellations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      cancelled_by_id UUID,
+      cancelled_by_role VARCHAR(20) NOT NULL,
+      reason TEXT,
+      refund_mode VARCHAR(30),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
     await client.query(`CREATE TABLE IF NOT EXISTS driver_subscriptions (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE, plan_type VARCHAR(20) NOT NULL, price DECIMAL(10,2) NOT NULL, deliveries_limit INTEGER, deliveries_used INTEGER DEFAULT 0, starts_at TIMESTAMPTZ DEFAULT NOW(), expires_at TIMESTAMPTZ NOT NULL, status VARCHAR(20) DEFAULT 'active', paystack_reference VARCHAR(255), created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`);
     await client.query(`CREATE TABLE IF NOT EXISTS size_profiles (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE, height_cm INTEGER, weight_kg DECIMAL(5,1), chest_cm DECIMAL(5,1), waist_cm DECIMAL(5,1), hips_cm DECIMAL(5,1), shoulder_cm DECIMAL(5,1), inseam_cm DECIMAL(5,1), reference_brand_1 VARCHAR(100), reference_size_1 VARCHAR(20), reference_brand_2 VARCHAR(100), reference_size_2 VARCHAR(20), created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())`);
     await client.query(`CREATE TABLE IF NOT EXISTS brand_size_mappings (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), store_id VARCHAR(100) NOT NULL, brand_name VARCHAR(100) NOT NULL, category VARCHAR(50) NOT NULL, size_label VARCHAR(20) NOT NULL, chest_min DECIMAL(5,1), chest_max DECIMAL(5,1), waist_min DECIMAL(5,1), waist_max DECIMAL(5,1), hips_min DECIMAL(5,1), hips_max DECIMAL(5,1), height_min INTEGER, height_max INTEGER, created_at TIMESTAMPTZ DEFAULT NOW())`);
@@ -104,6 +166,25 @@ async function migrate() {
       UNIQUE(user_id, driver_id)
     )`);
 
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS preferred_driver_id UUID REFERENCES drivers(id)`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_paid BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_paid BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cash_to_collect DECIMAL(10,2)`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cash_received_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cash_otp_hash VARCHAR(255)`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cash_otp_expires_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cash_otp_sent_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cash_otp_verified_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cash_otp_attempts INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_return_order BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS parent_order_id UUID REFERENCES orders(id)`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS cancel_count INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS cash_refusal_count INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS flagged_for_cash_abuse BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS approved_by UUID`);
+    await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS return_order_id UUID REFERENCES orders(id)`);
+
     // Indexes
     const indexes = [
       `CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id)`,
@@ -137,6 +218,11 @@ async function migrate() {
       `CREATE INDEX IF NOT EXISTS idx_feed_comments_post ON feed_comments(post_id, created_at ASC)`,
       `CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(order_id, sender_role, read_at)`,
       `CREATE INDEX IF NOT EXISTS idx_trusted_status ON trusted_drivers(driver_id, status)`,
+      `CREATE INDEX IF NOT EXISTS idx_orders_preferred_driver ON orders(preferred_driver_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_payment_methods_user ON payment_methods(user_id, is_default)`,
+      `CREATE INDEX IF NOT EXISTS idx_driver_wallet_ledger_driver ON driver_wallet_ledger(driver_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_driver_penalties_driver ON driver_penalties(driver_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_order_cancellations_order ON order_cancellations(order_id, created_at DESC)`,
       // idx_webhook_events_id and idx_payments_provider_txn are intentionally omitted:
       // UNIQUE constraints on those columns already create implicit indexes.
     ];

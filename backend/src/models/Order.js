@@ -4,6 +4,13 @@ const { v4: uuidv4 } = require("uuid");
 class Order extends BaseModel {
   static tableName = "orders";
 
+  static calculateDeliveryFee({ pickupMallId, dropoffMallId }) {
+    if (pickupMallId && dropoffMallId && String(pickupMallId) === String(dropoffMallId)) {
+      return 90;
+    }
+    return 180;
+  }
+
   static async create(orderData) {
     const {
       userId,
@@ -13,6 +20,10 @@ class Order extends BaseModel {
       subtotal,
       delivery_fee,
       total,
+      store_id,
+      preferred_driver_id,
+      pickup_mall_id,
+      dropoff_mall_id,
       pickup_address,
       dropoff_address,
       pickup_lat,
@@ -22,26 +33,36 @@ class Order extends BaseModel {
     } = orderData;
 
     const orderNumber = `FLASH-${Date.now().toString(36).toUpperCase()}`;
-    const driverPayout = Math.round((delivery_fee * 0.75 + 15) * 100) / 100;
+    const computedDeliveryFee = this.calculateDeliveryFee({
+      pickupMallId: pickup_mall_id,
+      dropoffMallId: dropoff_mall_id,
+    });
+    const finalDeliveryFee = Number.isFinite(parseFloat(delivery_fee)) ? computedDeliveryFee : computedDeliveryFee;
+    const safeSubtotal = parseFloat(subtotal || 0);
+    const finalTotal = safeSubtotal + finalDeliveryFee;
+    const driverPayout = Math.round((finalDeliveryFee * 0.75 + 15) * 100) / 100;
 
     return await this.transaction(async (client) => {
       const orderResult = await client.query(
         `INSERT INTO orders (
           order_number, user_id, status, delivery_mode, time_slot,
           subtotal, delivery_fee, total, driver_payout,
+          store_id, preferred_driver_id,
           pickup_address, dropoff_address,
           pickup_lat, pickup_lng, dropoff_lat, dropoff_lng
-        ) VALUES ($1, $2, 'payment_pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ) VALUES ($1, $2, 'payment_pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING *`,
         [
           orderNumber,
           userId,
           delivery_mode,
           time_slot,
-          subtotal,
-          delivery_fee,
-          total,
+          safeSubtotal,
+          finalDeliveryFee,
+          finalTotal,
           driverPayout,
+          store_id || null,
+          preferred_driver_id || null,
           pickup_address,
           dropoff_address,
           pickup_lat,

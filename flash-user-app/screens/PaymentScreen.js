@@ -22,6 +22,7 @@ export default function PaymentScreen() {
   const [loading,  setLoading]  = useState(false);
   const [savedCards, setSavedCards] = useState([]);
   const [selectedCardId, setSelectedCardId] = useState(null);
+  const [useNewCard, setUseNewCard] = useState(false);
 
   useEffect(() => {
     const loadCards = async () => {
@@ -86,7 +87,7 @@ export default function PaymentScreen() {
         return;
       }
 
-      if (selected === 'card' && selectedCardId) {
+      if (selected === 'card' && selectedCardId && !useNewCard) {
         const data = await api.payments.chargeSavedCard(orderId, selectedCardId);
         if (data?.awaitingWebhook) {
           Alert.alert('Waiting for confirmation', data.message || 'Payment submitted. We are waiting for secure confirmation.');
@@ -185,13 +186,34 @@ export default function PaymentScreen() {
               <Text style={s.manageText}>Manage</Text>
             </Pressable>
           </View>
+          <Pressable
+            style={[s.savedCardRow, useNewCard && s.savedCardRowActive]}
+            onPress={() => setUseNewCard(true)}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={[s.savedCardLabel, useNewCard && s.savedCardLabelActive]}>
+                Pay With New Card
+              </Text>
+              <Text style={[s.savedCardMeta, useNewCard && s.savedCardMetaActive]}>
+                Opens secure Paystack checkout
+              </Text>
+            </View>
+            <Ionicons
+              name={useNewCard ? 'checkmark-circle' : 'ellipse-outline'}
+              size={20}
+              color={useNewCard ? '#fff' : '#9ca3af'}
+            />
+          </Pressable>
           {savedCards.map(card => {
-            const active = selectedCardId === card.id;
+            const active = selectedCardId === card.id && !useNewCard;
             return (
               <Pressable
                 key={card.id}
                 style={[s.savedCardRow, active && s.savedCardRowActive]}
-                onPress={() => setSelectedCardId(card.id)}
+                onPress={() => {
+                  setUseNewCard(false);
+                  setSelectedCardId(card.id);
+                }}
               >
                 <View style={{ flex: 1 }}>
                   <Text style={[s.savedCardLabel, active && s.savedCardLabelActive]}>

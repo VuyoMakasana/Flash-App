@@ -82,6 +82,92 @@ class Return extends BaseModel {
     });
   }
 
+  static async approveReturn(returnId, adminId) {
+    return await this.transaction(async (client) => {
+      const returnResult = await client.query(
+        `SELECT rr.*, o.user_id, o.store_id, o.delivery_fee,
+                o.pickup_address, o.dropoff_address,
+                o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng
+         FROM return_requests rr
+         JOIN orders o ON o.id = rr.order_id
+         WHERE rr.id = $1
+         FOR UPDATE`,
+        [returnId],
+      );
+
+      if (!returnResult.rows.length) {
+        throw new Error("Return not found");
+      }
+
+      const ret = returnResult.rows[0];
+      if (ret.status !== "requested") {
+        throw new Error("Return request is not awaiting approval");
+      }
+
+      const originalOrder = await client.query(
+        `SELECT order_number, subtotal, delivery_fee
+         FROM orders WHERE id = $1`,
+        [ret.order_id],
+      );
+
+      const source = originalOrder.rows[0];
+      const returnOrderNumber = `${source.order_number}-RET-${Date.now().toString(36).toUpperCase()}`;
+      const returnDeliveryFee = parseFloat(ret.delivery_fee || 90);
+      const driverPayout = Math.round((returnDeliveryFee * 0.75 + 15) * 100) / 100;
+
+      const createdOrder = await client.query(
+        `INSERT INTO orders (
+          order_number, user_id, status, delivery_mode, time_slot,
+          subtotal, delivery_fee, total, driver_payout,
+          store_id, payment_method, payment_status,
+          delivery_payment_status, store_paid, driver_paid,
+          is_return_order, parent_order_id,
+          pickup_address, dropoff_address,
+          pickup_lat, pickup_lng, dropoff_lat, dropoff_lng
+        ) VALUES (
+          $1, $2, 'waiting_for_driver', 'fleet', 'asap',
+          0, $3, $3, $4,
+          $5, 'store_account', 'paid',
+          'pending_driver', true, false,
+          true, $6,
+          $7, $8,
+          $9, $10, $11, $12
+        ) RETURNING id, order_number, status`,
+        [
+          returnOrderNumber,
+          ret.user_id,
+          returnDeliveryFee,
+          driverPayout,
+          ret.store_id || null,
+          ret.order_id,
+          ret.dropoff_address,
+          ret.pickup_address,
+          ret.dropoff_lat,
+          ret.dropoff_lng,
+          ret.pickup_lat,
+          ret.pickup_lng,
+        ],
+      );
+
+      await client.query(
+        `UPDATE return_requests
+         SET status = 'approved',
+             approved_at = NOW(),
+             approved_by = $2,
+             return_order_id = $3,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [returnId, adminId || null, createdOrder.rows[0].id],
+      );
+
+      return {
+        returnId,
+        status: "approved",
+        returnOrder: createdOrder.rows[0],
+      };
+    });
+  }
+
   static async getCredits(userId) {
     const result = await this.query(
       `SELECT id, amount, balance, reason, expires_at, created_at

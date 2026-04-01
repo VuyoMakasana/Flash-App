@@ -1,4 +1,5 @@
 const pool = require("../config/database");
+const { assignDriver } = require("./orderStateMachineService");
 
 async function runFleetIntelligence(io) {
   try {
@@ -68,4 +69,43 @@ async function runFleetIntelligence(io) {
   }
 }
 
-module.exports = { runFleetIntelligence };
+async function autoAssignNearestDriver(orderId, io) {
+  const orderResult = await pool.query(
+    `SELECT id, delivery_mode, status, preferred_driver_id, pickup_lat, pickup_lng
+     FROM orders WHERE id = $1`,
+    [orderId],
+  );
+
+  if (!orderResult.rows.length) return null;
+  const order = orderResult.rows[0];
+  if (order.delivery_mode !== "fleet" || order.preferred_driver_id) return null;
+  if (order.status !== "waiting_for_driver") return null;
+
+  const nearby = await pool.query(
+    `SELECT d.id,
+            (6371 * acos(
+              cos(radians($1)) * cos(radians(d.current_lat)) *
+              cos(radians(d.current_lng) - radians($2)) +
+              sin(radians($1)) * sin(radians(d.current_lat))
+            )) AS distance_km
+     FROM drivers d
+     WHERE d.is_online = true
+       AND d.status = 'approved'
+       AND d.current_lat IS NOT NULL
+       AND d.current_lng IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM orders o
+         WHERE o.driver_id = d.id
+           AND o.status IN ('driver_assigned', 'driver_arrived_store', 'picked_up', 'in_transit')
+       )
+     ORDER BY distance_km ASC
+     LIMIT 1`,
+    [order.pickup_lat, order.pickup_lng],
+  );
+
+  if (!nearby.rows.length) return null;
+
+  return await assignDriver(orderId, nearby.rows[0].id, { io });
+}
+
+module.exports = { runFleetIntelligence, autoAssignNearestDriver };

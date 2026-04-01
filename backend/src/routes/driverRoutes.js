@@ -69,11 +69,30 @@ router.post(
   requireApprovedDriver,
   DriverController.acceptOrder,
 );
+router.post(
+  "/orders/:orderId/cancel",
+  authenticate,
+  requireRole("driver"),
+  requireApprovedDriver,
+  DriverController.cancelAssignedOrder,
+);
 router.get(
   "/earnings",
   authenticate,
   requireRole("driver"),
   DriverController.getEarnings,
+);
+router.get(
+  "/wallet",
+  authenticate,
+  requireRole("driver"),
+  DriverController.getWallet,
+);
+router.post(
+  "/wallet/payout-request",
+  authenticate,
+  requireRole("driver"),
+  DriverController.requestPayout,
 );
 router.get(
   "/active-order",
