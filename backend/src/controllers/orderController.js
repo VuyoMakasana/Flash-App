@@ -1,4 +1,11 @@
 const Order = require("../models/Order");
+const db = require("../config/database");
+const DriverWallet = require("../models/DriverWallet");
+const {
+  updateOrderStatus,
+  assignDriver,
+  normalizeState,
+} = require("../services/orderStateMachineService");
 
 class OrderController {
   static async createOrder(req, res) {
@@ -7,8 +14,10 @@ class OrderController {
       delivery_mode,
       time_slot,
       subtotal,
-      delivery_fee,
-      total,
+      store_id,
+      preferred_driver_id,
+      pickup_mall_id,
+      dropoff_mall_id,
       pickup_address,
       dropoff_address,
       pickup_lat,
@@ -28,8 +37,10 @@ class OrderController {
         delivery_mode,
         time_slot,
         subtotal,
-        delivery_fee,
-        total,
+        store_id,
+        preferred_driver_id,
+        pickup_mall_id,
+        dropoff_mall_id,
         pickup_address,
         dropoff_address,
         pickup_lat,
@@ -79,13 +90,6 @@ class OrderController {
     const { status } = req.body;
     const io = req.app.get("io");
 
-    const validTransitions = {
-      driver_assigned: ["en_route"],
-      en_route: ["picked_up"],
-      picked_up: ["delivered"],
-      delivered: ["completed"],
-    };
-
     try {
       const order = await Order.getByIdWithDetails(req.params.orderId);
       if (!order) {
@@ -96,30 +100,77 @@ class OrderController {
         return res.status(403).json({ error: "Not your order" });
       }
 
-      const allowedNext = validTransitions[order.status] || [];
-      if (!allowedNext.includes(status)) {
-        return res.status(400).json({
-          error: `Cannot transition from ${order.status} to ${status}`,
-        });
-      }
+      const updated = await updateOrderStatus(req.params.orderId, status, {
+        actorId: req.userId,
+        actorRole: "driver",
+        io,
+      });
 
-      await Order.updateStatus(req.params.orderId, status);
-
-      if (io) {
-        io.to(`order:${req.params.orderId}`).emit("order_update", {
-          orderId: req.params.orderId,
-          status,
-          timestamp: new Date().toISOString(),
-        });
-        io.to(`user:${order.user_id}`).emit("order_update", {
-          orderId: req.params.orderId,
-          status,
-        });
-      }
-
-      res.json({ success: true, status });
+      res.json({ success: true, status: normalizeState(updated.status) });
     } catch (err) {
-      res.status(500).json({ error: "Failed to update status" });
+      res.status(400).json({ error: err.message || "Failed to update status" });
+    }
+  }
+
+  static async cancelOrder(req, res) {
+    const { orderId } = req.params;
+
+    try {
+      const result = await db.query(
+        `SELECT * FROM orders WHERE id = $1 AND user_id = $2`,
+        [orderId, req.userId],
+      );
+      if (!result.rows.length) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      const order = result.rows[0];
+      const state = normalizeState(order.status);
+
+      if (["picked_up", "in_transit", "delivered", "completed"].includes(state)) {
+        return res.status(409).json({ error: "Order cannot be cancelled at this stage" });
+      }
+
+      let refundMode = "none";
+      if (["payment_pending", "paid", "waiting_for_driver"].includes(state)) {
+        refundMode = "full_refund";
+      } else if (state === "driver_assigned") {
+        refundMode = "store_refund_keep_delivery";
+      } else if (state === "driver_arrived_store") {
+        refundMode = "store_refund_no_delivery_refund";
+      }
+
+      if (order.driver_id && ["assigned", "held"].includes(order.delivery_payment_status || "") && !order.driver_paid) {
+        await DriverWallet.transaction(async (client) => {
+          const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
+          if (payout > 0) {
+            await DriverWallet.reversePending(client, order.driver_id, payout, order.id, "customer_cancelled");
+          }
+        });
+      }
+
+      await updateOrderStatus(orderId, "cancelled", {
+        actorId: req.userId,
+        actorRole: "user",
+        io: req.app.get("io"),
+      });
+
+      await db.query(
+        `INSERT INTO order_cancellations (order_id, cancelled_by_id, cancelled_by_role, reason, refund_mode)
+         VALUES ($1, $2, 'user', $3, $4)`,
+        [orderId, req.userId, req.body?.reason || null, refundMode],
+      );
+
+      if (order.payment_method === "card" && order.payment_status === "paid") {
+        await db.query(
+          `UPDATE orders SET payment_status = 'refunded', updated_at = NOW() WHERE id = $1`,
+          [orderId],
+        );
+      }
+
+      return res.json({ success: true, status: "cancelled", refundMode });
+    } catch (err) {
+      return res.status(400).json({ error: err.message || "Failed to cancel order" });
     }
   }
 
@@ -164,9 +215,9 @@ class OrderController {
         return res.status(404).json({ error: "Order not found" });
       }
 
-      if (order.status !== "paid") {
+      if (normalizeState(order.status) !== "waiting_for_driver") {
         return res.status(409).json({
-          error: "Order must be paid before selecting a driver",
+          error: "Order must be waiting for a driver before assignment",
         });
       }
 
@@ -179,7 +230,7 @@ class OrderController {
                 EXISTS(
                   SELECT 1 FROM orders o2
                   WHERE o2.driver_id = drivers.id
-                    AND o2.status IN ('driver_assigned','en_route','picked_up')
+                    AND o2.status IN ('driver_assigned','driver_arrived_store','picked_up','in_transit')
                 ) as is_busy
          FROM drivers
          WHERE id = $1`,
@@ -196,19 +247,7 @@ class OrderController {
         });
       }
 
-      const assigned = await Order.query(
-        `UPDATE orders
-         SET driver_id = $1, status = 'driver_assigned', updated_at = NOW()
-         WHERE id = $2 AND user_id = $3 AND status = 'paid' AND driver_id IS NULL
-         RETURNING id, order_number, user_id, driver_id, status`,
-        [driverId, orderId, req.userId],
-      );
-
-      if (!assigned.rows.length) {
-        return res
-          .status(409)
-          .json({ error: "Driver assignment failed. Please try again." });
-      }
+      await assignDriver(orderId, driverId, { io });
 
       if (io) {
         io.to(`driver:${driverId}`).emit("new_order_available", {
@@ -255,7 +294,7 @@ class OrderController {
       });
     } catch (err) {
       console.error("[Order] Driver selection error:", err.message);
-      return res.status(500).json({ error: "Failed to assign selected driver" });
+      return res.status(400).json({ error: err.message || "Failed to assign selected driver" });
     }
   }
 }

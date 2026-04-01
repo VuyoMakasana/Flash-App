@@ -160,7 +160,7 @@ class Driver extends BaseModel {
       );
       const mins = this.estimateMinutes(distKm);
 
-      if (distKm !== null && order.status === "en_route") {
+      if (distKm !== null && ["in_transit", "driver_arrived_store"].includes(order.status)) {
         let milestone = null;
         if (distKm <= 0.15) {
           milestone = {
@@ -224,16 +224,14 @@ class Driver extends BaseModel {
   static async getAvailableOrders(driverId) {
     const sql = `
       SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
-             o.total, o.driver_payout, o.pickup_address, o.dropoff_address,
+              o.total, o.driver_payout,
              o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng,
-             o.is_cash_delivery, o.created_at,
-             u.name as customer_name, u.phone as customer_phone,
+              o.is_cash_delivery, o.cash_to_collect, o.created_at,
              COUNT(oi.id) as item_count
       FROM orders o
-      LEFT JOIN users u ON u.id = o.user_id
       LEFT JOIN order_items oi ON oi.order_id = o.id
-      WHERE o.status = 'paid' AND o.driver_id IS NULL
-      GROUP BY o.id, u.id
+            WHERE o.status = 'waiting_for_driver' AND o.driver_id IS NULL
+            GROUP BY o.id
       ORDER BY o.created_at DESC
       LIMIT 20
     `;
@@ -244,8 +242,8 @@ class Driver extends BaseModel {
   static async acceptOrder(driverId, orderId) {
     return await this.transaction(async (client) => {
       const result = await client.query(
-        `UPDATE orders SET driver_id=$1, status='driver_assigned', updated_at=NOW()
-         WHERE id=$2 AND status='paid' AND driver_id IS NULL
+        `UPDATE orders SET driver_id=$1, status='driver_assigned', delivery_payment_status='assigned', updated_at=NOW()
+         WHERE id=$2 AND status='waiting_for_driver' AND driver_id IS NULL
          RETURNING *`,
         [driverId, orderId],
       );
@@ -259,7 +257,7 @@ class Driver extends BaseModel {
               COUNT(oi.id) as item_count
        FROM orders o
        LEFT JOIN order_items oi ON oi.order_id = o.id
-       WHERE o.driver_id = $1 AND o.status IN ('completed', 'delivered')
+      WHERE o.driver_id = $1 AND o.status = 'completed'
        GROUP BY o.id
        ORDER BY o.created_at DESC`,
       [driverId],
@@ -284,7 +282,7 @@ class Driver extends BaseModel {
        LEFT JOIN users u ON u.id = o.user_id
        LEFT JOIN order_items oi ON oi.order_id = o.id
        WHERE o.driver_id = $1
-         AND o.status IN ('driver_assigned', 'en_route', 'picked_up', 'delivered')
+         AND o.status IN ('driver_assigned', 'driver_arrived_store', 'picked_up', 'in_transit', 'delivered')
        GROUP BY o.id, u.id
        ORDER BY o.updated_at DESC
        LIMIT 1`,
@@ -304,7 +302,7 @@ class Driver extends BaseModel {
                EXISTS(
                  SELECT 1 FROM orders o
                  WHERE o.driver_id = drivers.id
-                   AND o.status IN ('driver_assigned','en_route','picked_up')
+                   AND o.status IN ('driver_assigned','driver_arrived_store','picked_up','in_transit')
                ) as is_busy
         FROM drivers
         WHERE is_online = true AND status = 'approved'
@@ -326,7 +324,7 @@ class Driver extends BaseModel {
              EXISTS(
                SELECT 1 FROM orders o
                WHERE o.driver_id = d.id
-                 AND o.status IN ('driver_assigned','en_route','picked_up')
+                 AND o.status IN ('driver_assigned','driver_arrived_store','picked_up','in_transit')
              ) as is_busy
       FROM drivers d
       WHERE d.is_online = true AND d.status = 'approved'

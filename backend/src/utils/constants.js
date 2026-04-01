@@ -6,9 +6,10 @@ const PLANS = {
 };
 
 const VALID_ORDER_STATUS_TRANSITIONS = {
-  driver_assigned: ["en_route"],
-  en_route: ["picked_up"],
-  picked_up: ["delivered"],
+  driver_assigned: ["driver_arrived_store"],
+  driver_arrived_store: ["picked_up"],
+  picked_up: ["in_transit"],
+  in_transit: ["delivered"],
   delivered: ["completed"],
 };
 
