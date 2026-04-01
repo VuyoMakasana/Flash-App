@@ -50,7 +50,7 @@ class Order extends BaseModel {
           store_id, preferred_driver_id,
           pickup_address, dropoff_address,
           pickup_lat, pickup_lng, dropoff_lat, dropoff_lng
-        ) VALUES ($1, $2, 'payment_pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        ) VALUES ($1, $2, 'payment_pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         RETURNING *`,
         [
           orderNumber,
