@@ -52,5 +52,23 @@ router.post(
   requireRole("user"),
   PaymentController.chargeSavedCard,
 );
+router.post(
+  "/cash/send-otp",
+  authenticate,
+  requireRole("driver"),
+  PaymentController.sendCashOtp,
+);
+router.post(
+  "/cash/confirm",
+  authenticate,
+  requireRole("driver"),
+  PaymentController.confirmCashReceived,
+);
+router.post(
+  "/cash/fail",
+  authenticate,
+  requireRole("driver"),
+  PaymentController.markCashFailed,
+);
 
 module.exports = router;

@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const pool   = require('../config/database');
 const { getOptional, isProd } = require('../config/env');
+const Payment = require('../models/Payment');
+const { autoAssignNearestDriver } = require('../services/fleetIntelligenceService');
 
 class WebhookController {
 
@@ -83,23 +85,9 @@ class WebhookController {
 
     if (!orderId) return;
 
-    if (data.authorization?.reusable) {
+    if (data.authorization?.reusable && data.metadata?.userId) {
       const auth = data.authorization;
-      await pool.query(
-        `INSERT INTO saved_cards
-           (user_id, paystack_authorization_code, last4, card_type, bank, exp_month, exp_year, is_default)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, false)
-         ON CONFLICT (paystack_authorization_code) DO NOTHING`,
-        [
-          data.metadata?.userId,
-          auth.authorization_code,
-          auth.last4,
-          auth.card_type,
-          auth.bank,
-          auth.exp_month,
-          auth.exp_year,
-        ],
-      ).catch(() => {});
+      await Payment.saveCard(data.metadata.userId, auth).catch(() => {});
     }
 
     const client = await pool.connect();
@@ -141,7 +129,8 @@ class WebhookController {
 
       const result = await client.query(
         `UPDATE orders
-         SET status = 'paid', payment_status = 'paid', payment_method = 'card', updated_at = NOW()
+         SET status = 'waiting_for_driver', payment_status = 'paid', payment_method = 'card',
+             delivery_payment_status = 'pending_driver', store_paid = true, updated_at = NOW()
          WHERE id = $1 AND paystack_reference = $2
          RETURNING user_id`,
         [orderId, data.reference],
@@ -170,9 +159,11 @@ class WebhookController {
 
       if (io) {
         io.to(`user:${userId}`).emit('payment_confirmed', { orderId });
-        io.to(`order:${orderId}`).emit('order_update', { orderId, status: 'paid' });
+        io.to(`order:${orderId}`).emit('order_update', { orderId, status: 'waiting_for_driver' });
         io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
       }
+
+      await autoAssignNearestDriver(orderId, io).catch(() => null);
 
     } catch (err) {
       await client.query('ROLLBACK');
@@ -328,7 +319,8 @@ class WebhookController {
 
           const result = await client.query(
             `UPDATE orders
-             SET status = 'paid', payment_status = 'paid', updated_at = NOW()
+             SET status = 'waiting_for_driver', payment_status = 'paid', payment_method = 'payflex',
+                 delivery_payment_status = 'pending_driver', store_paid = true, updated_at = NOW()
              WHERE id = $1
              RETURNING user_id`,
             [orderId],
@@ -340,6 +332,7 @@ class WebhookController {
             io.to(`user:${result.rows[0].user_id}`).emit('payment_confirmed', { orderId });
             io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
           }
+          await autoAssignNearestDriver(orderId, io).catch(() => null);
         } catch (err) {
           await client.query('ROLLBACK');
           throw err;

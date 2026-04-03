@@ -1,2 +1,4 @@
 require("dotenv").config();
-require("./src/server.js");
+const { startServer } = require("./src/server.js");
+
+startServer();

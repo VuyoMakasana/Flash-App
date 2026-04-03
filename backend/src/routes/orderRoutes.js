@@ -34,5 +34,11 @@ router.post(
   requireRole("user"),
   OrderController.selectDriver,
 );
+router.post(
+  "/:orderId/cancel",
+  authenticate,
+  requireRole("user"),
+  OrderController.cancelOrder,
+);
 
 module.exports = router;

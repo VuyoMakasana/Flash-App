@@ -1,4 +1,6 @@
 const BaseModel = require("./BaseModel");
+const crypto = require("crypto");
+const { encrypt, decrypt } = require("../utils/paymentCrypto");
 
 class Payment extends BaseModel {
   static tableName = "payments";
@@ -25,23 +27,52 @@ class Payment extends BaseModel {
   }
 
   static async getSavedCards(userId) {
-    const result = await this.query(
-      `SELECT id, paystack_authorization_code, last4, card_type as brand,
-              exp_month, exp_year, bank, nickname, is_default
-       FROM saved_cards WHERE user_id=$1 ORDER BY is_default DESC, created_at DESC`,
+    const methods = await this.query(
+      `SELECT id, provider, last4, brand,
+              exp_month, exp_year, is_default
+       FROM payment_methods WHERE user_id=$1`,
       [userId],
     );
-    return result.rows;
+
+    const legacy = await this.query(
+      `SELECT id, 'paystack'::varchar as provider, last4, card_type as brand,
+              exp_month, exp_year, is_default
+       FROM saved_cards WHERE user_id=$1`,
+      [userId],
+    );
+
+    const allCards = [...methods.rows, ...legacy.rows];
+    allCards.sort((a, b) => (a.is_default === b.is_default ? 0 : a.is_default ? -1 : 1));
+    return allCards;
   }
 
   static async getSavedCardById(cardId, userId) {
-    const result = await this.query(
-      `SELECT id, paystack_authorization_code, last4, card_type as brand,
-              exp_month, exp_year, bank, nickname, is_default
-       FROM saved_cards WHERE id=$1 AND user_id=$2`,
+    let result = await this.query(
+      `SELECT id, provider, authorization_code, last4, brand,
+              exp_month, exp_year, is_default
+       FROM payment_methods WHERE id=$1 AND user_id=$2`,
       [cardId, userId],
     );
-    return result.rows[0] || null;
+    if (!result.rows[0]) {
+      result = await this.query(
+        `SELECT id, 'paystack'::varchar as provider, paystack_authorization_code as authorization_code,
+                last4, card_type as brand, exp_month, exp_year, is_default
+         FROM saved_cards WHERE id=$1 AND user_id=$2`,
+        [cardId, userId],
+      );
+      if (!result.rows[0]) return null;
+      return result.rows[0];
+    }
+    let authorizationCode = null;
+    try {
+      authorizationCode = decrypt(result.rows[0].authorization_code);
+    } catch (_) {
+      authorizationCode = result.rows[0].authorization_code;
+    }
+    return {
+      ...result.rows[0],
+      authorization_code: authorizationCode,
+    };
   }
 
   static async markOrderPaidByCard(orderId, userId, amount, transactionId) {
@@ -65,7 +96,8 @@ class Payment extends BaseModel {
 
       await client.query(
         `UPDATE orders
-         SET status = 'paid', payment_status = 'paid', payment_method = 'card', updated_at = NOW()
+         SET status = 'waiting_for_driver', payment_status = 'paid', payment_method = 'card',
+             delivery_payment_status = 'pending_driver', store_paid = true, updated_at = NOW()
          WHERE id = $1 AND user_id = $2`,
         [orderId, userId],
       );
@@ -82,19 +114,29 @@ class Payment extends BaseModel {
     });
   }
 
+  static authCodeFingerprint(userId, authorizationCode) {
+    const secret = process.env.PAYMENT_METHOD_ENCRYPTION_KEY || process.env.JWT_SECRET || "flash-dev-fallback-key";
+    return crypto
+      .createHmac("sha256", secret)
+      .update(`${userId}:${authorizationCode}`)
+      .digest("hex");
+  }
+
   static async saveCard(userId, auth) {
+    const encryptedAuthorizationCode = encrypt(auth.authorization_code);
+    const fingerprint = this.authCodeFingerprint(userId, auth.authorization_code);
     const result = await this.query(
-      `INSERT INTO saved_cards
-         (user_id, paystack_authorization_code, last4, card_type, bank, exp_month, exp_year, is_default)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,false)
-       ON CONFLICT (paystack_authorization_code) DO NOTHING
+      `INSERT INTO payment_methods
+         (user_id, provider, authorization_code, auth_fingerprint, last4, brand, exp_month, exp_year, is_default)
+       VALUES ($1,'paystack',$2,$3,$4,$5,$6,$7,false)
+       ON CONFLICT (user_id, provider, auth_fingerprint) DO NOTHING
        RETURNING *`,
       [
         userId,
-        auth.authorization_code,
+        encryptedAuthorizationCode,
+        fingerprint,
         auth.last4,
         auth.card_type,
-        auth.bank,
         auth.exp_month,
         auth.exp_year,
       ],
@@ -103,36 +145,60 @@ class Payment extends BaseModel {
   }
 
   static async removeCard(cardId, userId) {
-    const cardResult = await this.query(
-      "SELECT id, is_default FROM saved_cards WHERE id=$1 AND user_id=$2",
+    let cardResult = await this.query(
+      "SELECT id, is_default FROM payment_methods WHERE id=$1 AND user_id=$2",
       [cardId, userId],
     );
+
+    let sourceTable = "payment_methods";
+    if (!cardResult.rows.length) {
+      cardResult = await this.query(
+        "SELECT id, is_default FROM saved_cards WHERE id=$1 AND user_id=$2",
+        [cardId, userId],
+      );
+      sourceTable = "saved_cards";
+    }
 
     if (!cardResult.rows.length) {
       throw new Error("Card not found");
     }
 
-    await this.query("DELETE FROM saved_cards WHERE id=$1", [cardId]);
+    await this.query(`DELETE FROM ${sourceTable} WHERE id=$1`, [cardId]);
 
     if (cardResult.rows[0].is_default) {
-      await this.query(
-        `UPDATE saved_cards SET is_default=true
-         WHERE user_id=$1 AND id=(SELECT id FROM saved_cards WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1)`,
+      // Try to promote a new default in the same source table first, then fall back to the other.
+      const promoteSameTable = await this.query(
+        `UPDATE ${sourceTable} SET is_default=true
+         WHERE user_id=$1 AND id=(SELECT id FROM ${sourceTable} WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1)
+         RETURNING id`,
         [userId],
       );
+      if (!promoteSameTable.rows.length) {
+        const otherTable = sourceTable === "payment_methods" ? "saved_cards" : "payment_methods";
+        await this.query(
+          `UPDATE ${otherTable} SET is_default=true
+           WHERE user_id=$1 AND id=(SELECT id FROM ${otherTable} WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1)`,
+          [userId],
+        );
+      }
     }
   }
 
   static async setDefaultCard(cardId, userId) {
     return await this.transaction(async (client) => {
-      await client.query(
-        "UPDATE saved_cards SET is_default=false WHERE user_id=$1",
-        [userId],
-      );
-      const result = await client.query(
-        "UPDATE saved_cards SET is_default=true WHERE id=$1 AND user_id=$2 RETURNING id",
+      await client.query("UPDATE payment_methods SET is_default=false WHERE user_id=$1", [userId]);
+      await client.query("UPDATE saved_cards SET is_default=false WHERE user_id=$1", [userId]);
+
+      let result = await client.query(
+        "UPDATE payment_methods SET is_default=true WHERE id=$1 AND user_id=$2 RETURNING id",
         [cardId, userId],
       );
+      if (!result.rows.length) {
+        result = await client.query(
+          "UPDATE saved_cards SET is_default=true WHERE id=$1 AND user_id=$2 RETURNING id",
+          [cardId, userId],
+        );
+      }
       if (!result.rows.length) {
         throw new Error("Card not found");
       }
@@ -142,7 +208,7 @@ class Payment extends BaseModel {
   static async cashOnDelivery(orderId, userId, io) {
     return await this.transaction(async (client) => {
       const orderResult = await client.query(
-        "SELECT id, delivery_fee, driver_payout, user_id, status FROM orders WHERE id=$1",
+        "SELECT id, delivery_fee, driver_payout, total, user_id, status FROM orders WHERE id=$1",
         [orderId],
       );
 
@@ -156,16 +222,17 @@ class Payment extends BaseModel {
       }
 
       await client.query(
-        `UPDATE orders SET status='paid', delivery_payment_method='cash',
-         delivery_payment_status='pending_collection', is_cash_delivery=true, updated_at=NOW()
+        `UPDATE orders SET status='waiting_for_driver', payment_method='cash', payment_status='pending_cash',
+         delivery_payment_method='cash', delivery_payment_status='pending_driver',
+         is_cash_delivery=true, cash_to_collect=$2, updated_at=NOW()
          WHERE id=$1`,
-        [orderId],
+        [orderId, order.total],
       );
 
       await client.query(
         `INSERT INTO payments (order_id, user_id, amount, method, provider, status, type)
-         VALUES ($1,$2,$3,'cash','cash_on_delivery','pending_collection','delivery')`,
-        [orderId, userId, order.delivery_fee],
+         VALUES ($1,$2,$3,'cash','cash_on_delivery','pending_cash','delivery')`,
+        [orderId, userId, order.total],
       );
 
       if (io) {
@@ -173,7 +240,7 @@ class Payment extends BaseModel {
           orderId,
           isCashDelivery: true,
           deliveryFee: order.delivery_fee,
-          cashNote: `Cash delivery — collect R${parseFloat(order.driver_payout || 0).toFixed(2)} on arrival`,
+          cashNote: `Cash delivery — collect R${parseFloat(order.total || 0).toFixed(2)} on arrival`,
         });
       }
 

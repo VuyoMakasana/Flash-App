@@ -125,30 +125,57 @@ class PaystackService {
     }
 
     await pool.query(
-      "UPDATE orders SET paystack_reference=$1, status=$2, updated_at=NOW() WHERE id=$3",
+      "UPDATE orders SET paystack_reference=$1, status=$2, payment_status='pending', updated_at=NOW() WHERE id=$3",
       [paystackRes.data.reference, "payment_pending", orderId],
     );
 
     return {
       authorizationUrl: paystackRes.data.authorization_url,
       reference: paystackRes.data.reference,
-      accessCode: paystackRes.data.access_code,
       amount: order.total,
     };
   }
 
   async verifyPayment(reference, io, callerUserId) {
-    // Verify with Paystack directly. Never trust the frontend.
-    const paystackRes = await this.request(
-      "GET",
-      `/transaction/verify/${encodeURIComponent(reference)}`,
-    );
+    let paystackRes = null;
+    let orderId = null;
+    try {
+      // Verify with Paystack directly. Never trust the frontend.
+      paystackRes = await this.request(
+        "GET",
+        `/transaction/verify/${encodeURIComponent(reference)}`,
+      );
 
-    if (!paystackRes.status || paystackRes.data?.status !== "success") {
-      throw new Error("Payment not successful");
+      if (!paystackRes.status || paystackRes.data?.status !== "success") {
+        throw new Error("Payment not successful");
+      }
+
+      orderId = paystackRes.data?.metadata?.orderId;
+    } catch (err) {
+      const fallbackOrder = await pool.query(
+        `SELECT id, user_id, payment_status
+         FROM orders
+         WHERE paystack_reference = $1`,
+        [reference],
+      );
+
+      if (!fallbackOrder.rows.length) {
+        throw err;
+      }
+
+      const row = fallbackOrder.rows[0];
+      if (row.user_id !== callerUserId) {
+        throw new Error("Not your order");
+      }
+
+      return {
+        success: row.payment_status === "paid",
+        orderId: row.id,
+        paymentStatus: row.payment_status,
+        providerStatus: "fallback",
+        awaitingWebhook: row.payment_status !== "paid",
+      };
     }
-
-    const orderId = paystackRes.data?.metadata?.orderId;
 
     if (!orderId) throw new Error("No order linked to this payment");
 
@@ -180,7 +207,7 @@ class PaystackService {
       success: order.payment_status === "paid",
       orderId,
       paymentStatus: order.payment_status,
-      providerStatus: paystackRes.data.status,
+      providerStatus: paystackRes?.data?.status || "unknown",
       awaitingWebhook: order.payment_status !== "paid",
     };
   }

@@ -3,6 +3,13 @@ const Order = require("../models/Order");
 const {
   checkDriverSubscriptionAllowed,
 } = require("../services/subscriptionService");
+const DriverWallet = require("../models/DriverWallet");
+const db = require("../config/database");
+const {
+  assignDriver,
+  normalizeState,
+} = require("../services/orderStateMachineService");
+const { autoAssignNearestDriver } = require("../services/fleetIntelligenceService");
 
 class DriverController {
   static async getProfile(req, res) {
@@ -123,12 +130,7 @@ class DriverController {
     const io = req.app.get("io");
 
     try {
-      const order = await Driver.acceptOrder(req.userId, orderId);
-      if (!order) {
-        return res
-          .status(409)
-          .json({ error: "Order already taken or unavailable" });
-      }
+      const order = await assignDriver(orderId, req.userId, { io });
 
       if (io) {
         io.to(`order:${orderId}`).emit("order_update", {
@@ -140,16 +142,106 @@ class DriverController {
 
       res.json({ order });
     } catch (err) {
-      res.status(500).json({ error: "Failed to accept order" });
+      res.status(400).json({ error: err.message || "Failed to accept order" });
+    }
+  }
+
+  static async cancelAssignedOrder(req, res) {
+    const { orderId } = req.params;
+    const io = req.app.get("io");
+
+    try {
+      // Read-only preflight check (no lock needed yet).
+      const result = await db.query(
+        `SELECT * FROM orders WHERE id = $1`,
+        [orderId],
+      );
+
+      if (!result.rows.length) {
+        return res.status(404).json({ error: "Order not found" });
+      }
+
+      const order = result.rows[0];
+      if (String(order.driver_id) !== String(req.userId)) {
+        return res.status(403).json({ error: "Not your order" });
+      }
+
+      const state = normalizeState(order.status);
+      if (["picked_up", "in_transit", "delivered", "completed"].includes(state)) {
+        return res.status(409).json({ error: "Cannot cancel after pickup without admin override" });
+      }
+
+      const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
+
+      // All mutations in a single transaction so that a failure in any step
+      // leaves the DB in a consistent state (order remains assigned, wallet
+      // pending balance unchanged, no partial penalty row).
+      await DriverWallet.transaction(async (client) => {
+        await client.query(
+          `UPDATE orders
+           SET driver_id = NULL,
+               status = 'waiting_for_driver',
+               delivery_payment_status = 'pending_driver',
+               updated_at = NOW()
+           WHERE id = $1`,
+          [orderId],
+        );
+
+        await client.query(
+          `UPDATE drivers SET cancel_count = COALESCE(cancel_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
+          [req.userId],
+        );
+
+        if (payout > 0) {
+          await DriverWallet.reversePending(client, req.userId, payout, orderId, "driver_cancel_before_pickup");
+        }
+
+        await client.query(
+          `INSERT INTO driver_penalties (driver_id, order_id, amount, reason)
+           VALUES ($1, $2, $3, $4)`,
+          [req.userId, orderId, 20, "driver_cancelled_before_pickup"],
+        );
+      });
+
+      if (io) {
+        io.to("driver_pool").emit("new_order_available", { orderId, reassigned: true });
+      }
+
+      // Keep fleet orders moving by attempting immediate reassignment.
+      await autoAssignNearestDriver(orderId, io).catch(() => null);
+
+      return res.json({ success: true, status: "waiting_for_driver", penaltyApplied: 20 });
+    } catch (err) {
+      return res.status(400).json({ error: err.message || "Failed to cancel assignment" });
     }
   }
 
   static async getEarnings(req, res) {
     try {
       const earnings = await Driver.getEarnings(req.userId);
-      res.json(earnings);
+      const wallet = await DriverWallet.getWallet(req.userId);
+      res.json({ ...earnings, wallet });
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch earnings" });
+    }
+  }
+
+  static async getWallet(req, res) {
+    try {
+      const wallet = await DriverWallet.getWallet(req.userId);
+      res.json({ wallet });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch wallet" });
+    }
+  }
+
+  static async requestPayout(req, res) {
+    const { amount } = req.body;
+    try {
+      const request = await DriverWallet.createPayoutRequest(req.userId, amount);
+      res.status(201).json({ payoutRequest: request });
+    } catch (err) {
+      res.status(400).json({ error: err.message || "Failed to request payout" });
     }
   }
 
