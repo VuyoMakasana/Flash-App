@@ -9,7 +9,7 @@ class TrustedDriver extends BaseModel {
               EXISTS(
                 SELECT 1 FROM orders o
                 WHERE o.driver_id = d.id
-                  AND o.status IN ('driver_assigned','en_route','picked_up')
+                  AND o.status IN ('driver_assigned','driver_arrived_store','picked_up','in_transit')
               ) as is_busy
        FROM trusted_drivers td
        JOIN drivers d ON d.id = td.driver_id
@@ -124,7 +124,7 @@ class TrustedDriver extends BaseModel {
               EXISTS(
                 SELECT 1 FROM orders o
                 WHERE o.driver_id = d.id
-                  AND o.status IN ('driver_assigned','en_route','picked_up')
+                  AND o.status IN ('driver_assigned','driver_arrived_store','picked_up','in_transit')
               ) as is_busy
        FROM drivers d
        LEFT JOIN trusted_drivers td

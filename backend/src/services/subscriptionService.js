@@ -9,7 +9,7 @@ async function checkDriverSubscriptionAllowed(driverId) {
   if (!sub) {
     return {
       allowed: false,
-      reason:
+      reason: 
         "No active subscription plan. Purchase a plan to accept deliveries.",
     };
   }

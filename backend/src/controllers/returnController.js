@@ -58,6 +58,22 @@ class ReturnController {
       res.status(500).json({ error: "Failed to fetch returns" });
     }
   }
+
+  static async approveReturn(req, res) {
+    const { returnId } = req.params;
+    try {
+      const result = await Return.approveReturn(returnId, req.userId);
+      res.json({ success: true, ...result });
+    } catch (err) {
+      if (err.message === "Return not found") {
+        return res.status(404).json({ error: "Return not found" });
+      }
+      if (err.message === "Return request is not awaiting approval") {
+        return res.status(409).json({ error: err.message });
+      }
+      res.status(500).json({ error: "Failed to approve return" });
+    }
+  }
 }
 
 module.exports = ReturnController;

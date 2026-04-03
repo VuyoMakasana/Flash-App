@@ -10,32 +10,36 @@ import driverApi, { BASE_URL } from '../../services/api';
 import { io } from 'socket.io-client';
 
 const STATUS_COLORS = {
-  paid: '#f59e0b',
+  waiting_for_driver: '#f59e0b',
   driver_assigned: '#3b82f6',
-  en_route: '#8b5cf6',
+  driver_arrived_store: '#8b5cf6',
   picked_up: '#ec4899',
+  in_transit: '#8b5cf6',
   delivered: '#10b981',
 };
 
 const STATUS_LABELS = {
-  paid: 'New Order',
+  waiting_for_driver: 'New Order',
   driver_assigned: 'Assigned',
-  en_route: 'En Route',
+  driver_arrived_store: 'At Store',
   picked_up: 'Picked Up',
+  in_transit: 'In Transit',
   delivered: 'Delivered',
 };
 
 const NEXT_STATUS = {
-  driver_assigned: 'en_route',
-  en_route: 'picked_up',
-  picked_up: 'delivered',
+  driver_assigned: 'driver_arrived_store',
+  driver_arrived_store: 'picked_up',
+  picked_up: 'in_transit',
+  in_transit: 'delivered',
   delivered: 'completed',
 };
 
 const NEXT_LABEL = {
-  driver_assigned: 'Start Delivery',
-  en_route: 'Picked Up',
-  picked_up: 'Mark Delivered',
+  driver_assigned: 'Arrived At Store',
+  driver_arrived_store: 'Picked Up',
+  picked_up: 'Mark In Transit',
+  in_transit: 'Mark Delivered',
   delivered: 'Complete',
 };
 
@@ -45,7 +49,7 @@ export default function DriverDashboard() {
 
   const [availableOrders, setAvailableOrders] = useState([]);
   const [activeOrder, setActiveOrder] = useState(null);
-  const [earnings, setEarnings] = useState({ total: '0.00', orders: [] });
+  const [earnings, setEarnings] = useState({ total: '0.00', orders: [], wallet: { wallet_balance: '0.00', pending_balance: '0.00' } });
   const [subscription, setSubscription] = useState(null);
   const [fleetAlerts, setFleetAlerts]       = useState([]);
   const [trustRequests, setTrustRequests]   = useState([]);
@@ -112,6 +116,7 @@ export default function DriverDashboard() {
         setEarnings({
           total: earningsRes.value.totalEarnings || '0.00',
           orders: earningsRes.value.orders || [],
+          wallet: earningsRes.value.wallet || { wallet_balance: '0.00', pending_balance: '0.00' },
         });
       }
 
@@ -313,6 +318,17 @@ export default function DriverDashboard() {
         <View style={styles.statCard}>
           <Text style={styles.statAmount}>{earnings.orders.length}</Text>
           <Text style={styles.statLabel}>Deliveries</Text>
+        </View>
+      </View>
+
+      <View style={styles.statsRow}>
+        <View style={styles.statCard}>
+          <Text style={styles.statAmount}>R{toNumber(earnings.wallet?.pending_balance, 0).toFixed(2)}</Text>
+          <Text style={styles.statLabel}>Pending</Text>
+        </View>
+        <View style={styles.statCard}>
+          <Text style={styles.statAmount}>R{toNumber(earnings.wallet?.wallet_balance, 0).toFixed(2)}</Text>
+          <Text style={styles.statLabel}>Available</Text>
         </View>
       </View>
 

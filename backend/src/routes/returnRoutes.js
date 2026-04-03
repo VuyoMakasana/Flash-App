@@ -27,5 +27,11 @@ router.get(
   requireRole("user"),
   ReturnController.getUserReturns,
 );
+router.post(
+  "/:returnId/approve",
+  authenticate,
+  requireRole("admin"),
+  ReturnController.approveReturn,
+);
 
 module.exports = router;
