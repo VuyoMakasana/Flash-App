@@ -72,6 +72,7 @@ async function migrate() {
       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       provider VARCHAR(50) NOT NULL,
       authorization_code TEXT NOT NULL,
+      auth_fingerprint VARCHAR(64),
       last4 VARCHAR(4) NOT NULL,
       brand VARCHAR(50),
       exp_month INTEGER NOT NULL,
@@ -79,8 +80,40 @@ async function migrate() {
       is_default BOOLEAN DEFAULT false,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )`);
+    await client.query(`ALTER TABLE payment_methods ADD COLUMN IF NOT EXISTS auth_fingerprint VARCHAR(64)`);
     await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_methods_user_provider_auth
       ON payment_methods(user_id, provider, authorization_code)`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_methods_user_provider_fingerprint
+      ON payment_methods(user_id, provider, auth_fingerprint)`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS payment_refunds (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      payment_id UUID REFERENCES payments(id) ON DELETE SET NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      provider VARCHAR(50),
+      refund_reference VARCHAR(255),
+      status VARCHAR(30) NOT NULL DEFAULT 'processing',
+      reason TEXT,
+      provider_response JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS driver_payouts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      payout_request_id UUID REFERENCES driver_payout_requests(id) ON DELETE SET NULL,
+      driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+      amount DECIMAL(12,2) NOT NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'processing',
+      reference VARCHAR(255),
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    )`);
 
     await client.query(`CREATE TABLE IF NOT EXISTS driver_wallets (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -223,6 +256,8 @@ async function migrate() {
       `CREATE INDEX IF NOT EXISTS idx_driver_wallet_ledger_driver ON driver_wallet_ledger(driver_id, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_driver_penalties_driver ON driver_penalties(driver_id, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_order_cancellations_order ON order_cancellations(order_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_payment_refunds_order ON payment_refunds(order_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_driver_payouts_driver ON driver_payouts(driver_id, created_at DESC)`,
       // idx_webhook_events_id and idx_payments_provider_txn are intentionally omitted:
       // UNIQUE constraints on those columns already create implicit indexes.
     ];

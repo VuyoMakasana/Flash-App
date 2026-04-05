@@ -50,6 +50,12 @@ function getStateRank(state) {
   return ORDER_STATES.indexOf(normalized);
 }
 
+function logTransition(orderId, fromState, toState, actorRole, actorId) {
+  console.log(
+    `[OrderStateMachine] orderId=${orderId} from=${fromState} to=${toState} actor=${actorRole}:${actorId || "n/a"}`,
+  );
+}
+
 async function updateOrderStatus(orderId, nextState, context = {}) {
   const io = context.io;
   const actorId = context.actorId || null;
@@ -77,6 +83,7 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
     const currentState = normalizeState(order.status);
 
     if (currentState === targetState) {
+      logTransition(orderId, currentState, targetState, actorRole, actorId);
       await client.query("COMMIT");
       return order;
     }
@@ -84,6 +91,8 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
     if (!canTransition(currentState, targetState)) {
       throw new Error(`Illegal transition from ${currentState} to ${targetState}`);
     }
+
+    logTransition(orderId, currentState, targetState, actorRole, actorId);
 
     if (actorRole === "driver") {
       if (!order.driver_id || String(order.driver_id) !== String(actorId)) {
@@ -183,6 +192,8 @@ async function assignDriver(orderId, driverId, context = {}) {
 
     if (order.driver_id) throw new Error("Order already assigned");
 
+    logTransition(orderId, currentState, "driver_assigned", "driver", driverId);
+
     const updatedResult = await client.query(
       `UPDATE orders
        SET driver_id = $1,
@@ -223,6 +234,83 @@ async function assignDriver(orderId, driverId, context = {}) {
   }
 }
 
+async function requeueOrderForDriverSearch(orderId, context = {}) {
+  const io = context.io;
+  const actorId = context.actorId || null;
+  const actorRole = context.actorRole || "system";
+  const externalClient = context.client || null;
+  const client = externalClient || await pool.connect();
+
+  try {
+    if (!externalClient) {
+      await client.query("BEGIN");
+    }
+
+    const orderResult = await client.query(
+      `SELECT * FROM orders WHERE id = $1 FOR UPDATE`,
+      [orderId],
+    );
+
+    if (!orderResult.rows.length) {
+      throw new Error("Order not found");
+    }
+
+    const order = orderResult.rows[0];
+    const currentState = normalizeState(order.status);
+
+    if (!["driver_assigned", "driver_arrived_store"].includes(currentState)) {
+      throw new Error(`Order cannot be re-queued from ${currentState}`);
+    }
+
+    if (actorRole === "driver" && String(order.driver_id) !== String(actorId)) {
+      throw new Error("Driver cannot re-queue this order");
+    }
+
+    logTransition(orderId, currentState, "waiting_for_driver", actorRole, actorId);
+
+    const updatedResult = await client.query(
+      `UPDATE orders
+       SET driver_id = NULL,
+           status = 'waiting_for_driver',
+           delivery_payment_status = 'pending_driver',
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [orderId],
+    );
+
+    if (!externalClient) {
+      await client.query("COMMIT");
+    }
+
+    const updatedOrder = updatedResult.rows[0];
+    if (io) {
+      io.to(`order:${orderId}`).emit("order_update", {
+        orderId,
+        status: updatedOrder.status,
+        timestamp: new Date().toISOString(),
+      });
+      if (updatedOrder.user_id) {
+        io.to(`user:${updatedOrder.user_id}`).emit("order_update", {
+          orderId,
+          status: updatedOrder.status,
+        });
+      }
+    }
+
+    return updatedOrder;
+  } catch (err) {
+    if (!externalClient) {
+      await client.query("ROLLBACK");
+    }
+    throw err;
+  } finally {
+    if (!externalClient) {
+      client.release();
+    }
+  }
+}
+
 module.exports = {
   ORDER_STATES,
   ALLOWED_TRANSITIONS,
@@ -230,4 +318,5 @@ module.exports = {
   canTransition,
   updateOrderStatus,
   assignDriver,
+  requeueOrderForDriverSearch,
 };

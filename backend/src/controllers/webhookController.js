@@ -3,6 +3,7 @@ const pool   = require('../config/database');
 const { getOptional, isProd } = require('../config/env');
 const Payment = require('../models/Payment');
 const { autoAssignNearestDriver } = require('../services/fleetIntelligenceService');
+const { updateOrderStatus } = require('../services/orderStateMachineService');
 
 class WebhookController {
 
@@ -129,7 +130,7 @@ class WebhookController {
 
       const result = await client.query(
         `UPDATE orders
-         SET status = 'waiting_for_driver', payment_status = 'paid', payment_method = 'card',
+         SET payment_status = 'paid', payment_method = 'card',
              delivery_payment_status = 'pending_driver', store_paid = true, updated_at = NOW()
          WHERE id = $1 AND paystack_reference = $2
          RETURNING user_id`,
@@ -157,9 +158,28 @@ class WebhookController {
 
       await client.query('COMMIT');
 
+      try {
+        await updateOrderStatus(orderId, 'paid', {
+          actorId: String(event.id || 'paystack'),
+          actorRole: 'webhook',
+          io,
+        });
+      } catch (transitionErr) {
+        console.warn('[Webhook] paid transition skipped:', transitionErr.message);
+      }
+
+      try {
+        await updateOrderStatus(orderId, 'waiting_for_driver', {
+          actorId: String(event.id || 'paystack'),
+          actorRole: 'webhook',
+          io,
+        });
+      } catch (transitionErr) {
+        console.warn('[Webhook] waiting_for_driver transition skipped:', transitionErr.message);
+      }
+
       if (io) {
         io.to(`user:${userId}`).emit('payment_confirmed', { orderId });
-        io.to(`order:${orderId}`).emit('order_update', { orderId, status: 'waiting_for_driver' });
         io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
       }
 
@@ -319,7 +339,7 @@ class WebhookController {
 
           const result = await client.query(
             `UPDATE orders
-             SET status = 'waiting_for_driver', payment_status = 'paid', payment_method = 'payflex',
+             SET payment_status = 'paid', payment_method = 'payflex',
                  delivery_payment_status = 'pending_driver', store_paid = true, updated_at = NOW()
              WHERE id = $1
              RETURNING user_id`,
@@ -327,6 +347,26 @@ class WebhookController {
           );
 
           await client.query('COMMIT');
+
+          try {
+            await updateOrderStatus(orderId, 'paid', {
+              actorId: String(req.headers['x-payflex-signature'] || 'payflex'),
+              actorRole: 'webhook',
+              io,
+            });
+          } catch (transitionErr) {
+            console.warn('[Webhook] payflex paid transition skipped:', transitionErr.message);
+          }
+
+          try {
+            await updateOrderStatus(orderId, 'waiting_for_driver', {
+              actorId: String(req.headers['x-payflex-signature'] || 'payflex'),
+              actorRole: 'webhook',
+              io,
+            });
+          } catch (transitionErr) {
+            console.warn('[Webhook] payflex waiting_for_driver transition skipped:', transitionErr.message);
+          }
 
           if (io && result.rows.length) {
             io.to(`user:${result.rows[0].user_id}`).emit('payment_confirmed', { orderId });

@@ -125,8 +125,8 @@ class PaystackService {
     }
 
     await pool.query(
-      "UPDATE orders SET paystack_reference=$1, status=$2, payment_status='pending', updated_at=NOW() WHERE id=$3",
-      [paystackRes.data.reference, "payment_pending", orderId],
+      "UPDATE orders SET paystack_reference=$1, payment_status='pending', updated_at=NOW() WHERE id=$2",
+      [paystackRes.data.reference, orderId],
     );
 
     return {
@@ -222,6 +222,18 @@ class PaystackService {
     };
     if (reference) body.reference = reference;
     return await this.request("POST", "/transaction/charge_authorization", body);
+  }
+
+  async refundTransaction(transactionId, amountInCents = null, reason = "customer_cancellation") {
+    const body = {
+      transaction: String(transactionId),
+      merchant_note: reason,
+      customer_note: "Your refund has been initiated by Flash.",
+    };
+    if (Number.isFinite(Number(amountInCents)) && Number(amountInCents) > 0) {
+      body.amount = Math.round(Number(amountInCents));
+    }
+    return await this.request("POST", "/refund", body);
   }
 }
 
