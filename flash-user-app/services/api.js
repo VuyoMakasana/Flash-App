@@ -1,11 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const DEFAULT_BASE_URL = 'http://100.66.43.71:3000';
-export const BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  process.env.REACT_NATIVE_API_BASE_URL ||
-  DEFAULT_BASE_URL;
-const REQUEST_TIMEOUT_MS = 15000;
+// ← Change this to your computer's LAN IP when testing on device
+export const BASE_URL = 'http://172.20.10.9:3000';
 
 const getToken = async () => AsyncStorage.getItem('FLASH_TOKEN');
 

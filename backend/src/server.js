@@ -9,6 +9,14 @@ const cron = require("node-cron");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
+const requiredEnv = ["DATABASE_URL", "JWT_SECRET"];
+const missingEnv = requiredEnv.filter((name) => !process.env[name]);
+if (missingEnv.length) {
+  throw new Error(
+    `[Config] Missing required environment variable(s): ${missingEnv.join(", ")}`,
+  );
+}
+
 const pool = require("./config/database");
 const { errorHandler, notFound } = require("./middleware/errorHandler");
 const {
