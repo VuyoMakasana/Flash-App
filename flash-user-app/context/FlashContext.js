@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../services/api';
+import * as Notifications from 'expo-notifications';
 
 const FlashContext = createContext(null);
 
@@ -142,6 +143,26 @@ export const FlashProvider = ({ children }) => {
       .catch(() => {
         // Keep local snapshot when profile fetch fails.
       });
+  }, [token, hydrated]);
+
+  useEffect(() => {
+    if (!token || !hydrated) return;
+
+    const registerPushToken = async () => {
+      try {
+        const { status } = await Notifications.requestPermissionsAsync();
+        if (status !== 'granted') return;
+
+        const tokenData = await Notifications.getExpoPushTokenAsync();
+        if (tokenData?.data) {
+          await api.user.registerPushToken(tokenData.data);
+        }
+      } catch (_e) {
+        // Non-blocking: app should keep working even without push registration.
+      }
+    };
+
+    registerPushToken();
   }, [token, hydrated]);
 
   // ─── AUTH ─────────────────────────────

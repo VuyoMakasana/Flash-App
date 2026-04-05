@@ -18,3 +18,10 @@ router.get(
 );
 
 module.exports = router;
+
+  router.post(
+    "/push-token",
+    authenticate,
+    requireRole("user"),
+    UserController.registerPushToken,
+  );

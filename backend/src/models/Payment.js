@@ -27,42 +27,25 @@ class Payment extends BaseModel {
   }
 
   static async getSavedCards(userId) {
-    const methods = await this.query(
+    const result = await this.query(
       `SELECT id, provider, last4, brand,
               exp_month, exp_year, is_default
        FROM payment_methods WHERE user_id=$1`,
       [userId],
     );
-
-    const legacy = await this.query(
-      `SELECT id, 'paystack'::varchar as provider, last4, card_type as brand,
-              exp_month, exp_year, is_default
-       FROM saved_cards WHERE user_id=$1`,
-      [userId],
-    );
-
-    const allCards = [...methods.rows, ...legacy.rows];
-    allCards.sort((a, b) => (a.is_default === b.is_default ? 0 : a.is_default ? -1 : 1));
-    return allCards;
+    const cards = result.rows;
+    cards.sort((a, b) => (a.is_default === b.is_default ? 0 : a.is_default ? -1 : 1));
+    return cards;
   }
 
   static async getSavedCardById(cardId, userId) {
-    let result = await this.query(
+    const result = await this.query(
       `SELECT id, provider, authorization_code, last4, brand,
               exp_month, exp_year, is_default
        FROM payment_methods WHERE id=$1 AND user_id=$2`,
       [cardId, userId],
     );
-    if (!result.rows[0]) {
-      result = await this.query(
-        `SELECT id, 'paystack'::varchar as provider, paystack_authorization_code as authorization_code,
-                last4, card_type as brand, exp_month, exp_year, is_default
-         FROM saved_cards WHERE id=$1 AND user_id=$2`,
-        [cardId, userId],
-      );
-      if (!result.rows[0]) return null;
-      return result.rows[0];
-    }
+    if (!result.rows[0]) return null;
     let authorizationCode = null;
     try {
       authorizationCode = decrypt(result.rows[0].authorization_code);
@@ -145,60 +128,34 @@ class Payment extends BaseModel {
   }
 
   static async removeCard(cardId, userId) {
-    let cardResult = await this.query(
+    const cardResult = await this.query(
       "SELECT id, is_default FROM payment_methods WHERE id=$1 AND user_id=$2",
       [cardId, userId],
     );
-
-    let sourceTable = "payment_methods";
-    if (!cardResult.rows.length) {
-      cardResult = await this.query(
-        "SELECT id, is_default FROM saved_cards WHERE id=$1 AND user_id=$2",
-        [cardId, userId],
-      );
-      sourceTable = "saved_cards";
-    }
 
     if (!cardResult.rows.length) {
       throw new Error("Card not found");
     }
 
-    await this.query(`DELETE FROM ${sourceTable} WHERE id=$1`, [cardId]);
+    await this.query("DELETE FROM payment_methods WHERE id=$1", [cardId]);
 
     if (cardResult.rows[0].is_default) {
-      // Try to promote a new default in the same source table first, then fall back to the other.
-      const promoteSameTable = await this.query(
-        `UPDATE ${sourceTable} SET is_default=true
-         WHERE user_id=$1 AND id=(SELECT id FROM ${sourceTable} WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1)
-         RETURNING id`,
+      await this.query(
+        `UPDATE payment_methods SET is_default=true
+         WHERE user_id=$1 AND id=(SELECT id FROM payment_methods WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1)`,
         [userId],
       );
-      if (!promoteSameTable.rows.length) {
-        const otherTable = sourceTable === "payment_methods" ? "saved_cards" : "payment_methods";
-        await this.query(
-          `UPDATE ${otherTable} SET is_default=true
-           WHERE user_id=$1 AND id=(SELECT id FROM ${otherTable} WHERE user_id=$1 ORDER BY created_at DESC LIMIT 1)`,
-          [userId],
-        );
-      }
     }
   }
 
   static async setDefaultCard(cardId, userId) {
     return await this.transaction(async (client) => {
       await client.query("UPDATE payment_methods SET is_default=false WHERE user_id=$1", [userId]);
-      await client.query("UPDATE saved_cards SET is_default=false WHERE user_id=$1", [userId]);
 
       let result = await client.query(
         "UPDATE payment_methods SET is_default=true WHERE id=$1 AND user_id=$2 RETURNING id",
         [cardId, userId],
       );
-      if (!result.rows.length) {
-        result = await client.query(
-          "UPDATE saved_cards SET is_default=true WHERE id=$1 AND user_id=$2 RETURNING id",
-          [cardId, userId],
-        );
-      }
       if (!result.rows.length) {
         throw new Error("Card not found");
       }

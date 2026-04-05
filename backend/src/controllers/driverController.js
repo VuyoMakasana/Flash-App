@@ -12,6 +12,8 @@ const {
 } = require("../services/orderStateMachineService");
 const { autoAssignNearestDriver } = require("../services/fleetIntelligenceService");
 const PayoutService = require("../services/payoutService");
+const paystackService = require("../services/paystackService");
+const { saveDriverPushToken } = require("../services/notificationService");
 
 class DriverController {
   static async getProfile(req, res) {
@@ -262,6 +264,124 @@ class DriverController {
       res.status(500).json({ error: "Failed to fetch nearby drivers" });
     }
   }
+
+  // ── Bank Account / Payout Methods ──────────────────────────────────────────
+
+  // Returns the list of supported banks from Paystack (used in the driver app's
+  // bank account setup screen so they can pick their bank from a dropdown).
+  static async getSupportedBanks(req, res) {
+    try {
+      const result = await paystackService.getBankList();
+      if (!result.status) {
+        return res.status(502).json({ error: "Could not fetch bank list" });
+      }
+      res.json({ banks: result.data || [] });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch bank list" });
+    }
+  }
+
+  // Verifies account number + bank code with Paystack and returns the
+  // account_name so the driver can confirm it's theirs before saving.
+  static async verifyBankAccount(req, res) {
+    const { account_number, bank_code } = req.body;
+    if (!account_number || !bank_code) {
+      return res.status(400).json({ error: "account_number and bank_code are required" });
+    }
+    try {
+      const result = await paystackService.verifyBankAccount(account_number, bank_code);
+      if (!result.status) {
+        return res.status(400).json({ error: result.message || "Could not verify account" });
+      }
+      res.json({ account_name: result.data?.account_name, account_number: result.data?.account_number });
+    } catch (err) {
+      res.status(500).json({ error: "Bank account verification failed" });
+    }
+  }
+
+  // Saves a bank account as a Paystack transfer recipient.
+  // Called after the driver confirms their account name is correct.
+  static async saveBankAccount(req, res) {
+    const { account_number, bank_code, account_name } = req.body;
+    if (!account_number || !bank_code || !account_name) {
+      return res.status(400).json({ error: "account_number, bank_code, and account_name are required" });
+    }
+
+    try {
+      // Create recipient on Paystack side.
+      const recipientRes = await paystackService.createTransferRecipient({
+        name: account_name,
+        accountNumber: account_number,
+        bankCode: bank_code,
+        description: `Flash driver – ${req.userId}`,
+      });
+
+      if (!recipientRes.status) {
+        return res.status(400).json({ error: recipientRes.message || "Failed to register bank account" });
+      }
+
+      const recipientCode = recipientRes.data?.recipient_code;
+      if (!recipientCode) {
+        return res.status(502).json({ error: "Invalid response from payment provider" });
+      }
+
+      // Deactivate any existing recipients for this driver, then insert the new one.
+      await db.query(
+        `UPDATE transfer_recipients SET is_active = false, updated_at = NOW()
+         WHERE driver_id = $1`,
+        [req.userId],
+      );
+
+      await db.query(
+        `INSERT INTO transfer_recipients
+           (driver_id, recipient_code, account_number, bank_code, account_name, is_active)
+         VALUES ($1, $2, $3, $4, $5, true)
+         ON CONFLICT (driver_id, account_number, bank_code)
+         DO UPDATE SET recipient_code = $2, is_active = true, updated_at = NOW()`,
+        [req.userId, recipientCode, account_number, bank_code, account_name],
+      );
+
+      res.status(201).json({ success: true, recipient_code: recipientCode, account_name });
+    } catch (err) {
+      console.error("[BankAccount] Save error:", err.message);
+      res.status(500).json({ error: "Failed to save bank account" });
+    }
+  }
+
+  // Returns the driver's currently registered bank account (masked).
+  static async getBankAccount(req, res) {
+    try {
+      const result = await db.query(
+        `SELECT account_name, bank_code,
+                CONCAT(REPEAT('*', LENGTH(account_number) - 4), RIGHT(account_number, 4)) AS masked_account_number
+         FROM transfer_recipients
+         WHERE driver_id = $1 AND is_active = true
+         ORDER BY created_at DESC LIMIT 1`,
+        [req.userId],
+      );
+      if (!result.rows.length) {
+        return res.json({ bank_account: null });
+      }
+      res.json({ bank_account: result.rows[0] });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch bank account" });
+    }
+  }
+
+    // Register or update the Expo push token for this driver.
+    // Called from the driver app on startup after asking for notification permission.
+    static async registerPushToken(req, res) {
+      const { push_token } = req.body;
+      if (!push_token || !String(push_token).startsWith("ExponentPushToken[")) {
+        return res.status(400).json({ error: "A valid Expo push token is required" });
+      }
+      try {
+        await saveDriverPushToken(req.userId, push_token);
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ error: "Failed to register push token" });
+      }
+    }
 }
 
 module.exports = DriverController;

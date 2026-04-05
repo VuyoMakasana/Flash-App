@@ -6,6 +6,7 @@ const db = require("../config/database");
 const { updateOrderStatus } = require("../services/orderStateMachineService");
 const { autoAssignNearestDriver } = require("../services/fleetIntelligenceService");
 const cashOtpService = require("../services/cashOtpService");
+const { notifyDriversNewOrder } = require("../services/notificationService");
 
 class PaymentController {
   static async initializePayment(req, res) {
@@ -55,6 +56,8 @@ class PaymentController {
       });
 
       await autoAssignNearestDriver(orderId, io).catch(() => null);
+      // Push notification to online drivers — fire and forget, non-blocking.
+      notifyDriversNewOrder(orderId, true).catch(() => null);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: "Failed to set cash delivery" });

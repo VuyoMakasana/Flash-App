@@ -8,12 +8,25 @@ import api from '../services/api';
 const STEPS = [
   { key: 'paid',            label: 'Order Confirmed', icon: 'checkmark-circle' },
   { key: 'driver_assigned', label: 'Driver Assigned', icon: 'person' },
-  { key: 'en_route',        label: 'On the Way',      icon: 'car' },
-  { key: 'picked_up',       label: 'Picked Up',       icon: 'bag' },
-  { key: 'delivered',       label: 'Delivered',       icon: 'home' },
-];
+    { key: 'driver_arrived_store', label: 'At the Store',  icon: 'storefront' },
+    { key: 'picked_up',            label: 'Picked Up',     icon: 'bag' },
+    { key: 'in_transit',           label: 'On the Way',    icon: 'car' },
+    { key: 'delivered',            label: 'Delivered',     icon: 'home' },
+  ];
 
-const ORDER_RANK = { paid: 1, driver_assigned: 2, en_route: 3, picked_up: 4, delivered: 5, completed: 5 };
+  // Rank maps status → step number so partially completed steps are highlighted correctly.
+  // en_route is kept as a legacy alias in case any old orders still carry that value.
+  const ORDER_RANK = {
+    paid: 1,
+    driver_assigned: 2,
+    driver_arrived_store: 3,
+    picked_up: 4,
+    in_transit: 5,
+    delivered: 6,
+    completed: 6,
+    // Legacy alias — some older orders might still have this
+    en_route: 3,
+  };
 
 export default function OrderStatusScreen() {
   const navigation  = useNavigation();

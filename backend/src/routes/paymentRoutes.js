@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { authenticate, requireRole } = require("../middleware/auth");
 const PaymentController = require("../controllers/paymentController");
+const { otpLimiter } = require("../middleware/rateLimiter");
 
 router.post(
   "/initialize",
@@ -56,12 +57,14 @@ router.post(
   "/cash/send-otp",
   authenticate,
   requireRole("driver"),
+  otpLimiter,
   PaymentController.sendCashOtp,
 );
 router.post(
   "/cash/confirm",
   authenticate,
   requireRole("driver"),
+  otpLimiter,
   PaymentController.confirmCashReceived,
 );
 router.post(

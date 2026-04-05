@@ -86,6 +86,7 @@ export const api = {
   user: {
     getProfile: () => request('GET', '/api/users/me'),
     updateProfile: (data) => request('PUT', '/api/users/me', data),
+    registerPushToken: (push_token) => request('POST', '/api/users/push-token', { push_token }),
   },
   orders: {
     create: (orderData) => request('POST', '/api/orders', orderData),
