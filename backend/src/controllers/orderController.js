@@ -6,6 +6,7 @@ const {
   assignDriver,
   normalizeState,
 } = require("../services/orderStateMachineService");
+const RefundService = require("../services/refundService");
 
 class OrderController {
   static async createOrder(req, res) {
@@ -161,14 +162,26 @@ class OrderController {
         [orderId, req.userId, req.body?.reason || null, refundMode],
       );
 
-      if (order.payment_method === "card" && order.payment_status === "paid") {
-        await db.query(
-          `UPDATE orders SET payment_status = 'refunded', updated_at = NOW() WHERE id = $1`,
-          [orderId],
+      let refund = null;
+      if (
+        refundMode === "full_refund" &&
+        ["card", "payflex"].includes(order.payment_method) &&
+        order.payment_status === "paid"
+      ) {
+        refund = await RefundService.refundOrderPayment(
+          orderId,
+          req.userId,
+          req.body?.reason || "customer_cancellation",
         );
       }
 
-      return res.json({ success: true, status: "cancelled", refundMode });
+      return res.json({
+        success: true,
+        status: "cancelled",
+        refundMode,
+        refundStatus: refund?.status || null,
+        refundReference: refund?.refund_reference || null,
+      });
     } catch (err) {
       return res.status(400).json({ error: err.message || "Failed to cancel order" });
     }

@@ -18,6 +18,7 @@ const {
 } = require("./middleware/rateLimiter");
 const { corsMiddleware } = require("./middleware/cors");
 const setupSocket = require("./socket/socketServer");
+const { reconcilePendingPayments } = require("./services/paymentReconciliationJob");
 
 // Import routes
 const authRoutes = require("./routes/authRoutes");
@@ -134,6 +135,14 @@ function createApp() {
       console.log(`[Cron] Pruned ${r.rowCount} old browsing_events rows`);
     } catch (e) {
       console.warn("[Cron] browsing cleanup error:", e.message);
+    }
+  });
+
+  cron.schedule("*/5 * * * *", async () => {
+    try {
+      await reconcilePendingPayments(io);
+    } catch (e) {
+      console.warn("[Cron] payment reconciliation error:", e.message);
     }
   });
 
