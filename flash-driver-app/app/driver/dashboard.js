@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Switch, Alert, RefreshControl, ActivityIndicator, Vibration,
+  Switch, Alert, RefreshControl, ActivityIndicator, Vibration, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useDriver } from '../../context/DriverContext';
 import driverApi, { BASE_URL } from '../../services/api';
 import { io } from 'socket.io-client';
+import * as Notifications from 'expo-notifications';
 
 const STATUS_COLORS = {
   waiting_for_driver: '#f59e0b',
@@ -56,6 +57,12 @@ export default function DriverDashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [togglingOnline, setTogglingOnline] = useState(false);
+
+  // Cash OTP state — tracks whether we're in the OTP confirmation flow
+  const [otpSending, setOtpSending]       = useState(false);
+  const [otpSent, setOtpSent]             = useState(false);
+  const [otpValue, setOtpValue]           = useState('');
+  const [otpConfirming, setOtpConfirming] = useState(false);
   const socketRef = useRef(null);
 
   const toNumber = (value, fallback = 0) => {
@@ -138,6 +145,26 @@ export default function DriverDashboard() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  useEffect(() => {
+    if (!token) return;
+
+    const registerPushToken = async () => {
+      try {
+        const { status } = await Notifications.requestPermissionsAsync();
+        if (status !== 'granted') return;
+
+        const tokenData = await Notifications.getExpoPushTokenAsync();
+        if (tokenData?.data) {
+          await driverApi.notifications.registerToken(tokenData.data);
+        }
+      } catch (_e) {
+        // Non-blocking: app should continue even if push registration fails.
+      }
+    };
+
+    registerPushToken();
+  }, [token]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadAll();
@@ -207,6 +234,44 @@ export default function DriverDashboard() {
       }
     } catch (e) {
       Alert.alert('Error', e.message);
+    }
+  };
+
+  // ─── CASH OTP FLOW ────────────────────────────────────────────────────────
+  // Send OTP to the user's phone/app so they can confirm cash payment.
+  const handleSendOtp = async () => {
+    if (!activeOrder?.id) return;
+    setOtpSending(true);
+    try {
+      await driverApi.orders.sendCashOtp(activeOrder.id);
+      setOtpSent(true);
+      setOtpValue('');
+      Alert.alert('OTP Sent', 'The customer has received their confirmation code.');
+    } catch (e) {
+      Alert.alert('Failed', e.message || 'Could not send OTP. Please try again.');
+    } finally {
+      setOtpSending(false);
+    }
+  };
+
+  // Confirm cash received by verifying the OTP the customer provides.
+  const handleConfirmCash = async () => {
+    if (!activeOrder?.id || otpValue.length < 4) {
+      Alert.alert('Enter OTP', 'Please enter the OTP code provided by the customer.');
+      return;
+    }
+    setOtpConfirming(true);
+    try {
+      await driverApi.orders.confirmCashPayment(activeOrder.id, otpValue);
+      setActiveOrder(null);
+      setOtpSent(false);
+      setOtpValue('');
+      await loadAll();
+      Alert.alert('Payment Confirmed!', 'Cash payment recorded. Delivery complete!');
+    } catch (e) {
+      Alert.alert('Verification Failed', e.message || 'OTP was incorrect or expired. Try sending a new one.');
+    } finally {
+      setOtpConfirming(false);
     }
   };
 
@@ -367,6 +432,65 @@ export default function DriverDashboard() {
               <TouchableOpacity style={styles.actionBtn} onPress={handleStatusUpdate}>
                 <Text style={styles.actionBtnText}>{NEXT_LABEL[activeOrder.status]}</Text>
               </TouchableOpacity>
+            )}
+
+            {/* ── CASH OTP SECTION ───────────────────────────────────────────
+                Show when this is a cash delivery and the order is in transit
+                or delivered. Driver must send the OTP to the customer, get
+                the code back, and confirm it to finalize the payment.
+                The "Mark Delivered" button is hidden until OTP is confirmed. */}
+            {activeOrder.is_cash_delivery &&
+             ['in_transit', 'delivered'].includes(activeOrder.status) && (
+              <View style={styles.otpContainer}>
+                <Text style={styles.otpTitle}>Cash Payment Confirmation</Text>
+                <Text style={styles.otpSubtitle}>
+                  Ask the customer for their OTP code to confirm payment.
+                </Text>
+
+                {!otpSent ? (
+                  <TouchableOpacity
+                    style={[styles.otpBtn, otpSending && { opacity: 0.6 }]}
+                    onPress={handleSendOtp}
+                    disabled={otpSending}
+                  >
+                    {otpSending
+                      ? <ActivityIndicator color="#0a0a0a" size="small" />
+                      : <Text style={styles.otpBtnText}>Send OTP to Customer</Text>
+                    }
+                  </TouchableOpacity>
+                ) : (
+                  <View>
+                    <TextInput
+                      style={styles.otpInput}
+                      placeholder="Enter customer OTP"
+                      placeholderTextColor="#9ca3af"
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      value={otpValue}
+                      onChangeText={setOtpValue}
+                    />
+                    <View style={styles.otpBtnRow}>
+                      <TouchableOpacity
+                        style={[styles.otpBtn, { flex: 1, marginRight: 6 }]}
+                        onPress={handleSendOtp}
+                        disabled={otpSending}
+                      >
+                        <Text style={styles.otpBtnText}>Resend</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.otpConfirmBtn, { flex: 2 }, otpConfirming && { opacity: 0.6 }]}
+                        onPress={handleConfirmCash}
+                        disabled={otpConfirming || otpValue.length < 4}
+                      >
+                        {otpConfirming
+                          ? <ActivityIndicator color="#fff" size="small" />
+                          : <Text style={styles.otpConfirmBtnText}>Confirm Payment</Text>
+                        }
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+              </View>
             )}
           </View>
         </View>
@@ -567,3 +691,13 @@ const styles = StyleSheet.create({
   quickBtn: { flex: 1, backgroundColor: '#1a1a1a', borderRadius: 14, padding: 16, alignItems: 'center', gap: 6 },
   quickBtnText: { color: '#9ca3af', fontSize: 12, fontWeight: '500' },
 });
+    // Cash OTP confirmation section inside the active order card
+    otpContainer: { marginTop: 12, backgroundColor: '#0d1e0d', borderRadius: 12, padding: 14, borderColor: '#10b981', borderWidth: 1 },
+    otpTitle: { color: '#10b981', fontWeight: '700', fontSize: 14, marginBottom: 4 },
+    otpSubtitle: { color: '#6b7280', fontSize: 12, marginBottom: 12 },
+    otpInput: { backgroundColor: '#1a1a1a', borderRadius: 10, borderColor: '#374151', borderWidth: 1, color: '#fff', fontSize: 20, letterSpacing: 6, padding: 14, textAlign: 'center', marginBottom: 10 },
+    otpBtnRow: { flexDirection: 'row', gap: 8 },
+    otpBtn: { backgroundColor: '#f59e0b', borderRadius: 10, padding: 13, alignItems: 'center', justifyContent: 'center' },
+    otpBtnText: { color: '#0a0a0a', fontWeight: '700', fontSize: 14 },
+    otpConfirmBtn: { backgroundColor: '#10b981', borderRadius: 10, padding: 13, alignItems: 'center', justifyContent: 'center' },
+    otpConfirmBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },

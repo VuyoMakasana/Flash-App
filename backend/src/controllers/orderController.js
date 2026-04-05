@@ -16,7 +16,10 @@ class OrderController {
       time_slot,
       subtotal,
       store_id,
+      // Accept both field names — frontend sends requested_driver_id,
+      // database column is preferred_driver_id. Merge here so both work.
       preferred_driver_id,
+      requested_driver_id,
       pickup_mall_id,
       dropoff_mall_id,
       pickup_address,
@@ -31,6 +34,9 @@ class OrderController {
       return res.status(400).json({ error: "Order must have items" });
     }
 
+    // Coalesce — preferred_driver_id (admin/backend) > requested_driver_id (user app)
+    const resolvedPreferredDriverId = preferred_driver_id || requested_driver_id || null;
+
     try {
       const order = await Order.create({
         userId: req.userId,
@@ -39,7 +45,7 @@ class OrderController {
         time_slot,
         subtotal,
         store_id,
-        preferred_driver_id,
+        preferred_driver_id: resolvedPreferredDriverId,
         pickup_mall_id,
         dropoff_mall_id,
         pickup_address,

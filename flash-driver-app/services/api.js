@@ -121,6 +121,9 @@ export const driverApi = {
     getActive: () => request('GET', '/api/drivers/active-order'),
     acceptOrder: (orderId) => request('POST', `/api/drivers/orders/${orderId}/accept`),
     updateStatus: (orderId, status) => request('PUT', `/api/orders/${orderId}/status`, { status }),
+    // Cash OTP flow: driver sends OTP to user then confirms payment with the code
+    sendCashOtp: (orderId) => request('POST', '/api/payments/cash/send-otp', { orderId }),
+    confirmCashPayment: (orderId, otp) => request('POST', '/api/payments/cash/confirm', { orderId, otp }),
   },
   earnings: {
     get: () => request('GET', '/api/drivers/earnings'),
@@ -148,6 +151,20 @@ export const driverApi = {
     respond: (requestId, action) =>
       request('PATCH', `/api/trusted-drivers/${requestId}/respond`, { action }),
     removeSelf: (userId) => request('DELETE', `/api/trusted-drivers/remove-self/${userId}`),
+  },
+  // ── Bank account setup for payouts ─────────────────────────────────────────
+  bank: {
+    getSupportedBanks: () => request('GET', '/api/drivers/bank/supported-banks'),
+    verifyAccount: (account_number, bank_code) =>
+      request('POST', '/api/drivers/bank/verify', { account_number, bank_code }),
+    saveAccount: (account_number, bank_code, account_name) =>
+      request('POST', '/api/drivers/bank/save', { account_number, bank_code, account_name }),
+    getAccount: () => request('GET', '/api/drivers/bank/account'),
+  },
+  // ── Push notification token registration ───────────────────────────────────
+  notifications: {
+    registerToken: (push_token) =>
+      request('POST', '/api/drivers/push-token', { push_token }),
   },
 };
 

@@ -1,4 +1,5 @@
 const User = require("../models/User");
+const { saveUserPushToken } = require("../services/notificationService");
 
 class UserController {
   static async getProfile(req, res) {
@@ -45,6 +46,20 @@ class UserController {
       res.status(500).json({ error: "Failed to fetch orders" });
     }
   }
+
+    // Register or update the Expo push token for the current user.
+    static async registerPushToken(req, res) {
+      const { push_token } = req.body;
+      if (!push_token || !String(push_token).startsWith("ExponentPushToken[")) {
+        return res.status(400).json({ error: "A valid Expo push token is required" });
+      }
+      try {
+        await saveUserPushToken(req.userId, push_token);
+        res.json({ success: true });
+      } catch (err) {
+        res.status(500).json({ error: "Failed to register push token" });
+      }
+    }
 }
 
 module.exports = UserController;

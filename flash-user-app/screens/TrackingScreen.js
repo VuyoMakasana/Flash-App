@@ -13,17 +13,19 @@ import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 const STATUS_LABELS = {
   paid:            'Finding your driver...',
   driver_assigned: 'Driver assigned',
-  en_route:        'Driver is on the way',
-  picked_up:       'Order picked up',
-  delivered:       'Out for delivery to you',
+    driver_arrived_store: 'Driver is at the store',
+    picked_up:            'Order picked up',
+    in_transit:           'On the way to you',
+    delivered:            'Out for delivery to you',
   completed:       'Delivered!',
 };
 
 const STATUS_COLORS = {
   paid:            '#f59e0b',
   driver_assigned: '#3b82f6',
-  en_route:        '#8b5cf6',
-  picked_up:       '#f97316',
+    driver_arrived_store: '#8b5cf6',
+    picked_up:            '#f97316',
+    in_transit:           '#6366f1',
   delivered:       '#10b981',
   completed:       '#16a34a',
 };

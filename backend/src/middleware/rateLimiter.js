@@ -39,9 +39,19 @@ const locationLimiter = rateLimit({
   message: { error: "Location updates too frequent. Please reduce frequency." },
 });
 
+// Cash OTP endpoints limiter - 3 OTP attempts per minute
+const otpLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many OTP requests. Please wait before trying again." },
+});
+
 module.exports = {
   limiter,
   authLimiter,
   orderLimiter,
   locationLimiter,
+  otpLimiter,
 };

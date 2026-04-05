@@ -102,4 +102,39 @@ router.get(
 );
 router.get("/nearby", DriverController.getNearbyDrivers);
 
+// ── Bank Account / Payout setup ────────────────────────────────────────────
+// Drivers must register a bank account before they can request payouts.
+router.get(
+  "/bank/supported-banks",
+  authenticate,
+  requireRole("driver"),
+  DriverController.getSupportedBanks,
+);
+router.post(
+  "/bank/verify",
+  authenticate,
+  requireRole("driver"),
+  DriverController.verifyBankAccount,
+);
+router.post(
+  "/bank/save",
+  authenticate,
+  requireRole("driver"),
+  DriverController.saveBankAccount,
+);
+router.get(
+  "/bank/account",
+  authenticate,
+  requireRole("driver"),
+  DriverController.getBankAccount,
+);
+
 module.exports = router;
+
+  // ── Push notification token ────────────────────────────────────────────────
+  router.post(
+    "/push-token",
+    authenticate,
+    requireRole("driver"),
+    DriverController.registerPushToken,
+  );

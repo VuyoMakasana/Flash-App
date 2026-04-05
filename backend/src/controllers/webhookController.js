@@ -4,6 +4,8 @@ const { getOptional, isProd } = require('../config/env');
 const Payment = require('../models/Payment');
 const { autoAssignNearestDriver } = require('../services/fleetIntelligenceService');
 const { updateOrderStatus } = require('../services/orderStateMachineService');
+const { notifyDriversNewOrder } = require('../services/notificationService');
+const PayoutService = require('../services/payoutService');
 
 class WebhookController {
 
@@ -70,6 +72,10 @@ class WebhookController {
         await WebhookController.handleChargeSuccess(event, io);
       } else if (event.event === 'charge.failed' || event.event === 'charge.abandoned') {
         await WebhookController.handleChargeFailed(event, io);
+      } else if (event.event === 'transfer.success') {
+        await WebhookController.handleTransferSuccess(event);
+      } else if (event.event === 'transfer.failed' || event.event === 'transfer.reversed') {
+        await WebhookController.handleTransferFailed(event);
       }
 
       return res.sendStatus(200);
@@ -185,6 +191,9 @@ class WebhookController {
 
       await autoAssignNearestDriver(orderId, io).catch(() => null);
 
+      // Push notification to online drivers — fire and forget, non-blocking.
+      notifyDriversNewOrder(orderId, false).catch(() => null);
+
     } catch (err) {
       await client.query('ROLLBACK');
       console.error('[Webhook] handleChargeSuccess error:', err.message);
@@ -285,6 +294,33 @@ class WebhookController {
     }
   }
 
+    // Called by the Paystack transfer.success webhook.
+    static async handleTransferSuccess(event) {
+      const data      = event.data || {};
+      const reference = data.reference;
+      if (!reference) return;
+
+      const txRow = await pool.query(
+        `SELECT pt.id, pt.driver_id, pt.amount, pt.payout_request_id
+         FROM payout_transactions pt
+         WHERE pt.reference = $1`,
+        [reference],
+      );
+      if (!txRow.rows.length) return;
+
+      const { id: txId, driver_id, amount, payout_request_id } = txRow.rows[0];
+      await PayoutService.finalizeSuccessfulPayout(driver_id, amount, payout_request_id, txId);
+      console.log(`[Webhook] Transfer success finalized driverId=${driver_id} ref=${reference}`);
+    }
+
+    // Called by the Paystack transfer.failed / transfer.reversed webhook.
+    static async handleTransferFailed(event) {
+      const reference = event.data?.reference;
+      if (!reference) return;
+      await PayoutService.handleFailedPayout(reference);
+      console.log(`[Webhook] Transfer failed/reversed ref=${reference}`);
+    }
+
   static async handlePayflex(req, res) {
     const { orderId, status } = req.body;
     const io = req.app.get('io');
@@ -317,6 +353,24 @@ class WebhookController {
     }
 
     try {
+      // Payflex idempotency — prevent double-processing the same event.
+      const payflexEventId = req.headers['x-payflex-event-id']
+        ? String(req.headers['x-payflex-event-id'])
+        : `${orderId}_${String(status)}_${Date.now()}`;
+      try {
+        await pool.query(
+          `INSERT INTO payflex_webhook_events (payflex_event_id, order_id, event_status)
+           VALUES ($1, $2, $3)`,
+          [payflexEventId, orderId, status],
+        );
+      } catch (dupErr) {
+        if (dupErr.code === '23505') {
+          console.log(`[Webhook] Duplicate Payflex event ${payflexEventId} — skipping`);
+          return res.json({ received: true });
+        }
+        throw dupErr;
+      }
+
       if (status === 'APPROVED') {
         const client = await pool.connect();
         try {
@@ -373,6 +427,8 @@ class WebhookController {
             io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
           }
           await autoAssignNearestDriver(orderId, io).catch(() => null);
+          // Push notification to online drivers — fire and forget, non-blocking.
+          notifyDriversNewOrder(orderId, false).catch(() => null);
         } catch (err) {
           await client.query('ROLLBACK');
           throw err;

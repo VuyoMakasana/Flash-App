@@ -199,6 +199,84 @@ async function migrate() {
       UNIQUE(user_id, driver_id)
     )`);
 
+    // ─── v4: Real driver payouts via Paystack Transfer API ────────────────────
+    // Stores verified Paystack transfer recipients (bank accounts) per driver.
+    // One driver can have multiple historical recipients but only one active one.
+    await client.query(`CREATE TABLE IF NOT EXISTS transfer_recipients (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+      recipient_code VARCHAR(100) NOT NULL,
+      account_number VARCHAR(20) NOT NULL,
+      bank_code VARCHAR(10) NOT NULL,
+      account_name VARCHAR(255) NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(driver_id, account_number, bank_code)
+    )`);
+
+    // Stores each Paystack transfer attempt for a payout request.
+    // Separate from driver_payouts (legacy) to keep a clean audit trail.
+    await client.query(`CREATE TABLE IF NOT EXISTS payout_transactions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      payout_request_id UUID REFERENCES driver_payout_requests(id) ON DELETE SET NULL,
+      driver_id UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+      amount DECIMAL(12,2) NOT NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'initiated',
+      reference VARCHAR(255) NOT NULL UNIQUE,
+      recipient_code VARCHAR(100),
+      transfer_code VARCHAR(100),
+      provider_response JSONB,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      completed_at TIMESTAMPTZ
+    )`);
+
+    // ─── v4: Payflex webhook idempotency table ─────────────────────────────────
+    // Same pattern as paystack webhook_events — prevents double-processing of
+    // the same Payflex webhook event.
+    await client.query(`CREATE TABLE IF NOT EXISTS payflex_webhook_events (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      payflex_event_id VARCHAR(255) NOT NULL UNIQUE,
+      order_id VARCHAR(255),
+      event_status VARCHAR(50),
+      processed_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    // ─── v4: Push notification tokens ─────────────────────────────────────────
+    // Store Expo push tokens so we can notify users and drivers about order events.
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS push_token TEXT`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS push_token TEXT`);
+
+    // ─── v4: Migrate saved_cards → payment_methods ───────────────────────────
+    // saved_cards was the original card storage table. payment_methods is the
+    // current canonical table. Migrate any unmigrated rows across so the old
+    // table can be phased out. We map card_type → brand and
+    // paystack_authorization_code → authorization_code.
+    await client.query(`
+      INSERT INTO payment_methods
+        (user_id, provider, authorization_code, last4, brand, exp_month, exp_year, is_default, created_at)
+      SELECT
+        sc.user_id,
+        'paystack',
+        sc.paystack_authorization_code,
+        sc.last4,
+        sc.card_type,
+        sc.exp_month,
+        sc.exp_year,
+        sc.is_default,
+        sc.created_at
+      FROM saved_cards sc
+      WHERE sc.paystack_authorization_code IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM payment_methods pm
+          WHERE pm.user_id = sc.user_id
+            AND pm.provider = 'paystack'
+            AND pm.authorization_code = sc.paystack_authorization_code
+        )
+      ON CONFLICT DO NOTHING
+    `);
+
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS preferred_driver_id UUID REFERENCES drivers(id)`);
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_paid BOOLEAN DEFAULT false`);
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_paid BOOLEAN DEFAULT false`);
@@ -260,13 +338,19 @@ async function migrate() {
       `CREATE INDEX IF NOT EXISTS idx_driver_payouts_driver ON driver_payouts(driver_id, created_at DESC)`,
       // idx_webhook_events_id and idx_payments_provider_txn are intentionally omitted:
       // UNIQUE constraints on those columns already create implicit indexes.
+      // ─── v4: new payout and notification indexes ──────────────────────────────
+      `CREATE INDEX IF NOT EXISTS idx_transfer_recipients_driver ON transfer_recipients(driver_id, is_active)`,
+      `CREATE INDEX IF NOT EXISTS idx_payout_transactions_driver ON payout_transactions(driver_id, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_payout_transactions_request ON payout_transactions(payout_request_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_payflex_webhook_events_id ON payflex_webhook_events(payflex_event_id)`,
     ];
     for (const idx of indexes) await client.query(idx);
 
     await client.query('COMMIT');
-    console.log('Flash database migration v3 completed successfully');
-    console.log('   Tables created: 25 (+ messages, trusted_drivers)');
-    console.log('   Indexes: 22 (+ 4 performance fixes + 4 new table indexes)');
+    console.log('Flash database migration v4 completed successfully');
+    console.log('   New tables: transfer_recipients, payout_transactions, payflex_webhook_events');
+    console.log('   New columns: users.push_token, drivers.push_token');
+    console.log('   Data migration: saved_cards → payment_methods');
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);

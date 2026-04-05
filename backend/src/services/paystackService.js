@@ -235,6 +235,53 @@ class PaystackService {
     }
     return await this.request("POST", "/refund", body);
   }
+
+  // Create a transfer recipient (bank account) for a driver.
+  // This is called once during onboarding and the recipient_code is stored.
+  async createTransferRecipient({ name, accountNumber, bankCode, description = "" }) {
+    return await this.request("POST", "/transferrecipient", {
+      type: "nuban",
+      name,
+      account_number: accountNumber,
+      bank_code: bankCode,
+      currency: "ZAR",
+      description,
+    });
+  }
+
+  // Verify a bank account number against a bank code before saving.
+  // Returns account_name from Paystack so the driver can confirm it's correct.
+  async verifyBankAccount(accountNumber, bankCode) {
+    return await this.request(
+      "GET",
+      `/bank/resolve?account_number=${encodeURIComponent(accountNumber)}&bank_code=${encodeURIComponent(bankCode)}`,
+    );
+  }
+
+  // Fetch the list of supported banks (used in onboarding picklist).
+  async getBankList() {
+    return await this.request("GET", "/bank?country=south_africa&per_page=100");
+  }
+
+  // Initiate an actual transfer to a driver's registered bank account.
+  // amount is in ZAR rands — we convert to kobo here.
+  async initiateTransfer({ recipientCode, amountRands, reference, reason = "Flash driver payout" }) {
+    const amountKobo = Math.round(parseFloat(amountRands) * 100);
+    return await this.request("POST", "/transfer", {
+      source: "balance",
+      amount: amountKobo,
+      recipient: recipientCode,
+      reason,
+      currency: "ZAR",
+      reference,
+    });
+  }
+
+  // Fetch the current status of a transfer by its reference.
+  // Used to poll for final status if the transfer webhook hasn't arrived yet.
+  async verifyTransfer(reference) {
+    return await this.request("GET", `/transfer/verify/${encodeURIComponent(reference)}`);
+  }
 }
 
 module.exports = new PaystackService();
