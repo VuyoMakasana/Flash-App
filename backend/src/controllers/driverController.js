@@ -8,8 +8,10 @@ const db = require("../config/database");
 const {
   assignDriver,
   normalizeState,
+  requeueOrderForDriverSearch,
 } = require("../services/orderStateMachineService");
 const { autoAssignNearestDriver } = require("../services/fleetIntelligenceService");
+const PayoutService = require("../services/payoutService");
 
 class DriverController {
   static async getProfile(req, res) {
@@ -178,16 +180,6 @@ class DriverController {
       // pending balance unchanged, no partial penalty row).
       await DriverWallet.transaction(async (client) => {
         await client.query(
-          `UPDATE orders
-           SET driver_id = NULL,
-               status = 'waiting_for_driver',
-               delivery_payment_status = 'pending_driver',
-               updated_at = NOW()
-           WHERE id = $1`,
-          [orderId],
-        );
-
-        await client.query(
           `UPDATE drivers SET cancel_count = COALESCE(cancel_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
           [req.userId],
         );
@@ -201,6 +193,12 @@ class DriverController {
            VALUES ($1, $2, $3, $4)`,
           [req.userId, orderId, 20, "driver_cancelled_before_pickup"],
         );
+      });
+
+      await requeueOrderForDriverSearch(orderId, {
+        actorId: req.userId,
+        actorRole: "driver",
+        io,
       });
 
       if (io) {
@@ -239,7 +237,8 @@ class DriverController {
     const { amount } = req.body;
     try {
       const request = await DriverWallet.createPayoutRequest(req.userId, amount);
-      res.status(201).json({ payoutRequest: request });
+      const payout = await PayoutService.processRequestedPayout(request.id);
+      res.status(201).json({ payoutRequest: request, payout });
     } catch (err) {
       res.status(400).json({ error: err.message || "Failed to request payout" });
     }
