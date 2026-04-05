@@ -41,6 +41,19 @@ class PaymentController {
 
     try {
       const result = await Payment.cashOnDelivery(orderId, req.userId, io);
+
+      // Keep delivery lifecycle transitions centralized in the state machine.
+      await updateOrderStatus(orderId, "paid", {
+        actorId: req.userId,
+        actorRole: "user",
+        io,
+      });
+      await updateOrderStatus(orderId, "waiting_for_driver", {
+        actorId: req.userId,
+        actorRole: "user",
+        io,
+      });
+
       await autoAssignNearestDriver(orderId, io).catch(() => null);
       res.json(result);
     } catch (err) {
@@ -157,7 +170,7 @@ class PaymentController {
         reference = `flash_sc_${orderId}_${crypto.randomBytes(8).toString("hex")}`;
         await client.query(
           `UPDATE orders
-           SET paystack_reference = $1, status = 'payment_pending', payment_status = 'pending', updated_at = NOW()
+           SET paystack_reference = $1, payment_status = 'pending', updated_at = NOW()
            WHERE id = $2`,
           [reference, orderId],
         );

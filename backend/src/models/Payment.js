@@ -96,7 +96,7 @@ class Payment extends BaseModel {
 
       await client.query(
         `UPDATE orders
-         SET status = 'waiting_for_driver', payment_status = 'paid', payment_method = 'card',
+         SET payment_status = 'paid', payment_method = 'card',
              delivery_payment_status = 'pending_driver', store_paid = true, updated_at = NOW()
          WHERE id = $1 AND user_id = $2`,
         [orderId, userId],
@@ -222,7 +222,7 @@ class Payment extends BaseModel {
       }
 
       await client.query(
-        `UPDATE orders SET status='waiting_for_driver', payment_method='cash', payment_status='pending_cash',
+        `UPDATE orders SET payment_method='cash', payment_status='pending_cash',
          delivery_payment_method='cash', delivery_payment_status='pending_driver',
          is_cash_delivery=true, cash_to_collect=$2, updated_at=NOW()
          WHERE id=$1`,
