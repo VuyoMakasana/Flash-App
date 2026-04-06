@@ -214,9 +214,18 @@ Open `backend/.env` and at minimum fill in:
 
 Everything else can stay as placeholder during development.
 
+**For production**, also set:
+- `PAYSTACK_SECRET_KEY` — use sk_live_ key (not sk_test_)
+- `ADMIN_PASSWORD_HASH` — bcrypt hash (generate: `node -e "require('bcryptjs').hash('yourPassword',12).then(console.log)"`)
+- `JWT_SECRET` — strong 64-character random string
+- `PAYFLEX_WEBHOOK_SECRET` — real secret from Payflex dashboard (if using BNPL)
+- `APP_URL` — production server URL (https://examples.com)
+
 Install backend dependencies:
 ```bash
 npm install
+# For push notifications (FIX 6), also install:
+npm install expo-server-sdk
 ```
 
 ---
@@ -289,14 +298,24 @@ npx expo start --clear
 ```
 Scan the QR code with Expo Go on your phone.
 
+**Before building for production:**
+- Set `EXPO_PUBLIC_API_BASE_URL` to your production server URL (https://...)
+- Verify `app.json` has real Google Maps API keys (not placeholders), restricted to your app's bundle ID
+
 **Terminal 3 — Driver App:**
 ```bash
 $env:EXPO_PUBLIC_API_BASE_URL="http://YOUR-COMPUTER-IP:3000"
 cd flash-driver-app
 npm install               # only needed first time
+npx expo install expo-notifications  # Install for push notifications (FIX 6)
 npx expo start --clear --port 8082
 ```
 Scan the QR code with Expo Go on your phone (different QR than the user app).
+
+**Before building for production:**
+- Set `EXPO_PUBLIC_API_BASE_URL` to your production server URL (https://...)
+- Verify `app.json` has real Google Maps API keys (not placeholders), restricted to your app's bundle ID
+- Verify the app has permission to request push notification permission on first login
 
 ---
 
@@ -679,10 +698,57 @@ GOOGLE_MAPS_API_KEY=AIza...
 
 ---
 
-## Going Live Checklist
+## Going Live Checklist (Production Launch Fixes)
 
-Before switching from test keys to live keys, go through this list:
+All 8 production fixes must be verified before going live:
 
+### FIX 1 & 2 — App Configuration
+- [ ] Both `flash-user-app/services/api.js` and `flash-driver-app/services/api.js` point to production server URL (not hardcoded 100.66.43.71)
+- [ ] Both `app.json` files have real Google Maps API keys (not placeholders like YOUR_IOS_GOOGLE_MAPS_API_KEY)
+- [ ] Google Maps keys are restricted to the app's bundle ID in Google Cloud Console
+- [ ] `EXPO_PUBLIC_API_BASE_URL` environment variable is set to production server URL
+
+### FIX 3 — Trusted Driver Field
+- [ ] `flash-user-app/context/FlashContext.js` sends `preferred_driver_id` (not `requested_driver_id`)
+- [ ] Test: Request a specific driver from "Trusted Drivers" and verify the order is assigned to that driver
+
+### FIX 4 — Order Status Display
+- [ ] All 6 order statuses display correctly: paid, driver_assigned, driver_arrived_store, picked_up, in_transit, delivered, completed
+- [ ] "Track Driver Live" button shows when order is in driver_assigned, driver_arrived_store, picked_up, or in_transit
+- [ ] Test: Place an order and track through all states without blank screens
+
+### FIX 5 — Cash OTP Completion
+- [ ] Driver app shows "Request Cash OTP" button when order is cash + delivered
+- [ ] Test: Mark a cash order as delivered and verify the OTP UI appears and works
+- [ ] Test: Entering correct OTP marks order completed and releases driver wallet balance
+
+### FIX 6 — Background Push Notifications
+- [ ] Backend has `expo-server-sdk` installed (`npm install expo-server-sdk`)
+- [ ] Driver app installed `expo-notifications` (`npx expo install expo-notifications`)
+- [ ] Driver app requests push notification permission on first login
+- [ ] Backend saves push token to `drivers.push_token` column
+- [ ] Test: New order assigned to driver while app backgrounded still reaches driver with push notification + sound
+
+### FIX 7 — Real Paystack Payouts
+- [ ] Backend has real `paystack_recipient_code` saved in drivers table (driver added bank account)
+- [ ] Payout flow calls `paystackService.initiateTransfer()` (not simulated)
+- [ ] Test: Process a payout and verify money actually arrives in driver's bank account
+
+### FIX 8 — Environment Variables & Security
+- [ ] `JWT_SECRET` is a long random string (not placeholder)
+- [ ] `PAYSTACK_SECRET_KEY` is `sk_live_` (not `sk_test_`)
+- [ ] `ADMIN_PASSWORD_HASH` is a bcrypt hash (not plain text)
+- [ ] Payflex webhook endpoint URL is registered in Payflex dashboard
+- [ ] `PAYFLEX_WEBHOOK_SECRET` is set to real value in `.env`
+- [ ] `APP_URL` is production server URL
+- [ ] Webhook idempotency check prevents duplicate order processing
+
+### Database Migrations
+- [ ] Run migration script once: `node src/db/migrate.js`
+- [ ] Verify new columns exist: `drivers.push_token`, `drivers.paystack_recipient_code`, `users.push_token`
+- [ ] Verify new tables exist: `payflex_webhook_events`
+
+### Before Switching to Live
 - [ ] Change `PAYSTACK_SECRET_KEY` from `sk_test_` to `sk_live_`
 - [ ] Change `PAYSTACK_PUBLIC_KEY` from `pk_test_` to `pk_live_`
 - [ ] Set `NODE_ENV=production` in `.env`
@@ -704,11 +770,12 @@ Render has data centers in Cape Town (af-south-1) making it fast for SA users.
 1. Push your code to GitHub
 2. Go to **render.com** → New → Web Service → connect your GitHub repo
 3. Set **Root Directory** to `backend`
-4. Set **Build Command** to `npm install`
+4. Set **Build Command** to `npm install` (will also install expo-server-sdk)
 5. Set **Start Command** to `node server.js`
-6. Under **Environment**, add all your `.env` variables
+6. Under **Environment**, add all your `.env` variables from the checklist above
 7. Add a **PostgreSQL** service from Render and copy the Internal Database URL into `DATABASE_URL`
-8. After deploy, run the migration: open the Render Shell and run `node src/db/migrate.js`
+8. After deploy, open the Render Shell and run `node src/db/migrate.js` (will add push_token and paystack_recipient_code columns)
+9. Verify the app connects and test all 8 fixes work end-to-end
 
 ---
 
