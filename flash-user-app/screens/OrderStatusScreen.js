@@ -5,7 +5,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
 import api from '../services/api';
 
-// FIX 4: Replaced en_route with driver_arrived_store and in_transit — the backend state machine never emits en_route, causing mid-delivery stages to show blank in the UI
+// FIX 4: Align status steps with backend state machine values
 const STEPS = [
   { key: 'paid',                label: 'Order Confirmed',  icon: 'checkmark-circle' },
   { key: 'driver_assigned',     label: 'Driver Assigned',  icon: 'person' },
