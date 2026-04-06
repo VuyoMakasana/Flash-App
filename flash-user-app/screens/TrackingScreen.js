@@ -10,24 +10,25 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import api, { BASE_URL } from '../services/api';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
+// FIX 4: Replaced en_route with driver_arrived_store and in_transit — aligns with actual backend state machine states
 const STATUS_LABELS = {
-  paid:            'Finding your driver...',
-  driver_assigned: 'Driver assigned',
-    driver_arrived_store: 'Driver is at the store',
-    picked_up:            'Order picked up',
-    in_transit:           'On the way to you',
-    delivered:            'Out for delivery to you',
-  completed:       'Delivered!',
+  paid:                 'Finding your driver...',
+  driver_assigned:      'Driver assigned',
+  driver_arrived_store: 'Driver is at the store',
+  picked_up:            'Order picked up',
+  in_transit:           'On the way to you',
+  delivered:            'Delivered!',
+  completed:            'Delivered!',
 };
 
 const STATUS_COLORS = {
-  paid:            '#f59e0b',
-  driver_assigned: '#3b82f6',
-    driver_arrived_store: '#8b5cf6',
-    picked_up:            '#f97316',
-    in_transit:           '#6366f1',
-  delivered:       '#10b981',
-  completed:       '#16a34a',
+  paid:                 '#f59e0b',
+  driver_assigned:      '#3b82f6',
+  driver_arrived_store: '#8b5cf6',
+  picked_up:            '#f97316',
+  in_transit:           '#8b5cf6',
+  delivered:            '#10b981',
+  completed:            '#16a34a',
 };
 
 export default function TrackingScreen() {

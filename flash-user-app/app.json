@@ -11,7 +11,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "co.za.flash.userapp",
       "config": {
-        "googleMapsApiKey": "YOUR_IOS_GOOGLE_MAPS_API_KEY"
+        "googleMapsApiKey": "AIzaSyC_user_ios_a1b2c3d4e5f6g7h8i9j0k1l2m"
       }
     },
     "android": {
@@ -19,7 +19,7 @@
       "package": "co.za.flash.userapp",
       "config": {
         "googleMaps": {
-          "apiKey": "YOUR_ANDROID_GOOGLE_MAPS_API_KEY"
+          "apiKey": "AIzaSyC_user_android_n2o3p4q5r6s7t8u9v0w1x2y3z"
         }
       }
     },

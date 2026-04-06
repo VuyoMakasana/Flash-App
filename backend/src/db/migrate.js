@@ -248,6 +248,9 @@ async function migrate() {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS push_token TEXT`);
     await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS push_token TEXT`);
 
+    // FIX 7: Added paystack_recipient_code column to drivers — stores the Paystack recipient code needed to initiate bank transfers for driver payouts
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS paystack_recipient_code TEXT`);
+
     // ─── v4: Migrate saved_cards → payment_methods ───────────────────────────
     // saved_cards was the original card storage table. payment_methods is the
     // current canonical table. Migrate any unmigrated rows across so the old
@@ -349,7 +352,7 @@ async function migrate() {
     await client.query('COMMIT');
     console.log('Flash database migration v4 completed successfully');
     console.log('   New tables: transfer_recipients, payout_transactions, payflex_webhook_events');
-    console.log('   New columns: users.push_token, drivers.push_token');
+    console.log('   New columns: users.push_token, drivers.push_token, drivers.paystack_recipient_code');
     console.log('   Data migration: saved_cards → payment_methods');
   } catch (err) {
     await client.query('ROLLBACK');

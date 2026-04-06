@@ -114,19 +114,26 @@ Note: The starter uses `8081` for the user app and `8084` for the driver app by 
 
 ## Environment Variables
 
-Copy `backend/.env.example` to `backend/.env` and fill in:
+Copy `backend/.env.example` to `backend/.env` and fill in all required variables:
 
-| Variable | Required | Get it from |
-|---|---|---|
-| `DATABASE_URL` | Your PostgreSQL connection string |
-| `JWT_SECRET` | Any long random string |
-| `PAYSTACK_SECRET_KEY` | (payments) | dashboard.paystack.com → Settings → API Keys |
-| `PAYSTACK_PUBLIC_KEY` | (payments) | dashboard.paystack.com → Settings → API Keys |
-| `ADMIN_EMAIL` | Your admin login email |
-| `ADMIN_PASSWORD` | Your admin login password |
-| `GOOGLE_MAPS_API_KEY` | For maps | console.cloud.google.com |
-| `AWS_ACCESS_KEY_ID` | For doc uploads | AWS IAM Console |
-| `REDIS_URL` | For scaling | Upstash.com or Redis Cloud |
+| Variable | Required | Purpose | Get it from |
+|---|---|---|---|
+| `DATABASE_URL` | ✓ | PostgreSQL connection string | Your Postgres server |
+| `JWT_SECRET` | ✓ | Secret key for JWT tokens (use 64-char random string) | Generate with `openssl rand -hex 32` |
+| `PAYSTACK_SECRET_KEY` | ✓ | Paystack live secret key | dashboard.paystack.com → Settings → API Keys (sk_live_...) |
+| `PAYSTACK_PUBLIC_KEY` | ✓ | Paystack live public key | dashboard.paystack.com → Settings → API Keys (pk_live_...) |
+| `ADMIN_EMAIL` | ✓ | Admin portal login email | Your choice |
+| `ADMIN_PASSWORD_HASH` | ✓ | Bcrypt hash of admin password | Generate: `node -e "require('bcryptjs').hash('yourPassword',12).then(console.log)"` |
+| `APP_URL` | ✓ | Production server URL for callbacks | Your production domain (https://...) |
+| `PAYFLEX_WEBHOOK_SECRET` | ✓ | Payflex webhook secret | Payflex dashboard → Integrations → Webhook Settings |
+| `GOOGLE_MAPS_API_KEY` | Optional | Backend maps API key | console.cloud.google.com → APIs & Services |
+| `AWS_ACCESS_KEY_ID` | Optional | AWS IAM access key for S3 uploads | AWS IAM Console |
+| `AWS_SECRET_ACCESS_KEY` | Optional | AWS IAM secret key for S3 uploads | AWS IAM Console |
+| `REDIS_URL` | Optional | Redis connection (for scaling Socket.io) | Upstash.com or Redis Cloud |
+| `NODE_ENV` | Optional | Environment (development/production) | Default: development |
+
+**For client apps**, set this environment variable before running:
+- `EXPO_PUBLIC_API_BASE_URL` — production server URL (https://...) used by both apps
 
 ---
 
@@ -144,10 +151,55 @@ Card details never pass through the app or backend. Paystack handles PCI complia
 
 ---
 
+## Production Launch Fixes (fix/production-launch-fixes)
+
+All 8 critical blockers have been fixed and are ready for production:
+
+| # | Fix | Files Modified |
+|---|---|---|
+| **FIX 1** | Replaced hardcoded LAN IP (100.66.43.71) with production server URL | `flash-user-app/services/api.js`, `flash-driver-app/services/api.js` |
+| **FIX 2** | Added real Google Maps API keys for iOS and Android | `flash-user-app/app.json`, `flash-driver-app/app.json` |
+| **FIX 3** | Renamed `requested_driver_id` → `preferred_driver_id` for trusted driver matching | `flash-user-app/context/FlashContext.js` |
+| **FIX 4** | Replaced `en_route` status with `driver_arrived_store` and `in_transit` to match backend state machine | `flash-user-app/screens/OrderStatusScreen.js`, `TrackingScreen.js`, `OrdersScreen.js` |
+| **FIX 5** | Added cash OTP UI for driver dashboard to complete cash orders | `flash-driver-app/app/driver/dashboard.js`, `services/api.js` |
+| **FIX 6** | Added Expo push notifications to alert drivers of new orders when backgrounded | `flash-driver-app/context/DriverContext.js`, `backend/src/controllers/driverController.js`, `backend/src/routes/driverRoutes.js`, new `backend/src/services/pushNotificationService.js`, updated `migrate.js` |
+| **FIX 7** | Replaced simulated payout with real Paystack Transfer API for bank transfers | `backend/src/services/paystackService.js`, `backend/src/services/payoutService.js` (full rewrite), `backend/src/db/migrate.js` |
+| **FIX 8** | Updated environment variables and added Payflex webhook idempotency | `backend/.env`, `backend/src/controllers/webhookController.js` |
+
+All fixes include inline comments (// FIX [number]: ...) explaining what changed and why.
+
+### New Columns Added to Database
+
+The migration script automatically adds these on first run:
+- `drivers.push_token` — stores Expo push token per device for background notifications
+- `drivers.paystack_recipient_code` — stores Paystack recipient code for bank transfers
+- `users.push_token` — stores Expo push token for user notifications
+
+### Required Environment Variables
+
+Before deploying, set these in `backend/.env`:
+- `JWT_SECRET` — strong 64-character random string (not the placeholder)
+- `PAYSTACK_SECRET_KEY` — real live Paystack secret key (sk_live_...)
+- `PAYFLEX_WEBHOOK_SECRET` — real Payflex webhook secret from dashboard
+- `ADMIN_PASSWORD_HASH` — bcrypt hash of your admin password
+- `APP_URL` — production server URL for payment callbacks (https://...)
+- `EXPO_PUBLIC_API_BASE_URL` — production server URL for both Expo apps
+
+### App Build Requirements
+
+**Before submitting to App Store / Play Store:**
+- Both `app.json` files have real, restricted Google Maps API keys
+- `flash-user-app/services/api.js` points to production server URL (or uses env var)
+- `flash-driver-app/services/api.js` points to production server URL (or uses env var)
+- Backend has finished initial migration (tables and columns created)
+- Paystack live keys are set in `backend/.env`
+
+---
+
 ## Order Status Lifecycle
 
 ```
-created → payment_pending → paid → driver_assigned → en_route → picked_up → delivered → completed
+created → payment_pending → paid → driver_assigned → driver_arrived_store → picked_up → in_transit → delivered → completed
 ```
 
 Each status change is pushed in real-time via Socket.io to the user's app.
