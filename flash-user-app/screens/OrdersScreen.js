@@ -9,7 +9,7 @@ const STATUS_COLOR = {
   payment_pending: '#f59e0b',
   paid: '#3b82f6',
   driver_assigned: '#8b5cf6',
-  // FIX 4: Replaced en_route with in_transit — matches backend state machine
+  // FIX 4: Uses active transit state from backend
   in_transit: '#8b5cf6',
   picked_up: '#0ea5e9',
   delivered: '#10b981',

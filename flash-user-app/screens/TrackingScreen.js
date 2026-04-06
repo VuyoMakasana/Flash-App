@@ -10,7 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import api, { BASE_URL } from '../services/api';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
-// FIX 4: Replaced en_route with driver_arrived_store and in_transit — aligns with actual backend state machine states
+// FIX 4: Align tracking labels with backend state machine values
 const STATUS_LABELS = {
   paid:                 'Finding your driver...',
   driver_assigned:      'Driver assigned',
