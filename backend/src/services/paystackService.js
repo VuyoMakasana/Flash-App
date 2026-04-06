@@ -236,8 +236,7 @@ class PaystackService {
     return await this.request("POST", "/refund", body);
   }
 
-  // Create a transfer recipient (bank account) for a driver.
-  // This is called once during onboarding and the recipient_code is stored.
+  // FIX 7: Creates a Paystack transfer recipient for a driver — required before any bank transfer can be initiated
   async createTransferRecipient({ name, accountNumber, bankCode, description = "" }) {
     return await this.request("POST", "/transferrecipient", {
       type: "nuban",
@@ -263,8 +262,7 @@ class PaystackService {
     return await this.request("GET", "/bank?country=south_africa&per_page=100");
   }
 
-  // Initiate an actual transfer to a driver's registered bank account.
-  // amount is in ZAR rands — we convert to kobo here.
+  // FIX 7: Initiates a real Paystack bank transfer — replaces the simulated payout that wrote "Simulated payout completed" with no actual money movement
   async initiateTransfer({ recipientCode, amountRands, reference, reason = "Flash driver payout" }) {
     const amountKobo = Math.round(parseFloat(amountRands) * 100);
     return await this.request("POST", "/transfer", {
