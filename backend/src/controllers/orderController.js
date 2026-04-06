@@ -142,7 +142,22 @@ class OrderController {
       if (["payment_pending", "paid", "waiting_for_driver"].includes(state)) {
         refundMode = "full_refund";
       } else if (state === "driver_assigned") {
+        // FIX 9: Apply 25% cancellation penalty when user cancels after driver is already assigned
         refundMode = "store_refund_keep_delivery";
+        const deliveryFee = parseFloat(order.delivery_fee || 0);
+        const penalty = Math.round(deliveryFee * 0.25 * 100) / 100;
+        if (penalty > 0 && ["card", "payflex"].includes(order.payment_method) && order.payment_status === "paid") {
+          await db.query(
+            `INSERT INTO payments (order_id, user_id, amount, method, provider, status, type, metadata)
+             VALUES ($1, $2, $3, $4, $5, 'paid', 'penalty', $6::jsonb)`,
+            [orderId, req.userId, penalty, order.payment_method, order.payment_method === "card" ? "paystack" : "payflex",
+             JSON.stringify({ reason: "late_cancellation_penalty", penalty_percent: 25 })],
+          );
+          await db.query(
+            `UPDATE orders SET cancellation_penalty = $1, updated_at = NOW() WHERE id = $2`,
+            [penalty, orderId],
+          );
+        }
       } else if (state === "driver_arrived_store") {
         refundMode = "store_refund_no_delivery_refund";
       }
@@ -181,12 +196,15 @@ class OrderController {
         );
       }
 
+      // FIX 9: Fetch updated order to include cancellationPenalty in response
+      const updatedOrder = await db.query(`SELECT cancellation_penalty FROM orders WHERE id = $1`, [orderId]);
       return res.json({
         success: true,
         status: "cancelled",
         refundMode,
         refundStatus: refund?.status || null,
         refundReference: refund?.refund_reference || null,
+        cancellationPenalty: parseFloat(updatedOrder.rows[0]?.cancellation_penalty || 0),
       });
     } catch (err) {
       return res.status(400).json({ error: err.message || "Failed to cancel order" });
