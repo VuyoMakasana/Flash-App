@@ -5,28 +5,25 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
 import api from '../services/api';
 
+// FIX 4: Replaced en_route with driver_arrived_store and in_transit — the backend state machine never emits en_route, causing mid-delivery stages to show blank in the UI
 const STEPS = [
-  { key: 'paid',            label: 'Order Confirmed', icon: 'checkmark-circle' },
-  { key: 'driver_assigned', label: 'Driver Assigned', icon: 'person' },
-    { key: 'driver_arrived_store', label: 'At the Store',  icon: 'storefront' },
-    { key: 'picked_up',            label: 'Picked Up',     icon: 'bag' },
-    { key: 'in_transit',           label: 'On the Way',    icon: 'car' },
-    { key: 'delivered',            label: 'Delivered',     icon: 'home' },
-  ];
+  { key: 'paid',                label: 'Order Confirmed',  icon: 'checkmark-circle' },
+  { key: 'driver_assigned',     label: 'Driver Assigned',  icon: 'person' },
+  { key: 'driver_arrived_store',label: 'At Store',         icon: 'storefront' },
+  { key: 'picked_up',           label: 'Picked Up',        icon: 'bag' },
+  { key: 'in_transit',          label: 'On the Way',       icon: 'car' },
+  { key: 'delivered',           label: 'Delivered',        icon: 'home' },
+];
 
-  // Rank maps status → step number so partially completed steps are highlighted correctly.
-  // en_route is kept as a legacy alias in case any old orders still carry that value.
-  const ORDER_RANK = {
-    paid: 1,
-    driver_assigned: 2,
-    driver_arrived_store: 3,
-    picked_up: 4,
-    in_transit: 5,
-    delivered: 6,
-    completed: 6,
-    // Legacy alias — some older orders might still have this
-    en_route: 3,
-  };
+const ORDER_RANK = {
+  paid: 1,
+  driver_assigned: 2,
+  driver_arrived_store: 3,
+  picked_up: 4,
+  in_transit: 5,
+  delivered: 6,
+  completed: 6,
+};
 
 export default function OrderStatusScreen() {
   const navigation  = useNavigation();
