@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// ← Change this to your computer's LAN IP when testing on device
-export const BASE_URL = 'http://172.20.10.9:3000';
+// FIX 1: Changed hardcoded LAN IP to production server URL — must be set via EXPO_PUBLIC_API_BASE_URL env var at build time for production
+const DEFAULT_BASE_URL = 'https://api.flash.local';
+export const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_BASE_URL;
 
 const getToken = async () => AsyncStorage.getItem('FLASH_TOKEN');
 
