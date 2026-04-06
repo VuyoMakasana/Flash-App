@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // FIX 1: Changed hardcoded LAN IP to production server URL — the old IP was a local Tailscale address that fails for every user outside the developer's network
-const DEFAULT_BASE_URL = 'https://your-production-server.com';
+const DEFAULT_BASE_URL = 'http://100.66.43.157:3000';
 export const BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
   process.env.REACT_NATIVE_API_BASE_URL ||
