@@ -9,7 +9,8 @@ const STATUS_COLOR = {
   payment_pending: '#f59e0b',
   paid: '#3b82f6',
   driver_assigned: '#8b5cf6',
-  en_route: '#8b5cf6',
+  // FIX 4: Replaced en_route with in_transit — matches backend state machine
+  in_transit: '#8b5cf6',
   picked_up: '#0ea5e9',
   delivered: '#10b981',
   completed: '#10b981',
@@ -62,7 +63,7 @@ export default function OrdersScreen() {
               <Text style={styles.items}>{item.items?.length || 0} item(s)</Text>
               <Text style={styles.total}>R{item.total}</Text>
             </View>
-            {['driver_assigned', 'en_route', 'picked_up'].includes(item.status) && (
+            {['driver_assigned', 'driver_arrived_store', 'in_transit', 'picked_up'].includes(item.status) && (
               <Pressable style={styles.trackBtn} onPress={() => navigation.navigate('Tracking', { orderId: item.id })}>
                 <Ionicons name="location" size={14} color="#fff" />
                 <Text style={styles.trackText}>Track Live</Text>
