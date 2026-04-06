@@ -153,7 +153,9 @@ Card details never pass through the app or backend. Paystack handles PCI complia
 
 ## Production Launch Fixes (fix/production-launch-fixes)
 
-All 8 critical blockers have been fixed and are ready for production:
+## Production Launch Fixes v2 (fix/production-launch-fixes-v2)
+
+All 9 critical blockers have been fixed and are ready for production:
 
 | # | Fix | Files Modified |
 |---|---|---|
@@ -165,6 +167,7 @@ All 8 critical blockers have been fixed and are ready for production:
 | **FIX 6** | Added Expo push notifications to alert drivers of new orders when backgrounded | `flash-driver-app/context/DriverContext.js`, `backend/src/controllers/driverController.js`, `backend/src/routes/driverRoutes.js`, new `backend/src/services/pushNotificationService.js`, updated `migrate.js` |
 | **FIX 7** | Replaced simulated payout with real Paystack Transfer API for bank transfers | `backend/src/services/paystackService.js`, `backend/src/services/payoutService.js` (full rewrite), `backend/src/db/migrate.js` |
 | **FIX 8** | Updated environment variables and added Payflex webhook idempotency | `backend/.env`, `backend/src/controllers/webhookController.js` |
+| **FIX 9** | Added 25% cancellation penalty when user cancels after driver is already assigned | `backend/src/controllers/orderController.js`, `backend/src/db/migrate.js` |
 
 All fixes include inline comments (// FIX [number]: ...) explaining what changed and why.
 
@@ -174,6 +177,7 @@ The migration script automatically adds these on first run:
 - `drivers.push_token` — stores Expo push token per device for background notifications
 - `drivers.paystack_recipient_code` — stores Paystack recipient code for bank transfers
 - `users.push_token` — stores Expo push token for user notifications
+- `orders.cancellation_penalty` — stores the penalty amount charged when a user cancels after driver is assigned
 
 ### Required Environment Variables
 

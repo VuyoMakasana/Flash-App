@@ -322,7 +322,8 @@ class WebhookController {
     }
 
   static async handlePayflex(req, res) {
-    const { orderId, status } = req.body;
+    // FIX 8: Added event_id to Payflex webhook body — needed for idempotency to prevent duplicate driver assignments
+    const { orderId, status, event_id } = req.body;
     const io = req.app.get('io');
 
     const payflexSecret = process.env.PAYFLEX_WEBHOOK_SECRET;
@@ -372,6 +373,27 @@ class WebhookController {
       }
 
       if (status === 'APPROVED') {
+        // FIX 8: Payflex idempotency — Paystack webhook had this but Payflex did not, creating a risk of double driver assignment on duplicate callbacks
+        if (event_id) {
+          const idempClient = await pool.connect();
+          try {
+            await idempClient.query('BEGIN');
+            await idempClient.query(
+              `INSERT INTO webhook_events (paystack_event_id, event_type) VALUES ($1, $2)`,
+              [String(event_id), `payflex_${status}`]
+            );
+            await idempClient.query('COMMIT');
+          } catch (dupErr) {
+            await idempClient.query('ROLLBACK');
+            idempClient.release();
+            if (dupErr.code === '23505') {
+              return res.json({ received: true });
+            }
+            throw dupErr;
+          }
+          idempClient.release();
+        }
+
         const client = await pool.connect();
         try {
           await client.query('BEGIN');

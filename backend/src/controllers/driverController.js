@@ -368,6 +368,21 @@ class DriverController {
     }
   }
 
+  // FIX 6: Saves driver push token to DB — required so backend can send push notifications when new orders arrive
+  static async savePushToken(req, res) {
+    const { push_token } = req.body;
+    if (!push_token) return res.status(400).json({ error: 'push_token required' });
+    try {
+      await db.query(
+        `UPDATE drivers SET push_token = $1, updated_at = NOW() WHERE id = $2`,
+        [push_token, req.userId]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to save push token' });
+    }
+  }
+
     // Register or update the Expo push token for this driver.
     // Called from the driver app on startup after asking for notification permission.
     static async registerPushToken(req, res) {
