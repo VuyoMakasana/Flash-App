@@ -246,7 +246,7 @@ export const FlashProvider = ({ children }) => {
       total,
       pickup_address:     pickupAddress  || 'Store Address',
       dropoff_address:    dropoffAddress || profile.address || 'Customer Address',
-      // FIX 3: Renamed field from requested_driver_id to preferred_driver_id — the backend orderController reads preferred_driver_id and the old name caused the trusted driver selection to be silently dropped on every order
+      // FIX 3: Uses backend-compatible trusted driver field for assignment
       preferred_driver_id: requestedDriverId || null,
       store_id:            storeId || null,
     };
