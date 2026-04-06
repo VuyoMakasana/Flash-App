@@ -225,6 +225,18 @@ async function assignDriver(orderId, driverId, context = {}) {
       });
     }
 
+    // FIX 6: Send push notification — ensures driver receives order alert even when app is backgrounded
+    const { sendDriverPushNotification } = require('./pushNotificationService');
+    const driverPushRow = await pool.query('SELECT push_token FROM drivers WHERE id = $1', [driverId]);
+    if (driverPushRow.rows[0]?.push_token) {
+      await sendDriverPushNotification(
+        driverPushRow.rows[0].push_token,
+        'New Flash Order!',
+        'A delivery is waiting for you. Open the app to accept.',
+        { orderId }
+      );
+    }
+
     return updated;
   } catch (err) {
     await client.query("ROLLBACK");
