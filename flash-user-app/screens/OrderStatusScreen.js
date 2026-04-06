@@ -151,7 +151,8 @@ export default function OrderStatusScreen() {
       </View>
 
       {/* Track button */}
-      {['driver_assigned', 'en_route', 'picked_up'].includes(order.status) && (
+      {/* FIX 4: Added driver_arrived_store and in_transit to track button condition — button was invisible exactly when the driver was actively moving */}
+      {['driver_assigned', 'driver_arrived_store', 'picked_up', 'in_transit'].includes(order.status) && (
         <Pressable
           style={styles.trackBtn}
           onPress={() => navigation.navigate('Tracking', {
