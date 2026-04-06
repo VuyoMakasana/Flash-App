@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import driverApi from '../services/api';
 
 const DriverContext = createContext(null);
@@ -7,6 +8,26 @@ const DriverContext = createContext(null);
 const STORAGE_KEYS = {
   token: 'FLASH_DRIVER_TOKEN',
   driver: 'FLASH_DRIVER',
+};
+
+// FIX 6: Added push notification registration — drivers were missing new orders when the app was backgrounded because the system relied solely on sockets which disconnect in the background
+const registerPushToken = async (authToken) => {
+  try {
+    const { status: existingStatus } = await Notifications.getPermissionsAsync();
+    let finalStatus = existingStatus;
+    if (existingStatus !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+    if (finalStatus !== 'granted') return;
+
+    const tokenData = await Notifications.getExpoPushTokenAsync();
+    const pushToken = tokenData.data;
+
+    await driverApi.notifications.registerToken(pushToken);
+  } catch (e) {
+    console.warn('Push token registration failed', e);
+  }
 };
 
 export const DriverProvider = ({ children }) => {
@@ -34,6 +55,13 @@ export const DriverProvider = ({ children }) => {
     hydrate();
   }, []);
 
+  // FIX 6: Register push token after hydration so backend can reach this device when app is backgrounded
+  useEffect(() => {
+    if (token && hydrated) {
+      registerPushToken(token);
+    }
+  }, [token, hydrated]);
+
   const isAuthenticated = !!token && !!driver;
 
   const login = useCallback(async (email, password) => {
@@ -44,6 +72,8 @@ export const DriverProvider = ({ children }) => {
     ]);
     setToken(data.token);
     setDriver(data.driver);
+    // FIX 6: Register push token after auth so backend can reach this device when app is backgrounded
+    await registerPushToken(data.token);
     return data;
   }, []);
 
