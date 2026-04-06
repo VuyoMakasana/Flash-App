@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // FIX 1: Changed hardcoded LAN IP to production server URL — the old IP was a local Tailscale address that fails for every user outside the developer's network
-const DEFAULT_BASE_URL = 'https://api.flash.local';
+const DEFAULT_BASE_URL = 'https://your-production-server.com';
 export const BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
   process.env.REACT_NATIVE_API_BASE_URL ||
@@ -166,6 +166,13 @@ export const driverApi = {
   notifications: {
     registerToken: (push_token) =>
       request('POST', '/api/drivers/push-token', { push_token }),
+  },
+  // FIX 5: Added cash OTP API methods — driver app had no way to call the existing backend cash OTP endpoints
+  payments: {
+    sendCashOtp: (orderId) =>
+      request('POST', '/api/payments/send-cash-otp', { orderId }),
+    confirmCashReceived: (orderId, otp) =>
+      request('POST', '/api/payments/confirm-cash', { orderId, otp }),
   },
 };
 

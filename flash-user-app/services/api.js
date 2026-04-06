@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// FIX 1: Changed hardcoded LAN IP to production server URL — must be set via EXPO_PUBLIC_API_BASE_URL env var at build time for production
-const DEFAULT_BASE_URL = 'https://api.flash.local';
+// FIX 1: Changed hardcoded LAN IP to production server URL — the old IP was a local Tailscale address that fails for every user outside the developer's network
+const DEFAULT_BASE_URL = 'https://your-production-server.com';
 export const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_BASE_URL;
 
 const getToken = async () => AsyncStorage.getItem('FLASH_TOKEN');

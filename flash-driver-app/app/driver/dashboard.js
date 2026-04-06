@@ -58,11 +58,10 @@ export default function DriverDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [togglingOnline, setTogglingOnline] = useState(false);
 
-  // Cash OTP state — tracks whether we're in the OTP confirmation flow
-  const [otpSending, setOtpSending]       = useState(false);
-  const [otpSent, setOtpSent]             = useState(false);
+  // FIX 5: New state for cash OTP flow — cash orders were getting permanently stuck at 'delivered' with no way to complete them
+  const [otpLoading, setOtpLoading]       = useState(false);
+  const [otpRequested, setOtpRequested]   = useState(false);
   const [otpValue, setOtpValue]           = useState('');
-  const [otpConfirming, setOtpConfirming] = useState(false);
   const socketRef = useRef(null);
 
   const toNumber = (value, fallback = 0) => {
@@ -237,41 +236,38 @@ export default function DriverDashboard() {
     }
   };
 
-  // ─── CASH OTP FLOW ────────────────────────────────────────────────────────
-  // Send OTP to the user's phone/app so they can confirm cash payment.
-  const handleSendOtp = async () => {
-    if (!activeOrder?.id) return;
-    setOtpSending(true);
+  // FIX 5: Sends cash OTP to the customer — required for cash order completion
+  const handleRequestOtp = async () => {
+    setOtpLoading(true);
     try {
-      await driverApi.orders.sendCashOtp(activeOrder.id);
-      setOtpSent(true);
-      setOtpValue('');
-      Alert.alert('OTP Sent', 'The customer has received their confirmation code.');
+      await driverApi.payments.sendCashOtp(activeOrder.id);
+      setOtpRequested(true);
+      Alert.alert('OTP Sent', 'The customer has been sent a confirmation code.');
     } catch (e) {
-      Alert.alert('Failed', e.message || 'Could not send OTP. Please try again.');
+      Alert.alert('Error', e.message || 'Could not send OTP.');
     } finally {
-      setOtpSending(false);
+      setOtpLoading(false);
     }
   };
 
-  // Confirm cash received by verifying the OTP the customer provides.
+  // FIX 5: Confirms cash received using OTP — releases driver wallet balance and marks order completed
   const handleConfirmCash = async () => {
-    if (!activeOrder?.id || otpValue.length < 4) {
-      Alert.alert('Enter OTP', 'Please enter the OTP code provided by the customer.');
+    if (!otpValue.trim()) {
+      Alert.alert('Enter OTP', 'Please enter the OTP provided by the customer.');
       return;
     }
-    setOtpConfirming(true);
+    setOtpLoading(true);
     try {
-      await driverApi.orders.confirmCashPayment(activeOrder.id, otpValue);
+      await driverApi.payments.confirmCashReceived(activeOrder.id, otpValue.trim());
       setActiveOrder(null);
-      setOtpSent(false);
+      setOtpRequested(false);
       setOtpValue('');
       await loadAll();
-      Alert.alert('Payment Confirmed!', 'Cash payment recorded. Delivery complete!');
+      Alert.alert('Payment Confirmed!', 'Cash collected. Delivery complete.');
     } catch (e) {
-      Alert.alert('Verification Failed', e.message || 'OTP was incorrect or expired. Try sending a new one.');
+      Alert.alert('Error', e.message || 'Could not confirm cash.');
     } finally {
-      setOtpConfirming(false);
+      setOtpLoading(false);
     }
   };
 
@@ -434,61 +430,53 @@ export default function DriverDashboard() {
               </TouchableOpacity>
             )}
 
-            {/* ── CASH OTP SECTION ───────────────────────────────────────────
-                Show when this is a cash delivery and the order is in transit
-                or delivered. Driver must send the OTP to the customer, get
-                the code back, and confirm it to finalize the payment.
-                The "Mark Delivered" button is hidden until OTP is confirmed. */}
-            {activeOrder.is_cash_delivery &&
-             ['in_transit', 'delivered'].includes(activeOrder.status) && (
-              <View style={styles.otpContainer}>
-                <Text style={styles.otpTitle}>Cash Payment Confirmation</Text>
-                <Text style={styles.otpSubtitle}>
-                  Ask the customer for their OTP code to confirm payment.
-                </Text>
-
-                {!otpSent ? (
+            {/* FIX 5: Cash OTP UI — cash orders permanently stuck at delivered without this */}
+            {activeOrder.is_cash_delivery && activeOrder.status === 'delivered' && (
+              <View style={{ marginTop: 8, gap: 8 }}>
+                {!otpRequested ? (
                   <TouchableOpacity
-                    style={[styles.otpBtn, otpSending && { opacity: 0.6 }]}
-                    onPress={handleSendOtp}
-                    disabled={otpSending}
+                    style={[styles.actionBtn, { backgroundColor: '#f59e0b' }]}
+                    onPress={handleRequestOtp}
+                    disabled={otpLoading}
                   >
-                    {otpSending
-                      ? <ActivityIndicator color="#0a0a0a" size="small" />
-                      : <Text style={styles.otpBtnText}>Send OTP to Customer</Text>
+                    {otpLoading
+                      ? <ActivityIndicator color="#0a0a0a" />
+                      : <Text style={[styles.actionBtnText, { color: '#0a0a0a' }]}>Request Cash OTP</Text>
                     }
                   </TouchableOpacity>
                 ) : (
-                  <View>
+                  <>
                     <TextInput
-                      style={styles.otpInput}
-                      placeholder="Enter customer OTP"
-                      placeholderTextColor="#9ca3af"
+                      style={{
+                        backgroundColor: '#1a1a1a',
+                        borderWidth: 1,
+                        borderColor: '#f59e0b',
+                        borderRadius: 12,
+                        padding: 14,
+                        color: '#fff',
+                        fontSize: 20,
+                        fontWeight: '800',
+                        textAlign: 'center',
+                        letterSpacing: 8,
+                      }}
+                      placeholder="Enter OTP"
+                      placeholderTextColor="#6b7280"
                       keyboardType="number-pad"
                       maxLength={6}
                       value={otpValue}
                       onChangeText={setOtpValue}
                     />
-                    <View style={styles.otpBtnRow}>
-                      <TouchableOpacity
-                        style={[styles.otpBtn, { flex: 1, marginRight: 6 }]}
-                        onPress={handleSendOtp}
-                        disabled={otpSending}
-                      >
-                        <Text style={styles.otpBtnText}>Resend</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.otpConfirmBtn, { flex: 2 }, otpConfirming && { opacity: 0.6 }]}
-                        onPress={handleConfirmCash}
-                        disabled={otpConfirming || otpValue.length < 4}
-                      >
-                        {otpConfirming
-                          ? <ActivityIndicator color="#fff" size="small" />
-                          : <Text style={styles.otpConfirmBtnText}>Confirm Payment</Text>
-                        }
-                      </TouchableOpacity>
-                    </View>
-                  </View>
+                    <TouchableOpacity
+                      style={[styles.actionBtn, { backgroundColor: '#10b981' }]}
+                      onPress={handleConfirmCash}
+                      disabled={otpLoading}
+                    >
+                      {otpLoading
+                        ? <ActivityIndicator color="#fff" />
+                        : <Text style={styles.actionBtnText}>Confirm Cash Received</Text>
+                      }
+                    </TouchableOpacity>
+                  </>
                 )}
               </View>
             )}

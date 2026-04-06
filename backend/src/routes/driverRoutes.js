@@ -129,12 +129,12 @@ router.get(
   DriverController.getBankAccount,
 );
 
-module.exports = router;
+// FIX 6: New route to save driver push token
+router.post(
+  "/push-token",
+  authenticate,
+  requireRole("driver"),
+  DriverController.savePushToken,
+);
 
-  // ── Push notification token ────────────────────────────────────────────────
-  router.post(
-    "/push-token",
-    authenticate,
-    requireRole("driver"),
-    DriverController.registerPushToken,
-  );
+module.exports = router;

@@ -700,7 +700,9 @@ GOOGLE_MAPS_API_KEY=AIza...
 
 ## Going Live Checklist (Production Launch Fixes)
 
-All 8 production fixes must be verified before going live:
+## Going Live Checklist (Production Launch Fixes v2)
+
+All 9 production fixes must be verified before going live:
 
 ### FIX 1 & 2 — App Configuration
 - [ ] Both `flash-user-app/services/api.js` and `flash-driver-app/services/api.js` point to production server URL (not hardcoded 100.66.43.71)
@@ -743,9 +745,15 @@ All 8 production fixes must be verified before going live:
 - [ ] `APP_URL` is production server URL
 - [ ] Webhook idempotency check prevents duplicate order processing
 
+### FIX 9 — Cancellation Penalty
+- [ ] `orders.cancellation_penalty` column exists (run `node src/db/migrate.js` to add it)
+- [ ] Test: Place a paid card/Payflex order, get a driver assigned, then cancel — verify `cancellationPenalty > 0` in the cancel API response
+- [ ] Verify a `penalty` row is inserted into the `payments` table for the order
+- [ ] Confirm no penalty is charged for cash orders or for cancellations before a driver is assigned
+
 ### Database Migrations
 - [ ] Run migration script once: `node src/db/migrate.js`
-- [ ] Verify new columns exist: `drivers.push_token`, `drivers.paystack_recipient_code`, `users.push_token`
+- [ ] Verify new columns exist: `drivers.push_token`, `drivers.paystack_recipient_code`, `users.push_token`, `orders.cancellation_penalty`
 - [ ] Verify new tables exist: `payflex_webhook_events`
 
 ### Before Switching to Live
@@ -776,6 +784,7 @@ Render has data centers in Cape Town (af-south-1) making it fast for SA users.
 7. Add a **PostgreSQL** service from Render and copy the Internal Database URL into `DATABASE_URL`
 8. After deploy, open the Render Shell and run `node src/db/migrate.js` (will add push_token and paystack_recipient_code columns)
 9. Verify the app connects and test all 8 fixes work end-to-end
+9. Verify the app connects and test all 9 fixes work end-to-end
 
 ---
 
