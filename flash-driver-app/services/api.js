@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const DEFAULT_BASE_URL = 'http://100.66.43.71:3000';
+// FIX 1: Changed hardcoded LAN IP to production server URL — the old IP was a local Tailscale address that fails for every user outside the developer's network
+const DEFAULT_BASE_URL = 'https://api.flash.local';
 export const BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ||
   process.env.REACT_NATIVE_API_BASE_URL ||
