@@ -298,6 +298,8 @@ async function migrate() {
     await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS approved_by UUID`);
     await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS return_order_id UUID REFERENCES orders(id)`);
+  // FIX 9: Added cancellation_penalty column to orders
+  await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_penalty DECIMAL(10,2) DEFAULT 0`);
 
     // Indexes
     const indexes = [
