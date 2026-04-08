@@ -8,6 +8,12 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { FlashProvider, useFlash } from './context/FlashContext';
 import { View, ActivityIndicator } from 'react-native';
 
+// ADDED: Sentry crash reporting for user app — catches crashes on real user devices
+import * as Sentry from '@sentry/react-native';
+if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.EXPO_PUBLIC_SENTRY_DSN, environment: 'production' });
+}
+
 import HomeScreen from './screens/HomeScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import ProductScreen from './screens/ProductScreen';

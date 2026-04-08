@@ -9,6 +9,18 @@ const cron = require("node-cron");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
+// ADDED: Sentry error monitoring — previously the backend had zero crash reporting.
+// Any unhandled error in production was invisible. Sentry captures all errors and
+// sends alerts so issues are caught before customers complain.
+const Sentry = require('@sentry/node');
+if (process.env.SENTRY_DSN && process.env.NODE_ENV === 'production') {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV,
+    tracesSampleRate: 0.1,
+  });
+}
+
 const requiredEnv = ["DATABASE_URL", "JWT_SECRET"];
 const missingEnv = requiredEnv.filter((name) => !process.env[name]);
 if (missingEnv.length) {
