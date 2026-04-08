@@ -32,6 +32,7 @@ import SizingScreen from './screens/SizingScreen';
 import FeedScreen from './screens/FeedScreen';
 import ChatScreen from './screens/ChatScreen';
 import TrustedDriversScreen from './screens/TrustedDriversScreen';
+import PrivacyPolicyScreen from './screens/PrivacyPolicyScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -84,6 +85,7 @@ function ProfileStack() {
       <Stack.Screen name="SavedCards" component={SavedCardsScreen} options={{ title: 'Saved Cards' }} />
       <Stack.Screen name="Sizing" component={SizingScreen} options={{ title: 'Size Profile' }} />
       <Stack.Screen name="TrustedDrivers" component={TrustedDriversScreen} options={{ title: 'Trusted Drivers' }} />
+      <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} options={{ title: 'Privacy Policy', ...headerStyles }} />
     </Stack.Navigator>
   );
 }
