@@ -280,6 +280,19 @@ class PaystackService {
   async verifyTransfer(reference) {
     return await this.request("GET", `/transfer/verify/${encodeURIComponent(reference)}`);
   }
+
+  // ADDED: Paystack balance check before payout transfers
+  // WHY: Paystack transfers pull from the Flash Paystack account balance, not from
+  // the customer's payment directly. If the balance is R0 and a driver requests R500,
+  // the transfer fails silently with no alert. This check prevents that.
+  async getBalance() {
+    try {
+      return await this.request('GET', '/balance');
+    } catch (e) {
+      console.warn('[Paystack] Balance check failed:', e.message);
+      return null;
+    }
+  }
 }
 
 module.exports = new PaystackService();
