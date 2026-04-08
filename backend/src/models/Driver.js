@@ -222,13 +222,12 @@ class Driver extends BaseModel {
   }
 
   static async getAvailableOrders(driverId) {
+    // FIXED: Removed customer address and personal details from pre-accept order list — drivers should not see dropoff location or customer identity before accepting, privacy and safety risk
     const sql = `
       SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
-              o.total, o.driver_payout,
-             o.pickup_address, o.dropoff_address,
-             o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng,
-              o.is_cash_delivery, o.cash_to_collect, o.created_at,
-             COUNT(oi.id) as item_count
+             o.driver_payout, o.is_cash_delivery, o.cash_to_collect,
+             o.pickup_address, o.pickup_lat, o.pickup_lng,
+             o.created_at, COUNT(oi.id) as item_count
       FROM orders o
       LEFT JOIN order_items oi ON oi.order_id = o.id
             WHERE o.status = 'waiting_for_driver' AND o.driver_id IS NULL
