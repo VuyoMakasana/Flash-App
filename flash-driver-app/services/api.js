@@ -154,8 +154,10 @@ export const driverApi = {
     removeSelf: (userId) => request('DELETE', `/api/trusted-drivers/remove-self/${userId}`),
   },
   // ── Bank account setup for payouts ─────────────────────────────────────────
+  // ADDED: Bank account API methods — needed for driver payout account setup screen
   bank: {
-    getSupportedBanks: () => request('GET', '/api/drivers/bank/supported-banks'),
+    getBanks: () => request('GET', '/api/drivers/banks'),
+    getSupportedBanks: () => request('GET', '/api/drivers/banks'),
     verifyAccount: (account_number, bank_code) =>
       request('POST', '/api/drivers/bank/verify', { account_number, bank_code }),
     saveAccount: (account_number, bank_code, account_name) =>

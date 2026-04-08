@@ -39,7 +39,10 @@ export default function DriverEarningsScreen() {
           <Ionicons name="arrow-back" size={20} color="#fff" />
         </Pressable>
         <Text style={styles.title}>Earnings</Text>
-        <View style={{ width: 28 }} />
+        {/* ADDED: Bank account shortcut — drivers need easy access to set up payouts */}
+        <Pressable onPress={() => router.push('/driver/bank')} style={styles.back}>
+          <Ionicons name="wallet-outline" size={20} color="#f59e0b" />
+        </Pressable>
       </View>
 
       {/* Summary cards */}
