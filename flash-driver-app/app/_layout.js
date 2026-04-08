@@ -4,6 +4,12 @@ import { useEffect } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { DriverProvider, useDriver } from '../context/DriverContext';
 
+// ADDED: Sentry crash reporting for driver app — catches crashes on driver devices
+import * as Sentry from '@sentry/react-native';
+if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.EXPO_PUBLIC_SENTRY_DSN, environment: 'production' });
+}
+
 function RootLayoutNav() {
   const { isAuthenticated, loading, driver } = useDriver();
   const router = useRouter();
