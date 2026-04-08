@@ -5,6 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "start:prod": "pm2 start ecosystem.config.js",
+    "stop:prod": "pm2 stop flash-backend",
+    "logs": "pm2 logs flash-backend",
     "dev": "nodemon server.js",
     "migrate": "node src/db/migrate.js",
     "test": "jest --runInBand",
@@ -35,6 +38,7 @@
   "devDependencies": {
     "jest": "^29.7.0",
     "nodemon": "^3.0.2",
+    "pm2": "^5.3.0",
     "supertest": "^7.1.1"
   }
 }
