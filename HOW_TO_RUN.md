@@ -145,6 +145,10 @@ Flash/
 │           │                        - Trust request notifications (accept/decline)
 │           │                        - Fleet intelligence alerts
 │           │                        - Earnings summary
+│           │                        - Quick actions: Earnings, My Plan, Bank, Profile
+│           ├── bank.js           ← Bank account setup for payouts. Search banks,
+│           │                        enter account number, Paystack verification,
+│           │                        save/activate. Required before first payout.
 │           ├── earnings.js       ← Earnings history and subscription status
 │           ├── profile.js        ← Driver profile management
 │           └── subscription.js   ← Buy daily/weekly/monthly delivery plans
@@ -220,6 +224,7 @@ Everything else can stay as placeholder during development.
 - `JWT_SECRET` — strong 64-character random string
 - `PAYFLEX_WEBHOOK_SECRET` — real secret from Payflex dashboard (if using BNPL)
 - `APP_URL` — production server URL (https://examples.com)
+- `SENTRY_DSN` — Sentry DSN from sentry.io (free tier) for crash reporting
 
 Install backend dependencies:
 ```bash
@@ -316,6 +321,7 @@ Scan the QR code with Expo Go on your phone (different QR than the user app).
 - Set `EXPO_PUBLIC_API_BASE_URL` to your production server URL (https://...)
 - Verify `app.json` has real Google Maps API keys (not placeholders), restricted to your app's bundle ID
 - Verify the app has permission to request push notification permission on first login
+- Each approved driver must complete bank account setup (Dashboard → Bank) before they can receive payouts
 
 ---
 
@@ -362,13 +368,14 @@ All variables go in `backend/.env`. The `.env.example` file has all of these wit
 | `PORT` | Optional | Port the backend runs on. Default: 3000 |
 | `NODE_ENV` | Recommended | Set to `production` when deploying |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `DB_POOL_MAX` | Optional | Max DB connections. Default: 20. Raise to 50 on paid plans |
+| `DB_POOL_MAX` | Optional | Max DB connections. Default: **50**. Raise further on high-traffic paid plans |
+| `SENTRY_DSN` | Optional | Sentry error reporting DSN — set before going live. Free tier at [sentry.io](https://sentry.io) |
 | `JWT_SECRET` | Yes | Signs auth tokens. Change before deploying |
 | `JWT_EXPIRES_IN` | Optional | How long tokens last. Default: 30d |
 | `PAYSTACK_SECRET_KEY` | Yes (for payments) | From dashboard.paystack.com |
 | `PAYSTACK_PUBLIC_KEY` | Yes (for payments) | From dashboard.paystack.com |
 | `APP_URL` | For payments | Your backend URL. Used in Paystack callback redirects |
-| `REDIS_URL` | Optional | Set to redis://... to enable multi-server Socket.io scaling |
+| `REDIS_URL` | Optional | Set to `redis://...` to enable multi-instance Socket.io scaling via Redis adapter. Set to `disabled` to explicitly skip. |
 | `AWS_ACCESS_KEY_ID` | For doc uploads | AWS credentials for S3 driver document storage |
 | `AWS_SECRET_ACCESS_KEY` | For doc uploads | AWS credentials for S3 driver document storage |
 | `AWS_REGION` | For doc uploads | Default: af-south-1 (Cape Town) |
@@ -811,4 +818,85 @@ Render has data centers in Cape Town (af-south-1) making it fast for SA users.
 **"No order data" on Order Status screen**
 - This is handled — the screen fetches the order by ID if only an ID is passed
 - If it still shows, check that the backend `/api/orders/:id` endpoint is reachable
+
+---
+
+## Production Startup (PM2)
+
+For production deployments, use PM2 instead of `node server.js` directly. PM2 restarts the process automatically if it crashes, enforces a 500 MB memory limit, and writes timestamped logs to `backend/logs/`.
+
+```bash
+cd backend
+npm install          # installs pm2 as a devDependency
+
+# Start (or restart) the backend with PM2:
+npm run start:prod
+# Equivalent to: pm2 start ecosystem.config.js --env production
+
+# View live logs:
+npm run logs
+# Equivalent to: pm2 logs flash-backend
+
+# Check process status:
+pm2 status
+
+# Stop:
+npm run stop:prod
+# Equivalent to: pm2 stop flash-backend
+```
+
+**On Render / cloud hosts:** Cloud platforms handle process management themselves. Keep using `node server.js` as the Start Command in Render. PM2 is intended for VPS / self-hosted deployments (e.g. Ubuntu on DigitalOcean or Hetzner).
+
+**Log files** are written to `backend/logs/out.log` and `backend/logs/err.log`. These files are gitignored (`logs/*.log`). The `logs/` directory itself is tracked via `.gitkeep`.
+
+---
+
+## Going Live Checklist v3 (Production Hardening)
+
+All items below must be checked before the v3 hardening release goes live.
+
+### Sentry (crash monitoring)
+- [ ] Create a free project at [sentry.io](https://sentry.io) → Node.js
+- [ ] Copy the DSN and set `SENTRY_DSN=<your-dsn>` in `backend/.env`
+- [ ] For the user app: set `EXPO_PUBLIC_SENTRY_DSN=<your-dsn>` in the build environment
+- [ ] For the driver app: set `EXPO_PUBLIC_SENTRY_DSN=<your-dsn>` in the build environment
+- [ ] Verify errors appear in the Sentry dashboard after a test crash
+
+### AWS S3 (driver document storage)
+- [ ] In AWS Console → S3 → your bucket → Permissions → "Block all public access" must be **ON**
+- [ ] All driver KYC documents are uploaded with private ACL — no public URL exists
+- [ ] Admin document review must use `s3Service.getSignedUrl(key)` to generate temporary URLs (default 5-minute expiry)
+- [ ] IAM user has only `s3:PutObject` and `s3:GetObject` permissions on the target bucket (principle of least privilege)
+
+### Driver Bank Account
+- [ ] Every approved driver must set up their bank account at Dashboard → Bank before they can receive payouts
+- [ ] Verify: complete a test delivery and confirm payout transfer is initiated (not rejected with "no recipient")
+- [ ] Check `backend/logs/err.log` for `[Payout]` lines after the first real payout
+
+### Stuck Order Cron
+- [ ] The cron runs every 10 minutes (confirm by checking logs: `pm2 logs flash-backend | grep "stuck order"`)
+- [ ] Test: manually set an order's `updated_at` to 2 hours ago and verify it gets picked up and cancelled on the next cron run
+- [ ] Verify `drivers.cancel_count` increments correctly
+- [ ] Verify a driver is suspended (status → `'suspended'`) after their `cancel_count` reaches 5
+
+### Paystack Balance Check
+- [ ] Verify the backend logs `[Payout] Paystack balance` on each payout attempt
+- [ ] Test with insufficient Paystack balance: confirm the payout fails gracefully with an error log, not a crash
+
+### Redis / Multi-Instance Scaling
+- [ ] If running more than one backend instance, set `REDIS_URL` to a shared Redis instance (Upstash or Redis Cloud)
+- [ ] Test: connect two users tracking the same order from different devices — both should receive `order_update` events in real time
+- [ ] If only running a single instance, set `REDIS_URL=disabled` or leave it unset
+
+### Database Pool
+- [ ] `DB_POOL_MAX` defaults to 50 — confirm your Postgres plan supports at least 50 simultaneous connections
+- [ ] On Render free tier (max 25 connections), set `DB_POOL_MAX=20` explicitly
+
+### Support Phone Number
+- [ ] **CRITICAL:** Replace `tel:+27YOUR_REAL_NUMBER_HERE` in `flash-user-app/screens/TrackingScreen.js` with the real Flash support number before going live
+
+### Privacy / Legal
+- [ ] Privacy Policy screen is reachable at Profile → Privacy Policy in the user app
+- [ ] Terms & Conditions refund clause matches actual operations (tiered: full refund before driver assigned, no refund after pickup)
+- [ ] Privacy Policy contact details (Section 9 of PrivacyPolicyScreen.js) are filled in with real Flash details
 

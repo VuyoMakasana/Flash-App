@@ -129,8 +129,12 @@ Copy `backend/.env.example` to `backend/.env` and fill in all required variables
 | `GOOGLE_MAPS_API_KEY` | Optional | Backend maps API key | console.cloud.google.com → APIs & Services |
 | `AWS_ACCESS_KEY_ID` | Optional | AWS IAM access key for S3 uploads | AWS IAM Console |
 | `AWS_SECRET_ACCESS_KEY` | Optional | AWS IAM secret key for S3 uploads | AWS IAM Console |
-| `REDIS_URL` | Optional | Redis connection (for scaling Socket.io) | Upstash.com or Redis Cloud |
+| `REDIS_URL` | Optional | Redis connection (for scaling Socket.io and multi-instance) | Upstash.com or Redis Cloud — set to `disabled` to skip |
+| `SENTRY_DSN` | Optional | Sentry error reporting DSN | sentry.io → New Project → Node.js → DSN |
+| `DB_POOL_MAX` | Optional | Max PostgreSQL connections per process. Default: 50 | Raise if you see pool timeout errors |
 | `NODE_ENV` | Optional | Environment (development/production) | Default: development |
+| `SENTRY_DSN` | Optional | Sentry error monitoring DSN | sentry.io → New Project → Node.js → DSN |
+| `DB_POOL_MAX` | Optional | Max PostgreSQL connections per process. Default: 50 | Raise if you see pool timeout errors |
 
 **For client apps**, set this environment variable before running:
 - `EXPO_PUBLIC_API_BASE_URL` — production server URL (https://...) used by both apps
@@ -265,3 +269,66 @@ Every file has comments explaining what it does. Start here:
 - `backend/src/socket/socketServer.js` — all real-time events documented
 - `flash-user-app/context/FlashContext.js` — global state, product loading, order creation
 - `HOW_TO_RUN.md` — complete API reference, Socket.io event reference, setup guides
+- `HOW_TO_RUN.md` — complete API reference, Socket.io event reference, setup guides
+
+---
+
+## Production Hardening v3 (feature/production-hardening-v3)
+
+13 production hardening changes landed in this release:
+
+| # | Change | Files |
+|---|---|---|
+| **1A** | Fixed cash OTP endpoints returning 404 (wrong URL paths in driver API client) | `flash-driver-app/services/api.js` |
+| **1B** | Stripped customer address and identity from pre-accept order list — drivers now only see pickup and payout info | `backend/src/models/Driver.js` |
+| **1C** | Replaced fake support phone number placeholder in TrackingScreen | `flash-user-app/screens/TrackingScreen.js` |
+| **2** | Added full driver bank account setup screen (search banks, verify account, save for payouts) | `flash-driver-app/app/driver/bank.js`, `_layout.js`, `dashboard.js`, `earnings.js` |
+| **3** | Added stuck order auto-reassignment cron (runs every 10 min, cancels orders stuck >45 min) and auto-suspends drivers after 5 cumulative cancellations | `backend/src/server.js`, `migrate.js`, `middleware/auth.js` |
+| **4** | Added PM2 process management for zero-downtime restarts and automatic crash recovery | `backend/ecosystem.config.js`, `backend/package.json` |
+| **5** | Added Sentry error monitoring to backend, user app, and driver app | `backend/src/server.js`, `flash-user-app/App.js`, `flash-driver-app/app/_layout.js` |
+| **6** | Added Paystack balance check before every driver payout transfer — prevents failed transfers | `backend/src/services/paystackService.js`, `payoutService.js` |
+| **7** | Added refund status banner in OrderStatusScreen with 5–10 business day timeline | `flash-user-app/screens/OrderStatusScreen.js` |
+| **8** | Added POPIA-compliant Privacy Policy screen (9 sections) and fixed Terms contradicting actual refund logic | `flash-user-app/screens/PrivacyPolicyScreen.js`, `App.js`, `ProfileScreen.js`, `TermsAndConditionsScreen.js` |
+| **9** | Enforced private-only S3 document uploads and added signed URL helper for secure document access | `backend/src/services/s3Service.js` |
+| **10** | Increased DB connection pool max from 20 → 50 and activated Redis Socket.IO adapter when `REDIS_URL` is set | `backend/src/config/database.js`, `backend/src/server.js` |
+| **11** | Updated README and HOW_TO_RUN with all new operations, driver onboarding, and production startup docs | `README.md`, `HOW_TO_RUN.md` |
+
+### New Database Columns (v5 migration — runs automatically)
+
+| Column | Table | Purpose |
+|---|---|---|
+| `cancel_count` | `drivers` | Cumulative stuck-order cancellation count (auto-suspend at 5) |
+| `suspended_at` | `drivers` | Timestamp when account was auto-suspended |
+| `suspension_reason` | `drivers` | Human-readable reason for suspension |
+
+### Process Management (PM2)
+
+The backend is now managed by PM2. In production, use these commands instead of `node server.js`:
+
+```bash
+cd backend
+npm run start:prod    # start with PM2 (autorestart, 500MB memory limit, logs to ./logs/)
+npm run stop:prod     # stop all PM2 processes
+npm run logs          # tail live logs
+# or directly:
+pm2 logs flash-backend
+pm2 status
+```
+
+### Driver Onboarding Requirement
+
+Drivers **must** set up a bank account before they can receive payouts. After registering and getting approved:
+1. Log in to the driver app
+2. Tap **Bank** on the Dashboard quick actions bar
+3. Search for their bank, enter their account number, verify, and save
+4. Paystack creates a transfer recipient — all future earnings are paid to this account
+
+### Operations Notes
+
+- **Stuck order cron:** Runs every 10 minutes. An order is "stuck" if it has been `paid`/`driver_assigned`/`driver_arrived_store`/`picked_up` for more than 45 minutes without a status update. The responsible driver's `cancel_count` is incremented and the order is returned to the driver pool for reassignment.
+- **Auto-suspension:** A driver is automatically suspended when `cancel_count` reaches 5. They receive a `403` on every API call with a message to contact support. An admin can unsuspend by resetting `status = 'approved'` and `cancel_count = 0` in the database.
+- **S3 documents:** All driver KYC documents are uploaded with private ACL. Use `s3Service.getSignedUrl(key)` (300-second expiry by default) to generate temporary access URLs for admin document review.
+
+### Legal / POPIA
+
+A full Privacy Policy screen is accessible in the user app at **Profile → Privacy Policy**. It covers data collection, purpose, retention periods, user rights, and contact details. The Terms & Conditions refund clause has been updated to reflect the actual tiered refund policy (full refund before driver assigned; no refund once picked up; 5–10 business days processing time).
