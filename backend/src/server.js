@@ -135,6 +135,26 @@ function createApp() {
 // Setup Socket.IO
   setupSocket(io);
 
+    // ADDED: Redis adapter for Socket.IO — activates when REDIS_URL is set
+    // WHY: Without Redis, running two backend instances causes socket events (driver
+    // location, order updates) to only reach users connected to the same instance.
+    // Redis makes socket events broadcast across all instances.
+    if (process.env.REDIS_URL && process.env.REDIS_URL !== 'disabled') {
+      const { createAdapter } = require('@socket.io/redis-adapter');
+      const { createClient } = require('redis');
+      (async () => {
+        try {
+          const pubClient = createClient({ url: process.env.REDIS_URL });
+          const subClient = pubClient.duplicate();
+          await Promise.all([pubClient.connect(), subClient.connect()]);
+          io.adapter(createAdapter(pubClient, subClient));
+          console.log('[Redis] ✅ Socket.IO Redis adapter connected');
+        } catch (redisErr) {
+          console.warn('[Redis] ⚠️  Redis unavailable — running single-instance mode:', redisErr.message);
+        }
+      })();
+    }
+
 // Cron jobs
   cron.schedule("0 3 * * *", async () => {
     try {
