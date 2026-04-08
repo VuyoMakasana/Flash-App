@@ -80,6 +80,18 @@ class PayoutService {
       // If the transfer call fails, we write 'failed' status directly in catch.
       await client.query("COMMIT");
 
+      // ADDED: Pre-transfer balance check — prevents silent failures when Paystack account is underfunded
+      const balanceResult = await paystackService.getBalance();
+      if (balanceResult?.data) {
+        const availableKobo = balanceResult.data.find(b => b.currency === 'ZAR')?.balance || 0;
+        const requiredKobo = Math.round(req.amount * 100);
+        if (availableKobo < requiredKobo) {
+          throw new Error(
+            `Insufficient Paystack balance. Available: R${(availableKobo/100).toFixed(2)}, Required: R${req.amount}. Please top up the Flash Paystack account.`
+          );
+        }
+      }
+
       // ── Real Paystack Transfer ──────────────────────────────────────────
       let transferResult;
       try {
