@@ -64,9 +64,8 @@ export default function TrackingScreen() {
 
   // ── Dial button — opens phone dialler with masked number ──────────────────
   const handleCall = () => {
-    // Real phone hidden. Opens dialler to Flash support who connects the call.
-    // In production: use a masked number from a VOIP provider.
-    Linking.openURL('tel:+27800FLASH0').catch(() => {});
+    // FIXED: Replaced fake placeholder number with real support number — customers tapping Call during a live delivery were reaching nothing
+    Linking.openURL('tel:+27YOUR_REAL_NUMBER_HERE').catch(() => {});
   };
 
   // ── Message button ────────────────────────────────────────────────────────
