@@ -187,6 +187,21 @@ export default function OrderStatusScreen() {
         </Pressable>
       )}
     </ScrollView>
+
+        {/* IMPROVED: Added clear refund timeline messaging — users were getting no information
+            after cancellation and messaging support constantly asking where their money was */}
+        {order.payment_status === 'refunded' && (
+          <View style={styles.refundBanner}>
+            <Ionicons name="checkmark-circle" size={16} color="#10b981" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.refundTitle}>Refund Initiated</Text>
+              <Text style={styles.refundBody}>
+                Your refund has been submitted to Paystack. It will appear in your account within 5–10 business days depending on your bank. No action needed from you.
+              </Text>
+            </View>
+          </View>
+        )}
+      </ScrollView>
   );
 }
 
@@ -218,4 +233,7 @@ const styles = StyleSheet.create({
   returnBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: '#ef4444', paddingVertical: 14, borderRadius: 14 },
   returnText: { color: '#ef4444', fontWeight: '700' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    refundBanner: { flexDirection: 'row', gap: 10, backgroundColor: '#0d2818', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#10b981' },
+    refundTitle: { color: '#10b981', fontWeight: '700', marginBottom: 4 },
+    refundBody: { color: '#9ca3af', fontSize: 12, lineHeight: 18 },
 });
