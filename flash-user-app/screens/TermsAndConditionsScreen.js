@@ -27,7 +27,8 @@ export default function TermsAndConditionsScreen({ navigation }) {
         {[
           ['1. Acceptance', 'By using Flash, you agree to these terms. If you do not agree, please do not use the app.'],
           ['2. Service', 'Flash connects users with independent drivers for same-day clothing delivery. We are a platform, not a logistics company.'],
-          ['3. Payments', 'All payments are processed securely via Paystack. Flash does not store card details. Delivery fees are non-refundable once the driver is en route.'],
+          // FIXED: Updated refund policy to match actual code logic — old text said "non-refundable once en route" but code applies tiered refund rules based on delivery stage
+          ['3. Payments', 'All payments are processed securely via Paystack. Flash does not store card details. Refunds are processed based on delivery stage: full refund before driver assignment; store amount refunded (delivery fee retained) if driver is assigned; no refund once driver has picked up your order. A 25% cancellation fee applies when cancelling after driver assignment. Refunds take 5–10 business days to appear in your account.'],
           ['4. Returns', 'Return requests must be submitted within 24 hours of delivery. Items must be unused and in original packaging.'],
           ['5. Driver Conduct', 'Drivers are independent contractors. Flash verifies their documents but is not liable for driver conduct beyond platform policies.'],
           ['6. Privacy', 'We collect location data during active orders only. We do not sell personal data to third parties.'],

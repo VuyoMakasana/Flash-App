@@ -104,7 +104,8 @@ export default function ProfileScreen() {
       <View style={styles.card}>
         {[
           { icon: 'receipt-outline',         label: 'Order History',   onPress: () => navigation.navigate('Orders') },
-          { icon: 'shield-checkmark-outline', label: 'Privacy Policy',  onPress: () => {} },
+            // ADDED: Privacy Policy link — POPIA legally requires this to be accessible in-app
+          { icon: 'shield-checkmark-outline', label: 'Privacy Policy',  onPress: () => navigation.navigate('PrivacyPolicy') },
           { icon: 'help-circle-outline',      label: 'Help & Support',  onPress: () => {} },
         ].map(item => (
           <Pressable key={item.label} style={styles.menuRow} onPress={item.onPress}>
