@@ -616,6 +616,11 @@ export default function DriverDashboard() {
           <Ionicons name="card-outline" size={22} color="#f59e0b" />
           <Text style={styles.quickBtnText}>My Plan</Text>
         </TouchableOpacity>
+        {/* ADDED: Bank account shortcut — drivers need easy access to set up payouts */}
+        <TouchableOpacity style={styles.quickBtn} onPress={() => router.push('/driver/bank')}>
+          <Ionicons name="wallet-outline" size={22} color="#f59e0b" />
+          <Text style={styles.quickBtnText}>Bank</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.quickBtn} onPress={() => router.push('/driver/profile')}>
           <Ionicons name="person-outline" size={22} color="#f59e0b" />
           <Text style={styles.quickBtnText}>Profile</Text>
