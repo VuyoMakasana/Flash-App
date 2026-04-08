@@ -78,6 +78,13 @@ const requireApprovedDriver = async (req, res, next) => {
     if (!result.rows.length) {
       return res.status(404).json({ error: "Driver not found" });
     }
+    // ADDED: Check for suspended status — suspended drivers cannot accept orders
+    if (result.rows[0].status === 'suspended') {
+      return res.status(403).json({
+        error: 'Your driver account has been suspended due to repeated order cancellations. Please contact support.',
+        status: 'suspended',
+      });
+    }
     if (result.rows[0].status !== "approved") {
       const messages = {
         pending_documents: "Please upload your required documents to continue.",
