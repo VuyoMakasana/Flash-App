@@ -356,6 +356,16 @@ async function migrate() {
     console.log('   New tables: transfer_recipients, payout_transactions, payflex_webhook_events');
     console.log('   New columns: users.push_token, drivers.push_token, drivers.paystack_recipient_code');
     console.log('   Data migration: saved_cards → payment_methods');
+
+    // v5: Driver suspension support for auto-reassignment cron
+    // ADDED: suspended status support for drivers — needed for auto-suspension after repeated cancellations
+    await client.query('BEGIN');
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS cancel_count INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS suspension_reason TEXT`);
+    await client.query('COMMIT');
+    console.log('Flash database migration v5 completed successfully');
+    console.log('   New columns: drivers.cancel_count, drivers.suspended_at, drivers.suspension_reason');
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);

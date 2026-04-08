@@ -154,6 +154,76 @@ function createApp() {
     }
   });
 
+  // ADDED: Stuck order detection and auto-reassignment cron — runs every 10 minutes
+  // WHY: Drivers can accept an order and go offline with no consequence. Orders would
+  // stay stuck in driver_assigned forever with no customer alert and no resolution.
+  cron.schedule('*/10 * * * *', async () => {
+    try {
+      // Find orders stuck in driver_assigned or driver_arrived_store for more than 45 minutes
+      const stuckOrders = await pool.query(`
+        SELECT o.id, o.driver_id, o.user_id, o.delivery_mode, o.status,
+               d.push_token as driver_push_token
+        FROM orders o
+        LEFT JOIN drivers d ON d.id = o.driver_id
+        WHERE o.status IN ('driver_assigned', 'driver_arrived_store')
+          AND o.updated_at < NOW() - INTERVAL '45 minutes'
+          AND o.driver_id IS NOT NULL
+      `);
+
+      for (const order of stuckOrders.rows) {
+        try {
+          // Penalise the driver — increment cancel count
+          await pool.query(
+            `UPDATE drivers SET cancel_count = COALESCE(cancel_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
+            [order.driver_id]
+          );
+
+          // Auto-suspend driver if cancel count reaches 5
+          const driverCheck = await pool.query(
+            `SELECT cancel_count FROM drivers WHERE id = $1`, [order.driver_id]
+          );
+          if ((driverCheck.rows[0]?.cancel_count || 0) >= 5) {
+            await pool.query(
+              `UPDATE drivers SET is_online = false, status = 'suspended', updated_at = NOW() WHERE id = $1`,
+              [order.driver_id]
+            );
+            console.warn(`[Cron] Driver ${order.driver_id} auto-suspended after 5 cancellations`);
+          }
+
+          // Re-queue the order for fleet or notify user
+          await pool.query(
+            `UPDATE orders SET driver_id = NULL, status = 'waiting_for_driver',
+             delivery_payment_status = 'pending_driver', updated_at = NOW()
+             WHERE id = $1`,
+            [order.id]
+          );
+
+          // Notify user
+          const ioInstance = runtime.io;
+          if (ioInstance) {
+            ioInstance.to(`user:${order.user_id}`).emit('order_update', {
+              orderId: order.id,
+              status: 'waiting_for_driver',
+              message: 'Your driver became unavailable. Finding a new driver now.',
+            });
+          }
+
+          // Attempt auto-reassign for fleet orders
+          if (order.delivery_mode === 'fleet') {
+            const { autoAssignNearestDriver } = require('./src/services/fleetIntelligenceService');
+            await autoAssignNearestDriver(order.id, ioInstance).catch(() => null);
+          }
+
+          console.log(`[Cron] Auto-reassigned stuck order ${order.id} from driver ${order.driver_id}`);
+        } catch (orderErr) {
+          console.warn(`[Cron] Failed to reassign order ${order.id}:`, orderErr.message);
+        }
+      }
+    } catch (e) {
+      console.warn('[Cron] Stuck order detection error:', e.message);
+    }
+  });
+
   return { app, server, io };
 }
 
