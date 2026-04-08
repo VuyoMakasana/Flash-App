@@ -167,12 +167,12 @@ export const driverApi = {
     registerToken: (push_token) =>
       request('POST', '/api/drivers/push-token', { push_token }),
   },
-  // FIX 5: Added cash OTP API methods — driver app had no way to call the existing backend cash OTP endpoints
+  // FIXED: Corrected endpoint URLs to match backend payment routes — previous URLs returned 404 on every cash OTP attempt
   payments: {
     sendCashOtp: (orderId) =>
-      request('POST', '/api/payments/send-cash-otp', { orderId }),
+      request('POST', '/api/payments/cash/send-otp', { orderId }),
     confirmCashReceived: (orderId, otp) =>
-      request('POST', '/api/payments/confirm-cash', { orderId, otp }),
+      request('POST', '/api/payments/cash/confirm', { orderId, otp }),
   },
 };
 
