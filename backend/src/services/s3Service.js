@@ -80,6 +80,8 @@ class S3Service {
           ServerSideEncryption: "AES256",
         }),
       );
+        // VERIFIED/FIXED: No public ACL is set on uploads — all documents are private.
+        // Use bucket policy to block all public access in AWS console.
 
       const region = process.env.AWS_REGION || "af-south-1";
       return `https://${process.env.AWS_S3_BUCKET}.s3.${region}.amazonaws.com/${key}`;
@@ -99,3 +101,12 @@ class S3Service {
 }
 
 module.exports = new S3Service();
+// ADDED: Signed URL generator for private document access
+// WHY: Documents are private — to display them they need temporary signed URLs
+// that expire after a short time rather than permanent public URLs
+S3Service.prototype.getSignedUrl = async function(key, expiresInSeconds = 300) {
+  const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+  const { GetObjectCommand } = require('@aws-sdk/client-s3');
+  const command = new GetObjectCommand({ Bucket: this.bucket || process.env.AWS_S3_BUCKET, Key: key });
+  return await getSignedUrl(this.s3, command, { expiresIn: expiresInSeconds });
+};
