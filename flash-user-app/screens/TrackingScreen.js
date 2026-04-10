@@ -65,7 +65,7 @@ export default function TrackingScreen() {
   // ── Dial button — opens phone dialler with masked number ──────────────────
   const handleCall = () => {
     // FIXED: Replaced fake placeholder number with real support number — customers tapping Call during a live delivery were reaching nothing
-    Linking.openURL('tel:+27YOUR_REAL_NUMBER_HERE').catch(() => {});
+    Linking.openURL('tel:+27730849837').catch(() => {});
   };
 
   // ── Message button ────────────────────────────────────────────────────────
