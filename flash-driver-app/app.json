@@ -11,7 +11,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "co.za.flash.driverapp",
       "config": {
-        "googleMapsApiKey": "AIzaSyC_driver_ios_f1e2d3c4b5a6z9y8x7w6v5u4t"
+        "googleMapsApiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
       }
     },
     "android": {
@@ -19,7 +19,7 @@
       "package": "co.za.flash.driverapp",
       "config": {
         "googleMaps": {
-          "apiKey": "AIzaSyC_driver_android_s3r4q5p6o7n8m9l0k1j2i3h4g"
+          "apiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
         }
       }
     },
