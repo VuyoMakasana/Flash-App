@@ -256,6 +256,66 @@ function createApp() {
     }
   });
 
+  // NO-DRIVER AUTO-CANCEL: Runs every 15 minutes
+  // WHY: When a user pays and no drivers are available, their money is trapped
+  // in a pending order with no resolution. After 30 minutes in waiting_for_driver
+  // we automatically cancel and trigger a full refund so users are not left stranded.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const stuckPaidOrders = await pool.query(`
+        SELECT o.id, o.user_id, o.payment_method, o.payment_status, o.total
+        FROM orders o
+        WHERE o.status = 'waiting_for_driver'
+          AND o.payment_status = 'paid'
+          AND o.updated_at < NOW() - INTERVAL '30 minutes'
+          AND o.driver_id IS NULL
+      `);
+
+      for (const order of stuckPaidOrders.rows) {
+        try {
+          const { updateOrderStatus } = require('./src/services/orderStateMachineService');
+          const RefundService = require('./src/services/refundService');
+          const pool2 = require('./src/config/database');
+          const ioInstance = runtime.io;
+
+          await pool2.query(
+            `INSERT INTO order_cancellations (order_id, cancelled_by_id, cancelled_by_role, reason, refund_mode)
+             VALUES ($1, $1, 'system', 'no_driver_available_timeout', 'full_refund')`,
+            [order.id]
+          );
+
+          await updateOrderStatus(order.id, 'cancelled', {
+            actorId: 'system',
+            actorRole: 'system',
+            io: ioInstance,
+          });
+
+          if (['card', 'payflex'].includes(order.payment_method) && order.payment_status === 'paid') {
+            await RefundService.refundOrderPayment(
+              order.id,
+              order.user_id,
+              'no_driver_available_timeout'
+            ).catch(e => console.warn(`[Cron] Refund failed for ${order.id}:`, e.message));
+          }
+
+          if (ioInstance) {
+            ioInstance.to(`user:${order.user_id}`).emit('order_update', {
+              orderId: order.id,
+              status: 'cancelled',
+              message: 'No drivers were available. Your order has been cancelled and a full refund has been initiated.',
+            });
+          }
+
+          console.log(`[Cron] Auto-cancelled no-driver order ${order.id} and initiated refund`);
+        } catch (orderErr) {
+          console.warn(`[Cron] Failed to auto-cancel order ${order.id}:`, orderErr.message);
+        }
+      }
+    } catch (e) {
+      console.warn('[Cron] No-driver auto-cancel error:', e.message);
+    }
+  });
+
   return { app, server, io };
 }
 
