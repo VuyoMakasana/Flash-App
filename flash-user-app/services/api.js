@@ -47,6 +47,15 @@ async function request(method, path, body = null, isPublic = false) {
       const data = await parseResponse(response);
 
       if (!response.ok) {
+        // 401 INTERCEPTOR: Token expired or invalid — clear storage and force re-login
+        // WHY: Without this, users with expired tokens see confusing error messages
+        // on whatever screen they're on and have no way to recover except reinstalling
+        if (response.status === 401) {
+          try {
+            await AsyncStorage.multiRemove(['FLASH_TOKEN', 'FLASH_USER']);
+          } catch (_) {}
+          throw new Error('SESSION_EXPIRED');
+        }
         if (attempt < maxAttempts && shouldRetry(method, response.status, '')) {
           await sleep(attempt * 250);
           continue;

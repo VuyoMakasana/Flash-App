@@ -207,6 +207,17 @@ export const FlashProvider = ({ children }) => {
     setOrders([]);
   }, []);
 
+  // SESSION EXPIRY HANDLER: Called when any API call returns 401
+  // WHY: Centralises logout logic so any screen that catches SESSION_EXPIRED
+  // can call this and the user is cleanly redirected to the login screen
+  const handleSessionExpired = useCallback(async () => {
+    await AsyncStorage.multiRemove([STORAGE_KEYS.token, STORAGE_KEYS.user]);
+    setToken(null);
+    setUser(null);
+    setOrders([]);
+    setCart([]);
+  }, []);
+
   // ─── CART ─────────────────────────────
   const addToCart = useCallback((product, size, quantity) => {
     if (!size) return;
@@ -296,12 +307,13 @@ export const FlashProvider = ({ children }) => {
     register,
     acceptTermsAndAuthenticate,
     logout,
+    handleSessionExpired,
     updateProfile,
   }), [
     hydrated, isAuthenticated, user, token, profile, subscription,
     cart, addToCart, updateCartQuantity, removeCartItem, clearCart,
     placeOrder, fetchOrders, orders, requestReturn, products,
-    login, register, acceptTermsAndAuthenticate, logout, updateProfile,
+    login, register, acceptTermsAndAuthenticate, logout, handleSessionExpired, updateProfile,
   ]);
 
   return <FlashContext.Provider value={value}>{children}</FlashContext.Provider>;

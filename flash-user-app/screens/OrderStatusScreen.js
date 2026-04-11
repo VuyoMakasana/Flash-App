@@ -92,6 +92,8 @@ export default function OrderStatusScreen() {
             await requestReturn(order.id, 'Customer requested return');
             Alert.alert('Return Requested', 'Our team will contact you within 24 hours.');
           } catch (e) {
+            // Handle session expiry gracefully — don't show error, just redirect to login
+            if (e.message === 'SESSION_EXPIRED') return;
             Alert.alert('Error', 'Could not submit return request.');
           } finally {
             setReturning(false);
