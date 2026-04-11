@@ -86,6 +86,7 @@ export default function ProfileScreen() {
           { icon: 'body-outline',    label: 'Size Profile',    sublabel: 'AI size match', color: '#7c3aed', onPress: () => navigation.navigate('Sizing') },
           { icon: 'card-outline',    label: 'Saved Cards',     sublabel: 'Manage payment cards', color: '#2563eb', onPress: () => navigation.navigate('SavedCards') },
           { icon: 'people-outline',  label: 'Trusted Drivers', sublabel: 'Your preferred drivers', color: '#059669', onPress: () => navigation.navigate('TrustedDrivers') },
+          { icon: 'gift-outline',    label: 'Store Credits',   sublabel: 'Your return credits', color: '#f59e0b', onPress: () => navigation.navigate('StoreCredits') },
         ].map(item => (
           <Pressable key={item.label} style={styles.featureRow} onPress={item.onPress}>
             <View style={[styles.featureIcon, { backgroundColor: item.color + '15' }]}>
