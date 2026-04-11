@@ -130,6 +130,24 @@ export default function OrderStatusScreen() {
           </View>
         )}
 
+        {/* NO-DRIVER WARNING: Shows when order is paid but no driver found after 10 minutes */}
+        {/* WHY: Users need to know their order is waiting and they can cancel for a full refund */}
+        {order.status === 'waiting_for_driver' && order.payment_status === 'paid' && (() => {
+          const waitingMins = Math.floor((Date.now() - new Date(order.updated_at).getTime()) / 60000);
+          if (waitingMins < 10) return null;
+          return (
+            <View style={styles.noDriverBanner}>
+              <Ionicons name="alert-circle-outline" size={16} color="#b45309" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.noDriverTitle}>Finding a driver...</Text>
+                <Text style={styles.noDriverBody}>
+                  No drivers are available yet. Your order will auto-cancel and refund in full if no driver is found within 30 minutes. You can also cancel now for an immediate full refund.
+                </Text>
+              </View>
+            </View>
+          );
+        })()}
+
         <View style={styles.steps}>
           {STEPS.map((step, idx) => {
             const done = currentRank >= ORDER_RANK[step.key];
@@ -215,6 +233,9 @@ const styles = StyleSheet.create({
   total: { fontSize: 28, fontWeight: '900', color: '#0a0a0a' },
   pendingBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
   pendingBannerText: { color: '#92400e', fontWeight: '700', fontSize: 12 },
+  noDriverBanner: { flexDirection: 'row', gap: 10, backgroundColor: '#fffbeb', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#fde68a' },
+  noDriverTitle: { color: '#92400e', fontWeight: '700', fontSize: 13, marginBottom: 3 },
+  noDriverBody: { color: '#78350f', fontSize: 12, lineHeight: 18 },
   steps: { gap: 0, marginTop: 8 },
   stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   stepLeft: { alignItems: 'center', width: 28 },
