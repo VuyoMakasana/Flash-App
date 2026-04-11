@@ -3,12 +3,18 @@ import {
   View, Text, StyleSheet, Pressable, FlatList,
   Image, ScrollView, Alert, ActivityIndicator, TextInput,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
 import api from '../services/api';
 
 const TIME_SLOTS = ['ASAP', '10:00 - 12:00', '12:00 - 14:00', '17:00 - 19:00'];
+
+// CHECKOUT PERSISTENCE: Key for saving checkout draft to AsyncStorage
+// WHY: Users who kill the app mid-checkout lose their address and driver selection
+// This restores their progress when they return
+const CHECKOUT_DRAFT_KEY = 'FLASH_CHECKOUT_DRAFT';
 
 export default function CheckoutScreen() {
   const navigation = useNavigation();
@@ -33,6 +39,38 @@ export default function CheckoutScreen() {
     return 35;
   }, [cart.length, deliveryMode, selectedDrv]);
   const total = subtotal + deliveryFee;
+
+  // Restore checkout draft on mount — recover state if app was killed mid-checkout
+  useEffect(() => {
+    const restoreDraft = async () => {
+      try {
+        const draft = await AsyncStorage.getItem(CHECKOUT_DRAFT_KEY);
+        if (draft) {
+          const parsed = JSON.parse(draft);
+          if (parsed.name) setName(parsed.name);
+          if (parsed.phone) setPhone(parsed.phone);
+          if (parsed.email) setEmail(parsed.email);
+          if (parsed.address) setAddress(parsed.address);
+          if (parsed.slot) setSlot(parsed.slot);
+          if (parsed.deliveryMode) setDeliveryMode(parsed.deliveryMode);
+        }
+      } catch (_) {}
+    };
+    restoreDraft();
+  }, []);
+
+  // Save checkout draft whenever form fields change
+  // WHY: Persists state so user can recover if they kill the app
+  useEffect(() => {
+    const saveDraft = async () => {
+      try {
+        await AsyncStorage.setItem(CHECKOUT_DRAFT_KEY, JSON.stringify({
+          name, phone, email, address, slot, deliveryMode,
+        }));
+      } catch (_) {}
+    };
+    saveDraft();
+  }, [name, phone, email, address, slot, deliveryMode]);
 
   // ── Fetch real nearby drivers when user picks "pick a driver" ─────────────
   const fetchDrivers = useCallback(async () => {
@@ -81,6 +119,8 @@ export default function CheckoutScreen() {
         dropoffAddress: address.trim(),
         requestedDriverId: deliveryMode === 'pick' ? selectedDriverId : null,
       });
+      // Clear checkout draft after successful order — no longer needed
+      await AsyncStorage.removeItem(CHECKOUT_DRAFT_KEY).catch(() => {});
       navigation.navigate('Payment', {
         orderId: order.id,
         total,
