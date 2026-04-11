@@ -124,7 +124,6 @@ export const driverApi = {
     updateStatus: (orderId, status) => request('PUT', `/api/orders/${orderId}/status`, { status }),
     // Cash OTP flow: driver sends OTP to user then confirms payment with the code
     sendCashOtp: (orderId) => request('POST', '/api/payments/cash/send-otp', { orderId }),
-    confirmCashPayment: (orderId, otp) => request('POST', '/api/payments/cash/confirm', { orderId, otp }),
   },
   earnings: {
     get: () => request('GET', '/api/drivers/earnings'),
@@ -173,6 +172,7 @@ export const driverApi = {
   payments: {
     sendCashOtp: (orderId) =>
       request('POST', '/api/payments/cash/send-otp', { orderId }),
+    // confirmCashReceived is the correct method name — confirmCashPayment was a duplicate and has been removed
     confirmCashReceived: (orderId, otp) =>
       request('POST', '/api/payments/cash/confirm', { orderId, otp }),
   },
