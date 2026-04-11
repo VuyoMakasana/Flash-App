@@ -79,6 +79,39 @@ class DriverController {
         document_type,
         req.file,
       );
+      
+      // ADMIN ALERT: Notify admin when driver uploads documents
+      // WHY: Without this, driver applications are invisible until manually checked.
+      // Admin needs to know when someone is waiting for approval.
+      const allRequiredDocs = ['government_id', 'drivers_license', 'police_certified', 'profile_photo', 'vehicle_registration'];
+      const uploadedTypes = await db.query(
+        `SELECT document_type FROM driver_documents WHERE driver_id = $1 AND verified = false`,
+        [req.userId]
+      );
+      const uploaded = uploadedTypes.rows.map(r => r.document_type);
+      const allDone = allRequiredDocs.every(d => uploaded.includes(d));
+
+      if (allDone) {
+        // Mark driver as documents_submitted
+        await db.query(
+          `UPDATE drivers SET status = 'documents_submitted', updated_at = NOW() WHERE id = $1 AND status = 'pending_documents'`,
+          [req.userId]
+        );
+
+        // Notify admin via socket
+        const io = req.app.get('io');
+        if (io) {
+          io.to('admin').emit('driver_application_ready', {
+            driverId: req.userId,
+            driverName: req.body?.name || 'New Driver',
+            message: 'A driver has submitted all required documents and is awaiting approval.',
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        console.log(`[Driver] All documents submitted for driver ${req.userId} — ready for review`);
+      }
+      
       res.json(result);
     } catch (err) {
       console.error(err);
