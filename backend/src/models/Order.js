@@ -1,5 +1,6 @@
 const BaseModel = require("./BaseModel");
 const { v4: uuidv4 } = require("uuid");
+const { randomBytes } = require("crypto");
 
 class Order extends BaseModel {
   static tableName = "orders";
@@ -32,7 +33,10 @@ class Order extends BaseModel {
       dropoff_lng,
     } = orderData;
 
-    const orderNumber = `FLASH-${Date.now().toString(36).toUpperCase()}`;
+    // FIXED: Added random suffix to order number to prevent collision at same millisecond
+    // WHY: Date.now() alone is not unique when two requests arrive simultaneously.
+    // Adding 4 random hex characters makes collision probability negligible.
+    const orderNumber = `FLASH-${Date.now().toString(36).toUpperCase()}-${randomBytes(2).toString('hex').toUpperCase()}`;
     const computedDeliveryFee = this.calculateDeliveryFee({
       pickupMallId: pickup_mall_id,
       dropoffMallId: dropoff_mall_id,
