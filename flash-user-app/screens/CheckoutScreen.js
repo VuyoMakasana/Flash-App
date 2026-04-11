@@ -87,6 +87,8 @@ export default function CheckoutScreen() {
         requestedDriverId: deliveryMode === 'pick' ? selectedDriverId : null,
       });
     } catch (err) {
+      // Handle session expiry gracefully — don't show error, just redirect to login
+      if (err.message === 'SESSION_EXPIRED') return;
       Alert.alert('Order Failed', err.message || 'Could not place order. Check your connection.');
     } finally {
       setLoading(false);

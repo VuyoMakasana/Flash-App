@@ -138,6 +138,8 @@ export default function PaymentScreen() {
       }
 
     } catch (err) {
+      // Handle session expiry gracefully — don't show error, just redirect to login
+      if (err.message === 'SESSION_EXPIRED') return;
       Alert.alert('Payment Failed', err.message || 'Could not process payment. Please try again.');
     } finally {
       setLoading(false);

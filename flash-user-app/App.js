@@ -3,7 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
-import { StatusBar } from 'expo-status-bar';
+import { StatusBar, ErrorUtils } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { FlashProvider, useFlash } from './context/FlashContext';
 import { View, ActivityIndicator } from 'react-native';
@@ -33,6 +33,7 @@ import FeedScreen from './screens/FeedScreen';
 import ChatScreen from './screens/ChatScreen';
 import TrustedDriversScreen from './screens/TrustedDriversScreen';
 import PrivacyPolicyScreen from './screens/PrivacyPolicyScreen';
+import StoreCreditsScreen from './screens/StoreCreditsScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -85,6 +86,8 @@ function ProfileStack() {
       <Stack.Screen name="SavedCards" component={SavedCardsScreen} options={{ title: 'Saved Cards' }} />
       <Stack.Screen name="Sizing" component={SizingScreen} options={{ title: 'Size Profile' }} />
       <Stack.Screen name="TrustedDrivers" component={TrustedDriversScreen} options={{ title: 'Trusted Drivers' }} />
+      {/* ADDED: Store Credits screen — shows user their return credit balance */}
+      <Stack.Screen name="StoreCredits" component={StoreCreditsScreen} options={{ title: 'Store Credits', ...headerStyles }} />
       <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} options={{ title: 'Privacy Policy', ...headerStyles }} />
     </Stack.Navigator>
   );
@@ -106,7 +109,22 @@ function AuthStack() {
 }
 
 function AppNavigator() {
-  const { isAuthenticated, loading } = useFlash();
+  const { isAuthenticated, loading, handleSessionExpired } = useFlash();
+
+  // SESSION EXPIRY: Listen for expired token errors anywhere in the app
+  // WHY: Any screen that gets a SESSION_EXPIRED error from the API service
+  // needs to trigger logout — this handles it at the navigator level
+  React.useEffect(() => {
+    const originalHandler = ErrorUtils.getGlobalHandler();
+    ErrorUtils.setGlobalHandler((error, isFatal) => {
+      if (error?.message === 'SESSION_EXPIRED') {
+        handleSessionExpired();
+        return;
+      }
+      originalHandler(error, isFatal);
+    });
+    return () => ErrorUtils.setGlobalHandler(originalHandler);
+  }, [handleSessionExpired]);
 
   if (loading) {
     return (
