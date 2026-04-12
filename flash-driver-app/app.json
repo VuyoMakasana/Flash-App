@@ -25,7 +25,9 @@
     },
     "plugins": [
       "expo-location",
+      "expo-notifications",
       "expo-document-picker"
-    ]
+    ],
+    "scheme": "flash-driver"
   }
 }

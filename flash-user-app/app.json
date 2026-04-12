@@ -25,6 +25,7 @@
     },
     "plugins": [
       "expo-location",
+      "expo-notifications",
       [
         "expo-build-properties",
         {
