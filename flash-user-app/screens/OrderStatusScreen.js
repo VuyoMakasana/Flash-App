@@ -206,22 +206,22 @@ export default function OrderStatusScreen() {
           }
         </Pressable>
       )}
-    </ScrollView>
 
-        {/* IMPROVED: Added clear refund timeline messaging — users were getting no information
-            after cancellation and messaging support constantly asking where their money was */}
-        {order.payment_status === 'refunded' && (
-          <View style={styles.refundBanner}>
-            <Ionicons name="checkmark-circle" size={16} color="#10b981" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.refundTitle}>Refund Initiated</Text>
-              <Text style={styles.refundBody}>
-                Your refund has been submitted to Paystack. It will appear in your account within 5–10 business days depending on your bank. No action needed from you.
-              </Text>
-            </View>
+      {/* FIXED: Refund banner moved inside the single ScrollView.
+          It was placed after the closing </ScrollView> tag which created
+          invalid JSX and crashed this screen to white for refunded orders. */}
+      {order.payment_status === 'refunded' && (
+        <View style={styles.refundBanner}>
+          <Ionicons name="checkmark-circle" size={16} color="#10b981" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.refundTitle}>Refund Initiated</Text>
+            <Text style={styles.refundBody}>
+              Your refund has been submitted to Paystack. It will appear in your account within 5–10 business days depending on your bank. No action needed from you.
+            </Text>
           </View>
-        )}
-      </ScrollView>
+        </View>
+      )}
+    </ScrollView>
   );
 }
 
