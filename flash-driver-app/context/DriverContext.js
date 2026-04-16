@@ -95,6 +95,16 @@ export const DriverProvider = ({ children }) => {
     setActiveOrder(null);
   }, []);
 
+  // SESSION EXPIRY HANDLER: called when any driver API call returns 401
+  // WHY: Centralises the logout-on-expiry logic. The _layout.js global error
+  // handler catches SESSION_EXPIRED errors from any screen and calls this.
+  const handleSessionExpired = useCallback(async () => {
+    await AsyncStorage.multiRemove([STORAGE_KEYS.token, STORAGE_KEYS.driver]);
+    setToken(null);
+    setDriver(null);
+    setActiveOrder(null);
+  }, []);
+
   const refreshProfile = useCallback(async () => {
     try {
       const data = await driverApi.profile.getMe();
@@ -129,6 +139,7 @@ export const DriverProvider = ({ children }) => {
     logout,
     refreshProfile,
     setOnline,
+    handleSessionExpired,
   };
 
   return <DriverContext.Provider value={value}>{children}</DriverContext.Provider>;

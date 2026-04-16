@@ -242,7 +242,7 @@ function createApp() {
 
           // Attempt auto-reassign for fleet orders
           if (order.delivery_mode === 'fleet') {
-            const { autoAssignNearestDriver } = require('./src/services/fleetIntelligenceService');
+            const { autoAssignNearestDriver } = require('./services/fleetIntelligenceService');
             await autoAssignNearestDriver(order.id, ioInstance).catch(() => null);
           }
 
@@ -273,9 +273,9 @@ function createApp() {
 
       for (const order of stuckPaidOrders.rows) {
         try {
-          const { updateOrderStatus } = require('./src/services/orderStateMachineService');
-          const RefundService = require('./src/services/refundService');
-          const pool2 = require('./src/config/database');
+          const { updateOrderStatus } = require('./services/orderStateMachineService');
+          const RefundService = require('./services/refundService');
+          const pool2 = require('./config/database');
           const ioInstance = runtime.io;
 
           await pool2.query(

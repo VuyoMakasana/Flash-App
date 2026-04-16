@@ -51,6 +51,15 @@ async function request(method, path, body = null, isPublic = false) {
       const data = await parseResponse(response);
 
       if (!response.ok) {
+        // 401 INTERCEPTOR: Expired or invalid driver token — clear storage and force re-login
+        // WHY: Without this, drivers with expired tokens get a confusing error mid-shift
+        // and get stuck. They need a clean logout and redirect to the login screen.
+        if (response.status === 401) {
+          try {
+            await AsyncStorage.multiRemove(['FLASH_DRIVER_TOKEN', 'FLASH_DRIVER']);
+          } catch (_) {}
+          throw new Error('SESSION_EXPIRED');
+        }
         if (attempt < maxAttempts && shouldRetry(method, response.status, '')) {
           await sleep(attempt * 250);
           continue;

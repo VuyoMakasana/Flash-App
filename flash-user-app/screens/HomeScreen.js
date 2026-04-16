@@ -14,13 +14,22 @@ export default function HomeScreen() {
   const { products, cart, user } = useFlash();
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
+  // ADDED: Store filter for multi-shop support — shows products from all shops by default
+  // WHY: Backend supports store_id per product. Without this UI filter, two shops'
+  // products appear in one undifferentiated list with no way to browse by shop.
+  const [activeStore, setActiveStore] = useState('all');
 
   const cartCount = cart.reduce((sum, i) => sum + i.quantity, 0);
+
+  // Build unique store list from products — 'all' is always first
+  const stores = ['all', ...Array.from(new Set(products.map(p => p.storeId).filter(Boolean)))];
 
   const filtered = products.filter(p => {
     const matchCat = activeCategory === 'All' || p.category === activeCategory;
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase());
-    return matchCat && matchSearch;
+    // Filter by selected store — 'all' shows every product
+    const matchStore = activeStore === 'all' || p.storeId === activeStore;
+    return matchCat && matchSearch && matchStore;
   });
 
   return (
@@ -59,6 +68,23 @@ export default function HomeScreen() {
           </Pressable>
         )}
       </View>
+
+      {/* Store filter — only shows when there are multiple shops */}
+      {stores.length > 1 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cats} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
+          {stores.map(store => (
+            <Pressable
+              key={store}
+              style={[styles.cat, activeStore === store && styles.catActive]}
+              onPress={() => setActiveStore(store)}
+            >
+              <Text style={[styles.catText, activeStore === store && styles.catTextActive]}>
+                {store === 'all' ? '🏪 All Shops' : store}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      )}
 
       {/* Categories */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cats} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>

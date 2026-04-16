@@ -1,5 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// REQUEST_TIMEOUT_MS: abort any API call that takes longer than 15 seconds
+// WHY: Without this constant the request function throws a ReferenceError
+// on every single API call, crashing the entire app immediately at startup
+const REQUEST_TIMEOUT_MS = 15000;
+
 // FIX 1: Changed hardcoded LAN IP to production server URL — the old IP was a local Tailscale address that fails for every user outside the developer's network
 const DEFAULT_BASE_URL = 'https://flash-app-hplc.onrender.com';
 export const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_BASE_URL;

@@ -1,7 +1,7 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, ErrorUtils } from 'react-native';
 import { DriverProvider, useDriver } from '../context/DriverContext';
 
 // ADDED: Sentry crash reporting for driver app — catches crashes on driver devices
@@ -11,9 +11,25 @@ if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
 }
 
 function RootLayoutNav() {
-  const { isAuthenticated, loading, driver } = useDriver();
+  const { isAuthenticated, loading, driver, handleSessionExpired } = useDriver();
   const router = useRouter();
   const segments = useSegments();
+
+  // SESSION EXPIRY: Intercept SESSION_EXPIRED errors thrown by the driver api.js
+  // 401 handler anywhere in the app and cleanly log the driver out.
+  // WHY: Without this, a driver with an expired token mid-shift gets a confusing
+  // generic error and gets stuck — they need an automatic redirect to login.
+  useEffect(() => {
+    const originalHandler = ErrorUtils.getGlobalHandler();
+    ErrorUtils.setGlobalHandler((error, isFatal) => {
+      if (error?.message === 'SESSION_EXPIRED') {
+        handleSessionExpired();
+        return;
+      }
+      originalHandler(error, isFatal);
+    });
+    return () => ErrorUtils.setGlobalHandler(originalHandler);
+  }, [handleSessionExpired]);
 
   useEffect(() => {
     if (loading) return;
