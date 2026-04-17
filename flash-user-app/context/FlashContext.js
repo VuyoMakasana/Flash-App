@@ -202,6 +202,7 @@ export const FlashProvider = ({ children }) => {
 
   const logout = useCallback(async () => {
     await AsyncStorage.multiRemove([STORAGE_KEYS.token, STORAGE_KEYS.user]);
+    await AsyncStorage.removeItem('FLASH_CHECKOUT_DRAFT');
     setToken(null);
     setUser(null);
     setOrders([]);
