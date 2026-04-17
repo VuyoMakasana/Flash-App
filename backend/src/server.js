@@ -135,6 +135,10 @@ function createApp() {
 // Setup Socket.IO
   setupSocket(io);
 
+
+// Capture io for use in crons — avoids referencing 'runtime' before assignment
+let _io = io;
+
     // ADDED: Redis adapter for Socket.IO — activates when REDIS_URL is set
     // WHY: Without Redis, running two backend instances causes socket events (driver
     // location, order updates) to only reach users connected to the same instance.
@@ -148,9 +152,9 @@ function createApp() {
           const subClient = pubClient.duplicate();
           await Promise.all([pubClient.connect(), subClient.connect()]);
           io.adapter(createAdapter(pubClient, subClient));
-          console.log('[Redis] ✅ Socket.IO Redis adapter connected');
+          console.log('[Redis]  Socket.IO Redis adapter connected');
         } catch (redisErr) {
-          console.warn('[Redis] ⚠️  Redis unavailable — running single-instance mode:', redisErr.message);
+          console.warn('[Redis]   Redis unavailable — running single-instance mode:', redisErr.message);
         }
       })();
     }
@@ -231,7 +235,7 @@ function createApp() {
           );
 
           // Notify user
-          const ioInstance = runtime.io;
+          const ioInstance = _io;
           if (ioInstance) {
             ioInstance.to(`user:${order.user_id}`).emit('order_update', {
               orderId: order.id,
@@ -279,9 +283,9 @@ function createApp() {
           const ioInstance = runtime.io;
 
           await pool2.query(
-            `INSERT INTO order_cancellations (order_id, cancelled_by_id, cancelled_by_role, reason, refund_mode)
-             VALUES ($1, $1, 'system', 'no_driver_available_timeout', 'full_refund')`,
-            [order.id]
+            `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
+ VALUES ($1, 'system', 'no_driver_available_timeout', 'full_refund')`,
+[order.id]
           );
 
           await updateOrderStatus(order.id, 'cancelled', {
@@ -324,10 +328,10 @@ function startServer() {
   const { app, server, io } = createApp();
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, () => {
-    console.log(`\n✨ Flash Backend v3.0 (MVC) on port ${PORT}`);
-    console.log(`🧹 Cleanup cron scheduled (daily 3am)`);
-    console.log(`📡 Socket.IO ready for real-time events`);
-    console.log(`🚀 Server is running!\n`);
+    console.log(`\n Flash Backend v3.0 (MVC) on port ${PORT}`);
+    console.log(` Cleanup cron scheduled (daily 3am)`);
+    console.log(` Socket.IO ready for real-time events`);
+    console.log(`Server is running!\n`);
   });
   return { app, server, io };
 }
