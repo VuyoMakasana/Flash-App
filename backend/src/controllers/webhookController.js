@@ -6,6 +6,7 @@ const { autoAssignNearestDriver } = require('../services/fleetIntelligenceServic
 const { updateOrderStatus } = require('../services/orderStateMachineService');
 const { notifyDriversNewOrder } = require('../services/notificationService');
 const PayoutService = require('../services/payoutService');
+const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
 
 class WebhookController {
 
@@ -174,25 +175,53 @@ class WebhookController {
         console.warn('[Webhook] paid transition skipped:', transitionErr.message);
       }
 
-      try {
-        await updateOrderStatus(orderId, 'waiting_for_driver', {
-          actorId: String(event.id || 'paystack'),
-          actorRole: 'webhook',
-          io,
-        });
-      } catch (transitionErr) {
-        console.warn('[Webhook] waiting_for_driver transition skipped:', transitionErr.message);
+      if (isClosedNow()) {
+        // Outside operating hours — hold order until morning
+        const openAt = getNextOpenTime();
+        await pool.query(
+          `UPDATE orders SET scheduled_for = $1, updated_at = NOW() WHERE id = $2`,
+          [openAt, orderId]
+        );
+        try {
+          await updateOrderStatus(orderId, 'scheduled_for_morning', {
+            actorId: String(event.id || 'paystack'),
+            actorRole: 'webhook',
+            io,
+          });
+        } catch (e) {
+          console.warn('[Webhook] scheduled_for_morning transition skipped:', e.message);
+        }
+        if (io) {
+          io.to(`user:${userId}`).emit('payment_confirmed', { orderId, scheduled: true, openAt });
+          io.to(`user:${userId}`).emit('order_scheduled', {
+            orderId,
+            openAt: openAt.toISOString(),
+            message: `Flash opens at 07:00. Your order will be assigned to a driver then.`,
+          });
+        }
+        console.log(`[Webhook] Card order ${orderId} scheduled for morning — outside operating hours`);
+      } else {
+        // Within operating hours — release immediately
+        try {
+          await updateOrderStatus(orderId, 'waiting_for_driver', {
+            actorId: String(event.id || 'paystack'),
+            actorRole: 'webhook',
+            io,
+          });
+        } catch (transitionErr) {
+          console.warn('[Webhook] waiting_for_driver transition skipped:', transitionErr.message);
+        }
+
+        if (io) {
+          io.to(`user:${userId}`).emit('payment_confirmed', { orderId });
+          io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
+        }
+
+        await autoAssignNearestDriver(orderId, io).catch(() => null);
+
+        // Push notification to online drivers — fire and forget, non-blocking.
+        notifyDriversNewOrder(orderId, false).catch(() => null);
       }
-
-      if (io) {
-        io.to(`user:${userId}`).emit('payment_confirmed', { orderId });
-        io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
-      }
-
-      await autoAssignNearestDriver(orderId, io).catch(() => null);
-
-      // Push notification to online drivers — fire and forget, non-blocking.
-      notifyDriversNewOrder(orderId, false).catch(() => null);
 
     } catch (err) {
       await client.query('ROLLBACK');

@@ -366,6 +366,36 @@ async function migrate() {
     await client.query('COMMIT');
     console.log('Flash database migration v5 completed successfully');
     console.log('   New columns: drivers.cancel_count, drivers.suspended_at, drivers.suspension_reason');
+
+    // v6: Operating hours system
+    // Orders placed between 19:00 and 07:00 SAST are saved as
+    // 'scheduled_for_morning' and released to drivers at 07:00.
+    await client.query('BEGIN');
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS scheduled_for TIMESTAMPTZ`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_scheduled ON orders(scheduled_for) WHERE scheduled_for IS NOT NULL`);
+
+    // Email verification and password reset tokens
+    await client.query(`CREATE TABLE IF NOT EXISTS email_tokens (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token VARCHAR(128) NOT NULL UNIQUE,
+      type VARCHAR(30) NOT NULL CHECK (type IN ('email_verification', 'password_reset')),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_email_tokens_token ON email_tokens(token)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON email_tokens(user_id, type)`);
+
+    // email_verified column on users
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v6 completed successfully');
+    console.log('   New column: orders.scheduled_for (used by operating-hours cron)');
+    console.log('   New table: email_tokens (email verification + password reset)');
+    console.log('   New columns: users.email_verified, users.email_verified_at');
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);

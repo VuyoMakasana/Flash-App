@@ -14,6 +14,7 @@ const { autoAssignNearestDriver } = require("../services/fleetIntelligenceServic
 const PayoutService = require("../services/payoutService");
 const paystackService = require("../services/paystackService");
 const { saveDriverPushToken } = require("../services/notificationService");
+const { isClosedNow } = require("../services/operatingHoursService");
 
 class DriverController {
   static async getProfile(req, res) {
@@ -148,6 +149,15 @@ class DriverController {
 
   static async getAvailableOrders(req, res) {
     try {
+      // Outside operating hours drivers cannot accept new orders
+      if (isClosedNow()) {
+        return res.json({
+          orders: [],
+          closed: true,
+          message: 'Flash is currently closed. Orders are available 07:00 – 19:00 SAST.',
+        });
+      }
+
       const subCheck = await checkDriverSubscriptionAllowed(req.userId);
       if (!subCheck.allowed) {
         return res

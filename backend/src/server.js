@@ -128,6 +128,22 @@ function createApp() {
     }),
   );
 
+  // Operating hours status — used by both apps to show open/closed banner
+  app.get("/api/status/hours", (req, res) => {
+    const { isWithinOperatingHours, getNextOpenTime } = require('./services/operatingHoursService');
+    const open = isWithinOperatingHours();
+    res.json({
+      open,
+      openHour: '07:00',
+      closeHour: '19:00',
+      timezone: 'SAST (UTC+2)',
+      nextOpenAt: open ? null : getNextOpenTime().toISOString(),
+      message: open
+        ? 'Flash is open for deliveries'
+        : 'Flash is closed. Orders placed now will be delivered from 07:00.',
+    });
+  });
+
 // 404 and error handlers
   app.use(notFound);
   app.use(errorHandler);
@@ -190,7 +206,41 @@ let _io = io;
     }
   });
 
-  // ADDED: Stuck order detection and auto-reassignment cron — runs every 10 minutes
+  // OPERATING HOURS: Every day at 07:00 SAST (05:00 UTC), release all orders
+  // that were placed overnight and are waiting in 'scheduled_for_morning'.
+  // These are converted to 'waiting_for_driver' so drivers can start accepting them.
+  cron.schedule('0 5 * * *', async () => {
+    try {
+      const { updateOrderStatus } = require('./services/orderStateMachineService');
+      const scheduledOrders = await pool.query(
+        `SELECT id, user_id FROM orders
+         WHERE status = 'scheduled_for_morning'
+           AND (scheduled_for IS NULL OR scheduled_for <= NOW())`
+      );
+      for (const order of scheduledOrders.rows) {
+        try {
+          await updateOrderStatus(order.id, 'waiting_for_driver', {
+            actorId: 'system',
+            actorRole: 'system',
+            io: _io,
+          });
+          if (_io) {
+            _io.to(`user:${order.user_id}`).emit('order_update', {
+              orderId: order.id,
+              status: 'waiting_for_driver',
+              message: 'Good morning! Flash is now open. Your order is being assigned to a driver.',
+            });
+          }
+          console.log(`[OperatingHours] Released scheduled order ${order.id} to driver pool`);
+        } catch (e) {
+          console.warn(`[OperatingHours] Failed to release order ${order.id}:`, e.message);
+        }
+      }
+      console.log(`[OperatingHours] Released ${scheduledOrders.rows.length} scheduled orders at open`);
+    } catch (e) {
+      console.warn('[OperatingHours] Morning release cron error:', e.message);
+    }
+  });
   // WHY: Drivers can accept an order and go offline with no consequence. Orders would
   // stay stuck in driver_assigned forever with no customer alert and no resolution.
   cron.schedule('*/10 * * * *', async () => {
@@ -280,7 +330,7 @@ let _io = io;
           const { updateOrderStatus } = require('./services/orderStateMachineService');
           const RefundService = require('./services/refundService');
           const pool2 = require('./config/database');
-          const ioInstance = runtime.io;
+          const ioInstance = _io;
 
           await pool2.query(
             `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)

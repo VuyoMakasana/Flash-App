@@ -164,8 +164,8 @@ export const driverApi = {
   // ── Bank account setup for payouts ─────────────────────────────────────────
   // ADDED: Bank account API methods — needed for driver payout account setup screen
   bank: {
-    getBanks: () => request('GET', '/api/drivers/banks'),
-    getSupportedBanks: () => request('GET', '/api/drivers/banks'),
+    getBanks: () => request('GET', '/api/drivers/bank/supported-banks'),
+    getSupportedBanks: () => request('GET', '/api/drivers/bank/supported-banks'),
     verifyAccount: (account_number, bank_code) =>
       request('POST', '/api/drivers/bank/verify', { account_number, bank_code }),
     saveAccount: (account_number, bank_code, account_name) =>

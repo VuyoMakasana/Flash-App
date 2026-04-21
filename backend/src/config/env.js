@@ -27,7 +27,7 @@ function getRequired(key, scope = "config") {
     if (isProd) {
       throw new Error(msg);
     }
-    console.warn(`[${scope}] ⚠️  ${msg}`);
+    console.warn(`[${scope}]   ${msg}`);
     return null;
   }
 
@@ -51,7 +51,7 @@ function getRequired(key, scope = "config") {
 
   if (isPlaceholder && isDev) {
     console.warn(
-      `[${scope}] ⚠️  ${key} appears to be a placeholder. Update before production.`,
+      `[${scope}]   ${key} appears to be a placeholder. Update before production.`,
     );
   }
 
@@ -72,7 +72,7 @@ function getOptional(key, scope = "config") {
     value.includes("pk_test_") ||
     value.includes("your_");
   if (isTestValue && isDev) {
-    console.warn(`[${scope}] ℹ️  ${key} is using a test/placeholder value`);
+    console.warn(`[${scope}]   ${key} is using a test/placeholder value`);
   }
 
   return value;
@@ -110,13 +110,13 @@ function validateNotPlaceholder(key, value, scope = "config") {
 function validateDatabaseURL(url, scope = "database") {
   if (!url) {
     if (isProd) throw new Error(`[${scope}] DATABASE_URL is required in production`);
-    console.warn(`[${scope}] ⚠️  DATABASE_URL not set`);
+    console.warn(`[${scope}]   DATABASE_URL not set`);
     return false;
   }
 
   if (url.includes("placeholder") || url === "your_database_url") {
     if (isProd) throw new Error(`[${scope}] DATABASE_URL cannot be placeholder in production`);
-    console.warn(`[${scope}] ⚠️  DATABASE_URL is a placeholder`);
+    console.warn(`[${scope}]   DATABASE_URL is a placeholder`);
     return false;
   }
 
