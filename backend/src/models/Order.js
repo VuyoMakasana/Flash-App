@@ -41,7 +41,12 @@ class Order extends BaseModel {
       pickupMallId: pickup_mall_id,
       dropoffMallId: dropoff_mall_id,
     });
-    const finalDeliveryFee = Number.isFinite(parseFloat(delivery_fee)) ? computedDeliveryFee : computedDeliveryFee;
+    // If the frontend sends a valid positive delivery fee, trust it (user already saw this price).
+    // Otherwise fall back to the server-computed mall-based fee (R90 same mall, R180 different).
+    const parsedFrontendFee = parseFloat(delivery_fee);
+    const finalDeliveryFee = (Number.isFinite(parsedFrontendFee) && parsedFrontendFee > 0)
+      ? parsedFrontendFee
+      : computedDeliveryFee;
     const safeSubtotal = parseFloat(subtotal || 0);
     const finalTotal = safeSubtotal + finalDeliveryFee;
     const driverPayout = Math.round((finalDeliveryFee * 0.75 + 15) * 100) / 100;

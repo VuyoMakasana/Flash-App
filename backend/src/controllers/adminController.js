@@ -45,14 +45,14 @@ class AdminController {
 
         if (!isValid && plainPassword) {
           console.warn(
-            "[Admin Auth] ⚠️  SECURITY: Using plain-text password comparison. Set ADMIN_PASSWORD_HASH before production!",
+            "[Admin Auth]   SECURITY: Using plain-text password comparison. Set ADMIN_PASSWORD_HASH before production!",
           );
           isValid = password === plainPassword;
         }
 
         if (!passwordHash && !plainPassword) {
           console.warn(
-            "[Admin Auth] ⚠️  Neither ADMIN_PASSWORD_HASH nor ADMIN_PASSWORD configured",
+            "[Admin Auth]   Neither ADMIN_PASSWORD_HASH nor ADMIN_PASSWORD configured",
           );
         }
       }

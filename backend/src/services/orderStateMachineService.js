@@ -5,6 +5,7 @@ const ORDER_STATES = [
   "created",
   "payment_pending",
   "paid",
+  "scheduled_for_morning",  // order placed outside operating hours — held until 07:00
   "waiting_for_driver",
   "driver_assigned",
   "driver_arrived_store",
@@ -21,8 +22,9 @@ const LEGACY_STATE_MAP = {
 
 const ALLOWED_TRANSITIONS = {
   created: ["payment_pending", "cancelled"],
-  payment_pending: ["paid", "cancelled"],
-  paid: ["waiting_for_driver", "cancelled"],
+  payment_pending: ["paid", "scheduled_for_morning", "cancelled"],
+  paid: ["waiting_for_driver", "scheduled_for_morning", "cancelled"],
+  scheduled_for_morning: ["waiting_for_driver", "cancelled"],
   waiting_for_driver: ["driver_assigned", "cancelled"],
   driver_assigned: ["driver_arrived_store", "cancelled"],
   driver_arrived_store: ["picked_up", "cancelled"],

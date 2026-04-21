@@ -9,7 +9,7 @@ import api from '../services/api';
 
 const PAYMENT_METHODS = [
   { id: 'card',     label: 'Card / EFT / Capitec Pay', icon: 'card-outline',     description: 'Visa, Mastercard, Instant EFT, Capitec Pay', supported: true },
-  { id: 'payflex',  label: 'Payflex',                  icon: 'calendar-outline', description: 'Buy now, pay in 4 instalments',              supported: true, badge: 'BNPL' },
+  // Payflex (BNPL) removed — integration not yet complete. Re-add when live.
   { id: 'cash',     label: 'Pay on Delivery',           icon: 'cash-outline',     description: 'Pay the driver face-to-face',                supported: true },
 ];
 
@@ -77,15 +77,8 @@ export default function PaymentScreen() {
         return;
       }
 
-      // ── Payflex ────────────────────────────────────────────────────────────
-      if (selected === 'payflex') {
-        const data = await api.payments.initPayflex(orderId);
-        if (data.checkoutUrl) {
-          await Linking.openURL(data.checkoutUrl);
-          await goToOrderStatus(orderId);
-        }
-        return;
-      }
+      // ── Payflex removed — handler kept but unreachable until re-enabled ──────
+      // if (selected === 'payflex') { ... }
 
       if (selected === 'card' && selectedCardId && !useNewCard) {
         const data = await api.payments.chargeSavedCard(orderId, selectedCardId);

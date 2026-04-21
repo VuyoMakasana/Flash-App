@@ -35,8 +35,12 @@ export default function CheckoutScreen() {
   const selectedDrv = realDrivers.find(d => d.id === selectedDriverId);
   const deliveryFee = useMemo(() => {
     if (!cart.length) return 0;
-    if (deliveryMode === 'pick' && selectedDrv) return selectedDrv.estimated_fee || 35;
-    return 35;
+    // Pick-a-driver mode: use the fee the driver quoted (comes from Driver.getNearby)
+    if (deliveryMode === 'pick' && selectedDrv) return selectedDrv.estimated_fee || 90;
+    // Fleet mode: backend charges R90 (same mall) or R180 (different mall).
+    // We default to R90 here — the actual fee is confirmed on the server and
+    // returned in order.delivery_fee after the order is created.
+    return 90;
   }, [cart.length, deliveryMode, selectedDrv]);
   const total = subtotal + deliveryFee;
 

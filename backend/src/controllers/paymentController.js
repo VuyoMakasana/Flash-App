@@ -7,6 +7,7 @@ const { updateOrderStatus } = require("../services/orderStateMachineService");
 const { autoAssignNearestDriver } = require("../services/fleetIntelligenceService");
 const cashOtpService = require("../services/cashOtpService");
 const { notifyDriversNewOrder } = require("../services/notificationService");
+const { isClosedNow, getNextOpenTime } = require("../services/operatingHoursService");
 
 class PaymentController {
   static async initializePayment(req, res) {
@@ -43,12 +44,36 @@ class PaymentController {
     try {
       const result = await Payment.cashOnDelivery(orderId, req.userId, io);
 
-      // Keep delivery lifecycle transitions centralized in the state machine.
+      // Mark as paid first
       await updateOrderStatus(orderId, "paid", {
         actorId: req.userId,
         actorRole: "user",
         io,
       });
+
+      if (isClosedNow()) {
+        // Outside operating hours — schedule for next morning
+        const openAt = getNextOpenTime();
+        await db.query(
+          `UPDATE orders SET scheduled_for = $1, updated_at = NOW() WHERE id = $2`,
+          [openAt, orderId]
+        );
+        await updateOrderStatus(orderId, "scheduled_for_morning", {
+          actorId: req.userId,
+          actorRole: "user",
+          io,
+        });
+        if (io) {
+          io.to(`user:${req.userId}`).emit("order_scheduled", {
+            orderId,
+            openAt: openAt.toISOString(),
+            message: `Flash opens at 07:00. Your order will be assigned to a driver then.`,
+          });
+        }
+        return res.json({ ...result, scheduled: true, openAt });
+      }
+
+      // Within operating hours — queue immediately
       await updateOrderStatus(orderId, "waiting_for_driver", {
         actorId: req.userId,
         actorRole: "user",
@@ -56,7 +81,6 @@ class PaymentController {
       });
 
       await autoAssignNearestDriver(orderId, io).catch(() => null);
-      // Push notification to online drivers — fire and forget, non-blocking.
       notifyDriversNewOrder(orderId, true).catch(() => null);
       res.json(result);
     } catch (err) {
