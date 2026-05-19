@@ -8,7 +8,7 @@ const FlashContext = createContext(null);
 const STORAGE_KEYS = {
   token: 'FLASH_TOKEN',
   user: 'FLASH_USER',
-  cart: 'FLASH_CART',
+  cart: `FLASH_CART_${userId}`,
 };
 
 // ─── PRODUCTS — loaded from backend, hardcoded as fallback ──────────────────
