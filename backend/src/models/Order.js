@@ -49,7 +49,9 @@ class Order extends BaseModel {
       : computedDeliveryFee;
     const safeSubtotal = parseFloat(subtotal || 0);
     const finalTotal = safeSubtotal + finalDeliveryFee;
-    const driverPayout = Math.round((finalDeliveryFee * 0.75 + 15) * 100) / 100;
+    // FIXED Flash always earns minimum R10, driver earns 75% of fee
+const flashCommission = Math.max(10, Math.round(finalDeliveryFee * 0.25 * 100) / 100);
+const driverPayout = Math.round((finalDeliveryFee - flashCommission) * 100) / 100;
 
     return await this.transaction(async (client) => {
       const orderResult = await client.query(
@@ -82,6 +84,27 @@ class Order extends BaseModel {
       );
 
       const order = orderResult.rows[0];
+
+// ADD THIS — check and decrement stock atomically before inserting order items
+for (const item of items) {
+  if (!item.productId || !item.size) continue;
+  const stockResult = await client.query(
+    `SELECT stock_by_size FROM flash_inventory WHERE id = $1 FOR UPDATE`,
+    [item.productId]
+  );
+  if (stockResult.rows.length) {
+    const stock = stockResult.rows[0].stock_by_size || {};
+    const available = parseInt(stock[item.size] || 0);
+    if (available < item.quantity) {
+      throw new Error(`${item.name} size ${item.size} is out of stock`);
+    }
+    const newStock = { ...stock, [item.size]: available - item.quantity };
+    await client.query(
+      `UPDATE flash_inventory SET stock_by_size = $1, updated_at = NOW() WHERE id = $2`,
+      [JSON.stringify(newStock), item.productId]
+    );
+  }
+}
 
       for (const item of items) {
         await client.query(
