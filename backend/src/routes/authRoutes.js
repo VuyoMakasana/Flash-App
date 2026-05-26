@@ -3,6 +3,7 @@ const router  = express.Router();
 const { body } = require("express-validator");
 const AuthController = require("../controllers/authController");
 const { authLimiter } = require("../middleware/rateLimiter");
+const { authenticate } = require("../middleware/auth");
 
 // All auth routes get the strict auth limiter (10 per 15 min)
 router.use(authLimiter);
@@ -20,7 +21,19 @@ router.post("/user/apple",
   [body("identityToken").notEmpty()],
   AuthController.appleSignInUser
 );
-router.post("/user/accept-terms", AuthController.acceptTerms);
+
+router.post(
+  "/user/google",
+  [body("idToken").notEmpty()],
+  AuthController.googleSignInUser
+);
+
+
+router.post(
+  '/user/accept-terms',
+  authenticate,
+  AuthController.acceptTerms
+);
 
 // ── Driver ───────────────────────────────────────────────────────────────────
 router.post("/driver/register",
@@ -35,6 +48,13 @@ router.post("/driver/apple",
   [body("identityToken").notEmpty()],
   AuthController.appleSignInDriver
 );
+
+router.post(
+  "/user/google",
+  [body("idToken").notEmpty()],
+  AuthController.googleSignInUser
+);
+
 
 // ── Token management ─────────────────────────────────────────────────────────
 router.post("/refresh", [body("refreshToken").notEmpty()], AuthController.refreshToken);

@@ -1,11 +1,11 @@
 // src/server.js
 require("dotenv").config();
+const cron = require("node-cron");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const helmet = require("helmet");
 const morgan = require("morgan");
-const cron = require("node-cron");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
@@ -223,6 +223,26 @@ let _io = io;
       console.warn("[Cron] payment reconciliation error:", e.message);
     }
   });
+
+cron.schedule('0 3 * * *', async () => {
+  try {
+    await pool.query(`
+      DELETE FROM revoked_tokens
+      WHERE expires_at < NOW()
+    `);
+
+    console.log(
+      '[CRON] Cleaned expired revoked tokens'
+    );
+  } catch (err) {
+    console.error(
+      '[CRON] Failed revoked token cleanup:',
+      err.message
+    );
+  }
+});
+
+
 
   // OPERATING HOURS: Every day at 07:00 SAST (05:00 UTC), release all orders
   // that were placed overnight and are waiting in 'scheduled_for_morning'.

@@ -21,22 +21,41 @@ module.exports = function setupSocket(io) {
   const jwtSecret = getRequired('JWT_SECRET', 'socket');
 
   // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────
-  io.use((socket, next) => {
-    if (!jwtSecret) {
-      return next(new Error('Socket authentication system misconfigured'));
+  io.use(async (socket, next) => {
+  const token = socket.handshake.auth?.token;
+
+  if (!token) {
+    return next(new Error('Authentication required'));
+  }
+
+  try {
+    const decoded = jwt.verify(token, jwtSecret);
+
+    // Check revoked tokens
+    if (decoded.jti) {
+      const { rows } = await pool.query(
+        `
+        SELECT 1
+        FROM revoked_tokens
+        WHERE jti = $1
+        `,
+        [decoded.jti]
+      );
+
+      if (rows.length) {
+        return next(new Error('Token revoked'));
+      }
     }
 
-    const token = socket.handshake.auth?.token;
-    if (!token) return next(new Error('Authentication required'));
-    try {
-      const decoded = jwt.verify(token, jwtSecret);
-      socket.userId   = decoded.id;
-      socket.userRole = decoded.role;
-      next();
-    } catch (err) {
-      next(new Error('Invalid token'));
-    }
-  });
+    socket.userId = decoded.id;
+    socket.userRole = decoded.role;
+    socket.userStatus = decoded.status || null;
+
+    next();
+  } catch (err) {
+    next(new Error('Invalid token'));
+  }
+});
 
   io.on('connection', (socket) => {
     // Every user/driver joins their personal room immediately
