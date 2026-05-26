@@ -68,11 +68,29 @@ function createApp() {
   }
 
   const server = http.createServer(app);
+
+  // Socket.IO CORS: in production, restrict to known app URLs.
+  // Mobile apps (Expo Go / native) don't send an Origin header so they always pass through.
+  // The wildcard is only dangerous for browser-based attackers, not mobile clients.
+  const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+    : ['https://flash-app-hplc.onrender.com'];
+
   const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] },
+    cors: {
+      origin: process.env.NODE_ENV === 'production'
+        ? (origin, cb) => {
+            // Mobile apps send no origin — always allow
+            if (!origin) return cb(null, true);
+            if (allowedOrigins.includes(origin)) return cb(null, true);
+            cb(new Error(`Socket CORS blocked: ${origin}`));
+          }
+        : '*',
+      methods: ['GET', 'POST'],
+    },
     maxHttpBufferSize: 1e6,
     perMessageDeflate: false,
-    pingTimeout: 60000,
+    pingTimeout:  60000,
     pingInterval: 25000,
   });
 

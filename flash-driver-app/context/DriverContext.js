@@ -6,8 +6,9 @@ import driverApi from '../services/api';
 const DriverContext = createContext(null);
 
 const STORAGE_KEYS = {
-  token: 'FLASH_DRIVER_TOKEN',
-  driver: 'FLASH_DRIVER',
+  token:        'FLASH_DRIVER_TOKEN',
+  driver:       'FLASH_DRIVER',
+  refreshToken: 'FLASH_DRIVER_REFRESH_TOKEN',
 };
 
 // FIX 6: Added push notification registration — drivers were missing new orders when the app was backgrounded because the system relied solely on sockets which disconnect in the background
@@ -67,14 +68,30 @@ export const DriverProvider = ({ children }) => {
   const login = useCallback(async (email, password) => {
     const data = await driverApi.auth.login(email, password);
     await AsyncStorage.multiSet([
-      [STORAGE_KEYS.token, data.token],
-      [STORAGE_KEYS.driver, JSON.stringify(data.driver)],
+      [STORAGE_KEYS.token,        data.token],
+      [STORAGE_KEYS.driver,       JSON.stringify(data.driver)],
+      [STORAGE_KEYS.refreshToken, data.refreshToken || ''],
     ]);
     setToken(data.token);
     setDriver(data.driver);
-    // FIX 6: Register push token after auth so backend can reach this device when app is backgrounded
     await registerPushToken(data.token);
     return data;
+  }, []);
+
+  // Apple Sign In for drivers on iPhone.
+  // New drivers land on document upload. Returning approved drivers go to dashboard.
+  const loginWithApple = useCallback(async (identityToken, fullName, email) => {
+    const data = await driverApi.auth.appleSignIn(identityToken, fullName, email);
+    // Store token regardless — the calling screen reads nextStep to route correctly
+    await AsyncStorage.multiSet([
+      [STORAGE_KEYS.token,        data.token],
+      [STORAGE_KEYS.driver,       JSON.stringify(data.driver)],
+      [STORAGE_KEYS.refreshToken, data.refreshToken || ''],
+    ]);
+    setToken(data.token);
+    setDriver(data.driver);
+    if (data.driver?.status === 'approved') await registerPushToken(data.token);
+    return data; // Caller checks data.nextStep for routing
   }, []);
 
   const register = useCallback(async (formData) => {
@@ -89,7 +106,9 @@ export const DriverProvider = ({ children }) => {
   }, []);
 
   const logout = useCallback(async () => {
-    await AsyncStorage.multiRemove([STORAGE_KEYS.token, STORAGE_KEYS.driver]);
+    const refreshToken = await AsyncStorage.getItem(STORAGE_KEYS.refreshToken).catch(() => null);
+    if (refreshToken) driverApi.auth.logout(refreshToken).catch(() => {});
+    await AsyncStorage.multiRemove([STORAGE_KEYS.token, STORAGE_KEYS.driver, STORAGE_KEYS.refreshToken]);
     setToken(null);
     setDriver(null);
     setActiveOrder(null);
@@ -135,6 +154,7 @@ export const DriverProvider = ({ children }) => {
     activeOrder,
     setActiveOrder,
     login,
+    loginWithApple,
     register,
     logout,
     refreshProfile,

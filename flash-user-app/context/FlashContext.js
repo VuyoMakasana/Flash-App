@@ -6,10 +6,13 @@ import * as Notifications from 'expo-notifications';
 const FlashContext = createContext(null);
 
 const STORAGE_KEYS = {
-  token: 'FLASH_TOKEN',
-  user: 'FLASH_USER',
-  cart: `FLASH_CART_${userId}`,
+  token:        'FLASH_TOKEN',
+  user:         'FLASH_USER',
+  refreshToken: 'FLASH_REFRESH_TOKEN',
 };
+// Cart key is scoped to user ID to prevent one user seeing another's cart
+// on a shared device (common on low-income households with shared phones).
+const cartKey = (userId) => userId ? `FLASH_CART_${userId}` : 'FLASH_CART_ANON';
 
 // ─── PRODUCTS — loaded from backend, hardcoded as fallback ──────────────────
 // When real stores are added, products come from /api/inventory.
@@ -95,10 +98,10 @@ export const FlashProvider = ({ children }) => {
       });
   }, [hydrated]);
 
-  // Persist cart
+  // Persist cart — use user-scoped key if logged in
   useEffect(() => {
-    if (hydrated) AsyncStorage.setItem(STORAGE_KEYS.cart, JSON.stringify(cart));
-  }, [cart, hydrated]);
+    if (hydrated) AsyncStorage.setItem(cartKey(user?.id), JSON.stringify(cart));
+  }, [cart, hydrated, user?.id]);
 
   const isAuthenticated = !!token && !!user;
 
@@ -169,12 +172,32 @@ export const FlashProvider = ({ children }) => {
   const login = useCallback(async (email, password) => {
     const data = await api.auth.login(email, password);
     await AsyncStorage.multiSet([
-      [STORAGE_KEYS.token, data.token],
-      [STORAGE_KEYS.user, JSON.stringify(data.user)],
+      [STORAGE_KEYS.token,        data.token],
+      [STORAGE_KEYS.user,         JSON.stringify(data.user)],
+      [STORAGE_KEYS.refreshToken, data.refreshToken || ''],
     ]);
     setToken(data.token);
     setUser(data.user);
     setProfileState({ name: data.user.name || '', address: data.user.address || '', phone: data.user.phone || '', email: data.user.email || '' });
+    // Load user-scoped cart
+    const stored = await AsyncStorage.getItem(cartKey(data.user.id)).catch(() => null);
+    if (stored) setCart(JSON.parse(stored));
+    return data;
+  }, []);
+
+  // Apple Sign In — called after expo-apple-authentication returns a credential on iPhone.
+  const loginWithApple = useCallback(async (identityToken, fullName, email) => {
+    const data = await api.auth.appleSignIn(identityToken, fullName, email);
+    await AsyncStorage.multiSet([
+      [STORAGE_KEYS.token,        data.token],
+      [STORAGE_KEYS.user,         JSON.stringify(data.user)],
+      [STORAGE_KEYS.refreshToken, data.refreshToken || ''],
+    ]);
+    setToken(data.token);
+    setUser(data.user);
+    setProfileState({ name: data.user.name || '', address: data.user.address || '', phone: data.user.phone || '', email: data.user.email || '' });
+    const stored = await AsyncStorage.getItem(cartKey(data.user.id)).catch(() => null);
+    if (stored) setCart(JSON.parse(stored));
     return data;
   }, []);
 
@@ -201,12 +224,18 @@ export const FlashProvider = ({ children }) => {
   }, [user]);
 
   const logout = useCallback(async () => {
-    await AsyncStorage.multiRemove([STORAGE_KEYS.token, STORAGE_KEYS.user]);
+    // Revoke refresh token on server (best effort)
+    const refreshToken = await AsyncStorage.getItem(STORAGE_KEYS.refreshToken).catch(() => null);
+    if (refreshToken) api.auth.logout(refreshToken).catch(() => {});
+
+    await AsyncStorage.multiRemove([STORAGE_KEYS.token, STORAGE_KEYS.user, STORAGE_KEYS.refreshToken]);
+    if (user?.id) await AsyncStorage.removeItem(cartKey(user.id)).catch(() => {});
     await AsyncStorage.removeItem('FLASH_CHECKOUT_DRAFT');
     setToken(null);
     setUser(null);
     setOrders([]);
-  }, []);
+    setCart([]);
+  }, [user?.id]);
 
   // SESSION EXPIRY HANDLER: Called when any API call returns 401
   // WHY: Centralises logout logic so any screen that catches SESSION_EXPIRED

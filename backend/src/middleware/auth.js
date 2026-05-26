@@ -1,110 +1,74 @@
-// src/middleware/auth.js
-const jwt = require("jsonwebtoken");
-const pool = require("../config/database");
+const jwt   = require("jsonwebtoken");
+const pool  = require("../config/database");
 const { getRequired } = require("../config/env");
 
-// Verify JWT and attach user to request
+// ─── AUTHENTICATE ────────────────────────────────────────────────────────────
+// Verifies the short-lived access token (15 min).
+// If expired the client must use the refresh endpoint to get a new one.
 const authenticate = async (req, res, next) => {
   try {
     const header = req.headers.authorization;
-    if (!header || !header.startsWith("Bearer ")) {
+    if (!header?.startsWith("Bearer "))
       return res.status(401).json({ error: "No token provided" });
-    }
 
-    const token = header.replace("Bearer ", "");
+    const token     = header.replace("Bearer ", "");
     const jwtSecret = getRequired("JWT_SECRET", "auth");
-    if (!jwtSecret) {
-      return res.status(500).json({
-        error:
-          "Authentication system misconfigured. Please contact support. [ERR_JWT_CONFIG]",
-      });
-    }
 
     const decoded = jwt.verify(token, jwtSecret);
 
-    // Validate role in token
-    req.userId = decoded.id;
-    req.userRole = decoded.role; // 'user' | 'driver' | 'admin'
-
-    // Optional: Check if token contains driver status (for backward compatibility)
-    if (decoded.status === "approved") {
-      req.driverStatus = "approved";
+    // Check token is not revoked (logout invalidation)
+    if (decoded.jti) {
+      const revoked = await pool.query(
+        "SELECT 1 FROM revoked_tokens WHERE jti = $1",
+        [decoded.jti]
+      );
+      if (revoked.rows.length)
+        return res.status(401).json({ error: "Token revoked" });
     }
 
+    req.userId   = decoded.id;
+    req.userRole = decoded.role;
+    if (decoded.status === "approved") req.driverStatus = "approved";
     next();
   } catch (err) {
-    if (err.name === "TokenExpiredError") {
-      return res.status(401).json({ error: "Token expired" });
-    }
-    if (err.name === "JsonWebTokenError") {
+    if (err.name === "TokenExpiredError")
+      return res.status(401).json({ error: "TOKEN_EXPIRED" });
+    if (err.name === "JsonWebTokenError")
       return res.status(401).json({ error: "Invalid token" });
-    }
     return res.status(401).json({ error: "Authentication failed" });
   }
 };
 
-// Role guard middleware factory
-const requireRole =
-  (...roles) =>
-  (req, res, next) => {
-    if (!req.userRole) {
-      return res.status(401).json({ error: "Not authenticated" });
-    }
-    if (!roles.includes(req.userRole)) {
-      return res
-        .status(403)
-        .json({
-          error: "Access forbidden. Required role: " + roles.join(" or "),
-        });
-    }
-    next();
-  };
+// ─── ROLE GUARD ──────────────────────────────────────────────────────────────
+const requireRole = (...roles) => (req, res, next) => {
+  if (!req.userRole)          return res.status(401).json({ error: "Not authenticated" });
+  if (!roles.includes(req.userRole))
+    return res.status(403).json({ error: "Access forbidden. Required role: " + roles.join(" or ") });
+  next();
+};
 
-// Driver must be approved to access delivery features.
-// v3.1 optimization: the driver login already verifies approved status before
-// issuing the token. We check the token first, only hit the DB if the token
-// was issued before the approved_at field existed (backwards compat).
+// ─── APPROVED DRIVER ─────────────────────────────────────────────────────────
 const requireApprovedDriver = async (req, res, next) => {
-  // Fast path: if the JWT contains status='approved', skip the DB query entirely.
-  // The token is issued at login and login already blocks non-approved drivers.
-  // This eliminates one DB round-trip on every driver endpoint.
   if (req.driverStatus === "approved") return next();
 
   try {
-    const result = await pool.query(
-      "SELECT status FROM drivers WHERE id = $1",
-      [req.userId],
-    );
-    if (!result.rows.length) {
-      return res.status(404).json({ error: "Driver not found" });
-    }
-    // ADDED: Check for suspended status — suspended drivers cannot accept orders
-    if (result.rows[0].status === 'suspended') {
-      return res.status(403).json({
-        error: 'Your driver account has been suspended due to repeated order cancellations. Please contact support.',
-        status: 'suspended',
-      });
-    }
-    if (result.rows[0].status !== "approved") {
-      const messages = {
-        pending_documents: "Please upload your required documents to continue.",
-        documents_submitted:
-          "Your documents are under review. You will be notified once approved.",
-        under_review: "Your application is being reviewed by our team.",
-        rejected:
-          "Your driver application was not approved. Please contact support.",
+    const result = await pool.query("SELECT status FROM drivers WHERE id = $1", [req.userId]);
+    if (!result.rows.length) return res.status(404).json({ error: "Driver not found" });
+
+    const { status } = result.rows[0];
+    if (status === "suspended")
+      return res.status(403).json({ error: "Account suspended. Contact support.", status });
+    if (status !== "approved") {
+      const msgs = {
+        pending_documents:   "Please upload your required documents.",
+        documents_submitted: "Documents under review. You will be notified once approved.",
+        under_review:        "Application being reviewed by our team.",
+        rejected:            "Application not approved. Contact support.",
       };
-      return res.status(403).json({
-        error:
-          messages[result.rows[0].status] ||
-          "Driver account is not yet approved",
-        status: result.rows[0].status,
-      });
+      return res.status(403).json({ error: msgs[status] || "Not yet approved", status });
     }
     next();
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 };
 
 module.exports = { authenticate, requireRole, requireApprovedDriver };
