@@ -18,6 +18,7 @@
     "@sentry/react-native": "~6.3.0",
     "expo": "~54.0.33",
     "expo-constants": "~17.0.8",
+    "expo-apple-authentication": "~7.2.3",
     "expo-document-picker": "~13.0.3",
     "expo-font": "~13.0.4",
     "expo-haptics": "~14.0.1",

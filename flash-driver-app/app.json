@@ -10,13 +10,25 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.za.flash.driverapp",
+      "usesAppleSignIn": true,
       "config": {
         "googleMapsApiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
+      },
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Flash Driver uses your location so customers can track their deliveries.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Flash Driver uses your location in the background to update your delivery position."
       }
     },
     "android": {
       "adaptiveIcon": { "backgroundColor": "#0a0a0a" },
       "package": "co.za.flash.driverapp",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ],
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
@@ -26,7 +38,8 @@
     "plugins": [
       "expo-location",
       "expo-notifications",
-      "expo-document-picker"
+      "expo-document-picker",
+      "expo-apple-authentication"
     ],
     "scheme": "flash-driver"
   }

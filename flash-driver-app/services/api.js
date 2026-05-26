@@ -8,19 +8,16 @@ export const BASE_URL =
   DEFAULT_BASE_URL;
 const REQUEST_TIMEOUT_MS = 15000;
 
-const getToken = async () => AsyncStorage.getItem('FLASH_DRIVER_TOKEN');
+const getToken        = async () => AsyncStorage.getItem('FLASH_DRIVER_TOKEN');
+const getRefreshToken = async () => AsyncStorage.getItem('FLASH_DRIVER_REFRESH_TOKEN');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const parseResponse = async (response) => {
   const text = await response.text();
   if (!text) return {};
-
-  try {
-    return JSON.parse(text);
-  } catch (_) {
-    return { error: text };
-  }
+  try { return JSON.parse(text); }
+  catch (_) { return { error: text }; }
 };
 
 const shouldRetry = (method, responseStatus, errName) => {
@@ -30,12 +27,33 @@ const shouldRetry = (method, responseStatus, errName) => {
   return false;
 };
 
+// Silent token refresh for drivers. Called on TOKEN_EXPIRED 401.
+// If refresh fails the driver is cleanly logged out — no confusion mid-shift.
+let _isRefreshing = false;
+let _refreshQueue = [];
+
+async function silentRefresh() {
+  const refreshToken = await getRefreshToken();
+  if (!refreshToken) throw new Error('SESSION_EXPIRED');
+  try {
+    const res  = await fetch(`${BASE_URL}/api/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken }) });
+    const data = await res.json();
+    if (!res.ok || !data.token) throw new Error('SESSION_EXPIRED');
+    await AsyncStorage.setItem('FLASH_DRIVER_TOKEN', data.token);
+    if (data.refreshToken) await AsyncStorage.setItem('FLASH_DRIVER_REFRESH_TOKEN', data.refreshToken);
+    return data.token;
+  } catch (_) {
+    await AsyncStorage.multiRemove(['FLASH_DRIVER_TOKEN', 'FLASH_DRIVER', 'FLASH_DRIVER_REFRESH_TOKEN']);
+    throw new Error('SESSION_EXPIRED');
+  }
+}
+
 async function request(method, path, body = null, isPublic = false) {
   const maxAttempts = method === 'GET' ? 3 : 1;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeout    = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
     try {
       const headers = { 'Content-Type': 'application/json' };
@@ -48,16 +66,30 @@ async function request(method, path, body = null, isPublic = false) {
       if (body) options.body = JSON.stringify(body);
 
       const response = await fetch(`${BASE_URL}${path}`, options);
-      const data = await parseResponse(response);
+      const data     = await parseResponse(response);
 
       if (!response.ok) {
-        // 401 INTERCEPTOR: Expired or invalid driver token — clear storage and force re-login
-        // WHY: Without this, drivers with expired tokens get a confusing error mid-shift
-        // and get stuck. They need a clean logout and redirect to the login screen.
-        if (response.status === 401) {
-          try {
-            await AsyncStorage.multiRemove(['FLASH_DRIVER_TOKEN', 'FLASH_DRIVER']);
-          } catch (_) {}
+        if (response.status === 401 && !isPublic) {
+          const errMsg = data?.error || '';
+          if (errMsg === 'TOKEN_EXPIRED' || errMsg === 'Token expired') {
+            if (!_isRefreshing) {
+              _isRefreshing = true;
+              try {
+                const newToken = await silentRefresh();
+                _refreshQueue.forEach((resolve) => resolve(newToken));
+                _refreshQueue = [];
+              } catch (e) {
+                _refreshQueue = [];
+                _isRefreshing = false;
+                throw new Error('SESSION_EXPIRED');
+              }
+              _isRefreshing = false;
+            } else {
+              await new Promise((resolve) => _refreshQueue.push(resolve));
+            }
+            continue; // Retry with new token
+          }
+          await AsyncStorage.multiRemove(['FLASH_DRIVER_TOKEN', 'FLASH_DRIVER', 'FLASH_DRIVER_REFRESH_TOKEN']);
           throw new Error('SESSION_EXPIRED');
         }
         if (attempt < maxAttempts && shouldRetry(method, response.status, '')) {
@@ -73,9 +105,7 @@ async function request(method, path, body = null, isPublic = false) {
         await sleep(attempt * 250);
         continue;
       }
-      if (err.name === 'AbortError') {
-        throw new Error('Request timed out. Please try again.');
-      }
+      if (err.name === 'AbortError') throw new Error('Request timed out. Please try again.');
       throw new Error(err.message || 'Network request failed');
     } finally {
       clearTimeout(timeout);
@@ -87,8 +117,12 @@ async function request(method, path, body = null, isPublic = false) {
 
 export const driverApi = {
   auth: {
-    register: (data) => request('POST', '/api/auth/driver/register', data, true),
-    login: (email, password) => request('POST', '/api/auth/driver/login', { email, password }, true),
+    register:    (data) => request('POST', '/api/auth/driver/register', data, true),
+    login:       (email, password) => request('POST', '/api/auth/driver/login', { email, password }, true),
+    appleSignIn: (identityToken, fullName, email) =>
+      request('POST', '/api/auth/driver/apple', { identityToken, fullName, email }, true),
+    refresh:     (refreshToken) => request('POST', '/api/auth/refresh', { refreshToken }, true),
+    logout:      (refreshToken) => request('POST', '/api/auth/logout',  { refreshToken }, true),
   },
   profile: {
     getMe: () => request('GET', '/api/drivers/me'),

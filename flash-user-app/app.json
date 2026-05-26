@@ -10,13 +10,25 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.za.flash.userapp",
+      "usesAppleSignIn": true,
       "config": {
         "googleMapsApiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "Flash needs camera access to take photos of your documents.",
+        "NSLocationWhenInUseUsageDescription": "Flash uses your location to find nearby stores and track your delivery.",
+        "NSLocationAlwaysUsageDescription": "Flash uses your location to track your delivery in real-time."
       }
     },
     "android": {
       "adaptiveIcon": { "backgroundColor": "#0a0a0a" },
       "package": "co.za.flash.userapp",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ],
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
@@ -26,6 +38,7 @@
     "plugins": [
       "expo-location",
       "expo-notifications",
+      "expo-apple-authentication",
       [
         "expo-build-properties",
         {
