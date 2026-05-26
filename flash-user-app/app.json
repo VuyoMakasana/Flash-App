@@ -36,16 +36,20 @@
       }
     },
     "plugins": [
-      "expo-location",
-      "expo-notifications",
-      "expo-apple-authentication",
-      [
-        "expo-build-properties",
-        {
-          "android": { "compileSdkVersion": 34 },
-          "ios": {}
-        }
-      ]
-    ]
+  "expo-location",
+  "expo-notifications",
+  "expo-apple-authentication",
+  "@react-native-google-signin/google-signin",
+  [
+    "expo-build-properties",
+    {
+      "android": {
+        "compileSdkVersion": 34,
+        "targetSdkVersion": 34
+      },
+      "ios": {}
+    }
+  ]
+]
   }
 }

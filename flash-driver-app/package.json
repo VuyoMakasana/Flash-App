@@ -13,12 +13,14 @@
   "dependencies": {
     "@expo/vector-icons": "^14.0.4",
     "@react-native-async-storage/async-storage": "1.23.1",
+    "@react-native-google-signin/google-signin": "^16.1.2",
     "@react-navigation/bottom-tabs": "^6.6.1",
     "@react-navigation/native": "^6.1.18",
     "@sentry/react-native": "~6.3.0",
     "expo": "~54.0.33",
-    "expo-constants": "~17.0.8",
     "expo-apple-authentication": "~7.2.3",
+    "expo-build-properties": "~0.13.2",
+    "expo-constants": "~17.0.8",
     "expo-document-picker": "~13.0.3",
     "expo-font": "~13.0.4",
     "expo-haptics": "~14.0.1",
@@ -43,8 +45,8 @@
   },
   "devDependencies": {
     "@types/react": "~18.3.12",
-    "typescript": "~5.3.3",
     "eslint": "^9.25.0",
-    "eslint-config-expo": "~9.2.0"
+    "eslint-config-expo": "~9.2.0",
+    "typescript": "~5.3.3"
   }
 }

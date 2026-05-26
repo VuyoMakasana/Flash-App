@@ -8,10 +8,29 @@ const { getRequired } = require("../config/env");
 const ACCESS_TOKEN_EXPIRY  = "15m";
 const REFRESH_TOKEN_EXPIRY = "7d";
 
-const generateToken = (id, role) => {
-  const jwtSecret = getRequired("JWT_SECRET", "auth");
-  return jwt.sign({ id, role }, jwtSecret, { expiresIn: ACCESS_TOKEN_EXPIRY });
+
+
+const { v4: uuidv4 } = require('uuid');
+
+const generateToken = (id, role, status = null) => {
+  const jwtSecret = getRequired('JWT_SECRET', 'auth');
+
+  const payload = {
+    id,
+    role,
+    jti: uuidv4(),
+  };
+
+  if (status) {
+    payload.status = status;
+  }
+
+  return jwt.sign(payload, jwtSecret, {
+    expiresIn: ACCESS_TOKEN_EXPIRY,
+  });
 };
+
+
 
 const generateRefreshToken = () => {
   // 48 random bytes = 384 bits of entropy. Impossible to guess.

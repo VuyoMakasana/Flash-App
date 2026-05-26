@@ -367,6 +367,14 @@ async function migrate() {
     console.log('Flash database migration v5 completed successfully');
     console.log('   New columns: drivers.cancel_count, drivers.suspended_at, drivers.suspension_reason');
 
+
+await client.query(`
+  CREATE INDEX IF NOT EXISTS
+  idx_revoked_tokens_expires_at
+  ON revoked_tokens(expires_at)
+`);
+
+
     // v6: Operating hours system
     // Orders placed between 19:00 and 07:00 SAST are saved as
     // 'scheduled_for_morning' and released to drivers at 07:00.

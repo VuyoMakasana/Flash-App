@@ -6,7 +6,9 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": { "backgroundColor": "#0a0a0a" },
+    "splash": {
+      "backgroundColor": "#0a0a0a"
+    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.za.flash.driverapp",
@@ -20,7 +22,9 @@
       }
     },
     "android": {
-      "adaptiveIcon": { "backgroundColor": "#0a0a0a" },
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0a0a"
+      },
       "package": "co.za.flash.driverapp",
       "permissions": [
         "ACCESS_FINE_LOCATION",
@@ -36,11 +40,21 @@
       }
     },
     "plugins": [
-      "expo-location",
-      "expo-notifications",
-      "expo-document-picker",
-      "expo-apple-authentication"
-    ],
-    "scheme": "flash-driver"
+  "expo-location",
+  "expo-notifications",
+  "expo-document-picker",
+  "expo-apple-authentication",
+  "@react-native-google-signin/google-signin",
+  [
+    "expo-build-properties",
+    {
+      "android": {
+        "compileSdkVersion": 34,
+        "targetSdkVersion": 34
+      },
+      "ios": {}
+    }
+  ]
+]
   }
 }
