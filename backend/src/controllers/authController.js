@@ -1,4 +1,5 @@
-const bcrypt  = require("bcryptjs");
+const jwt = require('jsonwebtoken');
+const bcrypt = require("bcryptjs");
 const crypto  = require("crypto");
 const User    = require("../models/User");
 const Driver  = require("../models/Driver");
@@ -644,32 +645,30 @@ static async googleSignInDriver(req, res) {
 
   // ── Driver register ─────────────────────────────────────────────────────
   static async registerDriver(req, res) {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { name, email, password, phone, vehicle_type, vehicle_plate } = req.body;
-    try {
-      if (await Driver.findByEmail(email))
-        return res.status(409).json({ error: "Email already registered" });
+  const { name, email, password, phone, vehicle_type, vehicle_plate } = req.body;
+  try {
+    if (await Driver.findByEmail(email))
+      return res.status(409).json({ error: 'Email already registered' });
 
-      const driver = await Driver.create({ name, email, password, phone, vehicle_type, vehicle_plate });
-      const { refreshToken } =
-  await issueTokenPair(driver.id, 'driver');
+    const driver = await Driver.create({ name, email, password, phone, vehicle_type, vehicle_plate });
+    const { password_hash, ...safe } = driver;
+    const { refreshToken } = await issueTokenPair(driver.id, 'driver');
 
-return res.status(201).json({
-  refreshToken,
-  driver: safe,
-  isNewDriver: true,
-  nextStep: 'upload_documents',
-  requiresApproval: true,
-});
-      const { password_hash, ...safeDriver } = driver;
-      return res.status(201).json({ token: accessToken, refreshToken, driver: safeDriver });
-    } catch (err) {
-      console.error("[Auth] registerDriver:", err.message);
-      return res.status(500).json({ error: "Registration failed" });
-    }
+    return res.status(201).json({
+      refreshToken,
+      driver: safe,
+      isNewDriver: true,
+      nextStep: 'upload_documents',
+      requiresApproval: true,
+    });
+  } catch (err) {
+    console.error('[Auth] registerDriver:', err.message);
+    return res.status(500).json({ error: 'Registration failed' });
   }
+}
 
   // ── Driver login ─────────────────────────────────────────────────────────
   static async loginDriver(req, res) {
