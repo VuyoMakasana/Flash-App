@@ -368,12 +368,6 @@ async function migrate() {
     console.log('   New columns: drivers.cancel_count, drivers.suspended_at, drivers.suspension_reason');
 
 
-await client.query(`
-  CREATE INDEX IF NOT EXISTS
-  idx_revoked_tokens_expires_at
-  ON revoked_tokens(expires_at)
-`);
-
 
     // v6: Operating hours system
     // Orders placed between 19:00 and 07:00 SAST are saved as
@@ -404,6 +398,8 @@ await client.query(`
     console.log('   New column: orders.scheduled_for (used by operating-hours cron)');
     console.log('   New table: email_tokens (email verification + password reset)');
     console.log('   New columns: users.email_verified, users.email_verified_at');
+    // Run v7 migration
+await migrateV7(client);
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Migration failed:', err);
@@ -416,54 +412,75 @@ await client.query(`
 
 migrate().catch(process.exit.bind(process, 1));
 // v7: Refresh tokens + revoked tokens + Apple ID columns
-// Run this after v6 succeeds
-async function migrateV7(pool) {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
+// Run this after v6 succeed
+async function migrateV7(client) {
+  await client.query('BEGIN');
 
-    // Refresh token table — stores rotating refresh tokens
-    await client.query(`CREATE TABLE IF NOT EXISTS refresh_tokens (
-      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id     UUID NOT NULL,
-      role        VARCHAR(20) NOT NULL DEFAULT 'user',
-      token       VARCHAR(200) NOT NULL UNIQUE,
-      expires_at  TIMESTAMPTZ NOT NULL,
-      revoked_at  TIMESTAMPTZ,
-      created_at  TIMESTAMPTZ DEFAULT NOW()
-    )`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token   ON refresh_tokens(token)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)`);
+  await client.query(`CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL,
+    role VARCHAR(20) NOT NULL DEFAULT 'user',
+    token VARCHAR(200) NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  )`);
 
-    // Revoked tokens table — for instant token invalidation on logout/compromise
-    await client.query(`CREATE TABLE IF NOT EXISTS revoked_tokens (
-      jti        VARCHAR(200) PRIMARY KEY,
-      revoked_at TIMESTAMPTZ DEFAULT NOW(),
-      user_id    UUID
-    )`);
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token
+    ON refresh_tokens(token)`);
 
-    // Apple ID columns on users and drivers
-    await client.query(`ALTER TABLE users   ADD COLUMN IF NOT EXISTS apple_id        TEXT`);
-    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS apple_id        TEXT`);
-    await client.query(`ALTER TABLE users   ADD COLUMN IF NOT EXISTS email_verified  BOOLEAN DEFAULT false`);
-    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apple_id   ON users(apple_id)   WHERE apple_id IS NOT NULL`);
-    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_drivers_apple_id ON drivers(apple_id) WHERE apple_id IS NOT NULL`);
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id
+    ON refresh_tokens(user_id)`);
 
-    // Performance indexes for the most common queries
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_user_id    ON orders(user_id)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_driver_id  ON orders(driver_id) WHERE driver_id IS NOT NULL`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_status     ON orders(status)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_updated_at ON orders(updated_at)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_drivers_online    ON drivers(is_online, status) WHERE is_online = true`);
+  await client.query(`CREATE TABLE IF NOT EXISTS revoked_tokens (
+    jti VARCHAR(200) PRIMARY KEY,
+    revoked_at TIMESTAMPTZ DEFAULT NOW(),
+    user_id UUID,
+    expires_at TIMESTAMPTZ
+  )`);
 
-    await client.query("COMMIT");
-    console.log("Flash database migration v7 completed: refresh_tokens, revoked_tokens, Apple IDs, indexes");
-  } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
-  }
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_revoked_tokens_jti
+    ON revoked_tokens(jti)`);
+
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_revoked_tokens_expires
+    ON revoked_tokens(expires_at)`);
+
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS apple_id TEXT`);
+  await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS apple_id TEXT`);
+
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT`);
+  await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS google_id TEXT`);
+
+  await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT false`);
+
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_apple_id
+    ON users(apple_id)
+    WHERE apple_id IS NOT NULL`);
+
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_drivers_apple_id
+    ON drivers(apple_id)
+    WHERE apple_id IS NOT NULL`);
+
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id
+    ON users(google_id)
+    WHERE google_id IS NOT NULL`);
+
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_drivers_google_id
+    ON drivers(google_id)
+    WHERE google_id IS NOT NULL`);
+
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_updated_at
+    ON orders(updated_at)`);
+
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_drivers_online
+    ON drivers(is_online, status)
+    WHERE is_online = true`);
+
+  await client.query('COMMIT');
+
+  console.log(
+    'Flash database migration v7 completed: refresh_tokens, revoked_tokens, Apple/Google IDs'
+  );
 }
 
 module.exports.migrateV7 = migrateV7;
