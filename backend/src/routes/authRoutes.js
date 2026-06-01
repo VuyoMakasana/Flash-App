@@ -50,9 +50,9 @@ router.post("/driver/apple",
 );
 
 router.post(
-  "/user/google",
+  "/driver/google",
   [body("idToken").notEmpty()],
-  AuthController.googleSignInUser
+  AuthController.googleSignInDriver
 );
 
 
