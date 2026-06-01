@@ -19,8 +19,6 @@ class Order extends BaseModel {
       delivery_mode,
       time_slot,
       subtotal,
-      delivery_fee,
-      total,
       store_id,
       preferred_driver_id,
       pickup_mall_id,
@@ -33,25 +31,15 @@ class Order extends BaseModel {
       dropoff_lng,
     } = orderData;
 
-    // FIXED: Added random suffix to order number to prevent collision at same millisecond
-    // WHY: Date.now() alone is not unique when two requests arrive simultaneously.
-    // Adding 4 random hex characters makes collision probability negligible.
     const orderNumber = `FLASH-${Date.now().toString(36).toUpperCase()}-${randomBytes(2).toString('hex').toUpperCase()}`;
     const computedDeliveryFee = this.calculateDeliveryFee({
       pickupMallId: pickup_mall_id,
       dropoffMallId: dropoff_mall_id,
     });
-    // If the frontend sends a valid positive delivery fee, trust it (user already saw this price).
-    // Otherwise fall back to the server-computed mall-based fee (R90 same mall, R180 different).
-    const parsedFrontendFee = parseFloat(delivery_fee);
-    const finalDeliveryFee = (Number.isFinite(parsedFrontendFee) && parsedFrontendFee > 0)
-      ? parsedFrontendFee
-      : computedDeliveryFee;
     const safeSubtotal = parseFloat(subtotal || 0);
-    const finalTotal = safeSubtotal + finalDeliveryFee;
-    // FIXED Flash always earns minimum R10, driver earns 75% of fee
-const flashCommission = Math.max(10, Math.round(finalDeliveryFee * 0.25 * 100) / 100);
-const driverPayout = Math.round((finalDeliveryFee - flashCommission) * 100) / 100;
+    const finalTotal = safeSubtotal + computedDeliveryFee;
+    const flashCommission = Math.max(10, Math.round(computedDeliveryFee * 0.25 * 100) / 100);
+    const driverPayout = Math.round((computedDeliveryFee - flashCommission) * 100) / 100;
 
     return await this.transaction(async (client) => {
       const orderResult = await client.query(
@@ -69,7 +57,7 @@ const driverPayout = Math.round((finalDeliveryFee - flashCommission) * 100) / 10
           delivery_mode,
           time_slot,
           safeSubtotal,
-          finalDeliveryFee,
+          computedDeliveryFee,
           finalTotal,
           driverPayout,
           store_id || null,
