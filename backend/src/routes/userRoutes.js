@@ -17,11 +17,11 @@ router.get(
   UserController.getOrders,
 );
 
-module.exports = router;
+router.post(
+  "/push-token",
+  authenticate,
+  requireRole("user"),
+  UserController.registerPushToken,
+);
 
-  router.post(
-    "/push-token",
-    authenticate,
-    requireRole("user"),
-    UserController.registerPushToken,
-  );
+module.exports = router;

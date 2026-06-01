@@ -138,6 +138,8 @@ export const api = {
     acceptTerms: () => request('POST', '/api/auth/user/accept-terms'),
     appleSignIn: (identityToken, fullName, email) =>
       request('POST', '/api/auth/user/apple', { identityToken, fullName, email }, true),
+    googleSignIn: (idToken) =>
+      request('POST', '/api/auth/user/google', { idToken }, true),
     refresh:     (refreshToken) =>
       request('POST', '/api/auth/refresh', { refreshToken }, true),
     logout:      (refreshToken) =>

@@ -121,6 +121,8 @@ export const driverApi = {
     login:       (email, password) => request('POST', '/api/auth/driver/login', { email, password }, true),
     appleSignIn: (identityToken, fullName, email) =>
       request('POST', '/api/auth/driver/apple', { identityToken, fullName, email }, true),
+    googleSignIn: (idToken) =>
+      request('POST', '/api/auth/driver/google', { idToken }, true),
     refresh:     (refreshToken) => request('POST', '/api/auth/refresh', { refreshToken }, true),
     logout:      (refreshToken) => request('POST', '/api/auth/logout',  { refreshToken }, true),
   },
