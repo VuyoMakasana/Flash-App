@@ -60,6 +60,11 @@ class PaystackService {
         });
       });
       req.on("error", reject);
+      req.setTimeout(30000);
+      req.on("timeout", () => {
+        req.destroy();
+        reject(new Error("Paystack API request timeout"));
+      });
       if (body) req.write(JSON.stringify(body));
       req.end();
     });
