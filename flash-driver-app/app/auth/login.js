@@ -6,7 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useDriver } from '../../context/DriverContext';
-
+import { GoogleSignin, GoogleSigninButton, statusCodes } from '@react-native-google-signin/google-signin';
 // Sign in with Apple — only available on iOS 13+
 let AppleAuth = null;
 if (Platform.OS === 'ios') {
@@ -28,6 +28,15 @@ export default function DriverLoginScreen() {
     if (!AppleAuth) return;
     AppleAuth.isAvailableAsync().then(setAppleAvailable).catch(() => {});
   }, []);
+
+
+useEffect(() => {
+  GoogleSignin.configure({
+    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID,
+  });
+}, []);
+
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -55,6 +64,26 @@ export default function DriverLoginScreen() {
       setLoading(false);
     }
   };
+
+const handleGoogleSignIn = async () => {
+  setGoogleLoading(true);
+  try {
+    await GoogleSignin.hasPlayServices();
+    const userInfo = await GoogleSignin.signIn();
+    await loginWithGoogle(userInfo.data?.idToken || userInfo.idToken);
+  } catch (err) {
+    if (err.code === statusCodes.SIGN_IN_CANCELLED) return;
+    if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+      Alert.alert('Not Available', 'Google Sign In is not available on this device.');
+      return;
+    }
+    Alert.alert('Google Sign In Failed', err.message || 'Could not sign in with Google.');
+  } finally {
+    setGoogleLoading(false);
+  }
+};
+
+
 
   const handleAppleSignIn = async () => {
     if (!AppleAuth) return;
@@ -133,6 +162,15 @@ export default function DriverLoginScreen() {
             </>
           )}
 
+<GoogleSigninButton
+  style={{ width: '100%', height: 52 }}
+  size={GoogleSigninButton.Size.Wide}
+  color={GoogleSigninButton.Color.Dark}
+  onPress={handleGoogleSignIn}
+  disabled={googleLoading}
+/>
+
+          
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Email</Text>
             <View style={styles.inputRow}>

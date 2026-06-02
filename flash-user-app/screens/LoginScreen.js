@@ -5,6 +5,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFlash } from '../context/FlashContext';
+import { GoogleSignin, GoogleSigninButton, statusCodes } from '@react-native-google-signin/google-signin';
+
 
 // expo-apple-authentication: only available on iOS 13+
 let AppleAuth = null;
@@ -16,29 +18,56 @@ export default function LoginScreen({ navigation }) {
   const [email, setEmail]                   = useState('');
   const [password, setPassword]             = useState('');
   const [loading, setLoading]               = useState(false);
-  const [appleLoading, setAppleLoading]     = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [showPassword, setShowPassword]     = useState(false);
   const [appleAvailable, setAppleAvailable] = useState(false);
-  const { login, loginWithApple } = useFlash();
+  const { login, loginWithApple, loginWithGoogle } = useFlash();
 
   useEffect(() => {
     if (!AppleAuth) return;
     AppleAuth.isAvailableAsync().then(setAppleAvailable).catch(() => {});
   }, []);
 
-  const handleLogin = async () => {
-    if (!email.trim() || !password.trim()) {
-      Alert.alert('Missing Fields', 'Please enter your email and password.');
+  const handleGoogleSignIn = async () => {
+  setGoogleLoading(true);
+  try {
+    await GoogleSignin.hasPlayServices();
+    const userInfo = await GoogleSignin.signIn();
+    await loginWithGoogle(userInfo.data?.idToken || userInfo.idToken);
+  } catch (err) {
+    if (err.code === statusCodes.SIGN_IN_CANCELLED) return;
+    if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+      Alert.alert('Not Available', 'Google Sign In is not available on this device.');
       return;
     }
-    setLoading(true);
+    Alert.alert('Google Sign In Failed', err.message || 'Could not sign in with Google.');
+  } finally {
+    setGoogleLoading(false);
+  }
+};
+
+useEffect(() => {
+  GoogleSignin.configure({
+    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID,
+  });
+}, []);
+
+
+
+
+  const handleGoogleSignIn = async () => {
     try {
-      await login(email.trim().toLowerCase(), password);
-      // Navigation handled by App.js isAuthenticated check
-    } catch (err) {
-      Alert.alert('Login Failed', err.message || 'Invalid email or password.');
-    } finally {
-      setLoading(false);
+      await GoogleSignin.signIn();
+    } catch (error) {
+      if (error.code === statusCodes.IN_PROGRESS) {
+        // operation in progress
+      } else if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+        Alert.alert('Google Sign In Failed', 'Google Play Services not available.');
+      } else {
+        Alert.alert('Google Sign In Failed', error.message || 'Could not sign in with Google. Please try again.');
+      }
     }
   };
 
@@ -94,6 +123,8 @@ export default function LoginScreen({ navigation }) {
                   onPress={handleAppleSignIn}
                 />
               )}
+
+
               <View style={styles.dividerRow}>
                 <View style={styles.divider} />
                 <Text style={styles.dividerText}>or continue with email</Text>
@@ -101,6 +132,16 @@ export default function LoginScreen({ navigation }) {
               </View>
             </>
           )}
+
+<GoogleSigninButton
+  style={{ width: '100%', height: 52 }}
+  size={GoogleSigninButton.Size.Wide}
+  color={GoogleSigninButton.Color.Dark}
+  onPress={handleGoogleSignIn}
+  disabled={googleLoading}
+/>
+
+
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Email</Text>

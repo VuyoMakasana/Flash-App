@@ -201,6 +201,26 @@ export const FlashProvider = ({ children }) => {
     return data;
   }, []);
 
+
+// Google Sign In — called after @react-native-google-signin returns an idToken.
+// Uses the same token→context→AsyncStorage pattern as loginWithApple.
+const loginWithGoogle = useCallback(async (idToken) => {
+  const data = await api.auth.googleSignIn(idToken);
+  await AsyncStorage.multiSet([
+    [STORAGE_KEYS.token,        data.token],
+    [STORAGE_KEYS.user,         JSON.stringify(data.user)],
+    [STORAGE_KEYS.refreshToken, data.refreshToken || ''],
+  ]);
+  setToken(data.token);
+  setUser(data.user);
+  setProfileState({ name: data.user.name || '', address: data.user.address || '', phone: data.user.phone || '', email: data.user.email || '' });
+  const stored = await AsyncStorage.getItem(cartKey(data.user.id)).catch(() => null);
+  if (stored) setCart(JSON.parse(stored));
+  return data;
+}, []);
+
+
+
   const register = useCallback(async (name, email, password, phone) => {
     const data = await api.auth.register(name, email, password, phone);
     await AsyncStorage.multiSet([
@@ -335,6 +355,8 @@ export const FlashProvider = ({ children }) => {
     statusSteps: STATUS_STEPS,
     login,
     register,
+    loginWithApple,
+    loginWithGoogle,
     acceptTermsAndAuthenticate,
     logout,
     handleSessionExpired,

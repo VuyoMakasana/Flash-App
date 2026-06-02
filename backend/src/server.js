@@ -224,7 +224,7 @@ let _io = io;
     }
   });
 
-cron.schedule('0 3 * * *', async () => {
+/*cron.schedule('0 3 * * *', async () => {
   try {
     await pool.query(`
       DELETE FROM revoked_tokens
@@ -241,6 +241,21 @@ cron.schedule('0 3 * * *', async () => {
     );
   }
 });
+*/
+  
+
+  
+ // Nightly at 03:30 SAST (01:30 UTC): purge expired tokens
+// Without this, refresh_tokens and revoked_tokens grow forever and slow auth queries
+cron.schedule('30 1 * * *', async () => {
+  try {
+    const r1 = await pool.query('DELETE FROM refresh_tokens WHERE expires_at < NOW()');
+    const r2 = await pool.query('DELETE FROM revoked_tokens WHERE expires_at < NOW()');
+    console.log(`[TokenCleanup] Deleted ${r1.rowCount} refresh + ${r2.rowCount} revoked tokens`);
+  } catch (e) {
+    console.warn('[TokenCleanup] Error:', e.message);
+  }
+}); 
 
 
 
