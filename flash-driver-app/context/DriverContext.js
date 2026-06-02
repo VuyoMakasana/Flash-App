@@ -94,6 +94,21 @@ export const DriverProvider = ({ children }) => {
     return data; // Caller checks data.nextStep for routing
   }, []);
 
+
+const loginWithGoogle = useCallback(async (idToken) => {
+  const data = await driverApi.auth.googleSignIn(idToken);
+  await AsyncStorage.multiSet([
+    [STORAGE_KEYS.token,        data.token],
+    [STORAGE_KEYS.driver,       JSON.stringify(data.driver)],
+    [STORAGE_KEYS.refreshToken, data.refreshToken || ''],
+  ]);
+  setToken(data.token);
+  setDriver(data.driver);
+  if (data.driver?.status === 'approved') await registerPushToken(data.token);
+  return data;
+}, []);
+
+
   const register = useCallback(async (formData) => {
     const data = await driverApi.auth.register(formData);
     await AsyncStorage.multiSet([
@@ -155,6 +170,7 @@ export const DriverProvider = ({ children }) => {
     setActiveOrder,
     login,
     loginWithApple,
+    loginWithGoogle,
     register,
     logout,
     refreshProfile,

@@ -403,25 +403,16 @@ static async googleSignInDriver(req, res) {
     const driver =
       newDriver.rows[0];
 
-    const {
-      refreshToken,
-    } = await issueTokenPair(
-      driver.id,
-      'driver'
-    );
+    const { accessToken, refreshToken } = await issueTokenPair(driver.id, 'driver');
+const { password_hash: _, ...safe } = driver;
 
-    const {
-      password_hash: _,
-      ...safe
-    } = driver;
-
-    return res.status(201).json({
-      refreshToken,
-      driver: safe,
-      isNewDriver: true,
-      nextStep:
-        'upload_documents',
-    });
+return res.status(201).json({
+  token: accessToken,    // FIXED: was missing, Google new drivers couldn't onboard
+  refreshToken,
+  driver: safe,
+  isNewDriver: true,
+  nextStep: 'upload_documents',
+});
   } catch (err) {
     console.error(
       '[GoogleAuth] Driver:',
@@ -654,12 +645,13 @@ static async googleSignInDriver(req, res) {
       return res.status(409).json({ error: 'Email already registered' });
 
     const driver = await Driver.create({ name, email, password, phone, vehicle_type, vehicle_plate });
-    const { password_hash, ...safe } = driver;
-    const { refreshToken } = await issueTokenPair(driver.id, 'driver');
+const { password_hash, ...safe } = driver;
+const { accessToken, refreshToken } = await issueTokenPair(driver.id, 'driver');
 
-    return res.status(201).json({
-      refreshToken,
-      driver: safe,
+return res.status(201).json({
+  token: accessToken,      // FIXED: was missing, caused Expo onboarding crash
+  refreshToken,
+  driver: safe,
       isNewDriver: true,
       nextStep: 'upload_documents',
       requiresApproval: true,
