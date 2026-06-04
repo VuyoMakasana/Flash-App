@@ -1,0 +1,33 @@
+# ─── Flash Root .gitignore ─────────────────────────────────────────────────
+# This file goes in the ROOT of the repo (same folder as docker-compose.yml).
+
+# ── Secrets (NEVER commit these) ───────────────────────────────────────────
+backend/.env
+flash-user-app/.env
+flash-driver-app/.env
+
+# ── Node modules ─────────────────────────────────────────────────────────
+node_modules/
+*/node_modules/
+
+# ── Expo & React Native build artifacts ───────────────────────────────────
+flash-user-app/.expo/
+flash-driver-app/.expo/
+flash-user-app/android/
+flash-user-app/ios/
+flash-driver-app/android/
+flash-driver-app/ios/
+*.jks
+*.keystore
+*.p8
+*.p12
+*.mobileprovision
+
+# ── Logs ─────────────────────────────────────────────────────────────────
+*.log
+logs/
+backend/logs/
+
+# ── Build output ──────────────────────────────────────────────────────────
+dist/
+build/
