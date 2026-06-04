@@ -1,3 +1,6 @@
+// flash-user-app/screens/LoginScreen.js
+// FULL REPLACEMENT FILE — fixes duplicate handleGoogleSignIn function,
+// adds Forgot Password navigation, adds email-not-verified handling.
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, Pressable, StyleSheet,
@@ -7,7 +10,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFlash } from '../context/FlashContext';
 import { GoogleSignin, GoogleSigninButton, statusCodes } from '@react-native-google-signin/google-signin';
 
-
 // expo-apple-authentication: only available on iOS 13+
 let AppleAuth = null;
 if (Platform.OS === 'ios') {
@@ -15,12 +17,12 @@ if (Platform.OS === 'ios') {
 }
 
 export default function LoginScreen({ navigation }) {
-  const [email, setEmail]                   = useState('');
-  const [password, setPassword]             = useState('');
-  const [loading, setLoading]               = useState(false);
+  const [email, setEmail]               = useState('');
+  const [password, setPassword]         = useState('');
+  const [loading, setLoading]           = useState(false);
   const [appleLoading, setAppleLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
-  const [showPassword, setShowPassword]     = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [appleAvailable, setAppleAvailable] = useState(false);
   const { login, loginWithApple, loginWithGoogle } = useFlash();
 
@@ -29,45 +31,62 @@ export default function LoginScreen({ navigation }) {
     AppleAuth.isAvailableAsync().then(setAppleAvailable).catch(() => {});
   }, []);
 
-  const handleGoogleSignIn = async () => {
-  setGoogleLoading(true);
-  try {
-    await GoogleSignin.hasPlayServices();
-    const userInfo = await GoogleSignin.signIn();
-    await loginWithGoogle(userInfo.data?.idToken || userInfo.idToken);
-  } catch (err) {
-    if (err.code === statusCodes.SIGN_IN_CANCELLED) return;
-    if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-      Alert.alert('Not Available', 'Google Sign In is not available on this device.');
+  // Configure Google Sign-In with real client IDs from .env
+  useEffect(() => {
+    GoogleSignin.configure({
+      // iosClientId  : the iOS OAuth client ID from Google Cloud Console
+      // webClientId  : the Android OAuth client ID (also called "web" by the SDK)
+      iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
+      webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID,
+    });
+  }, []);
+
+  const handleLogin = async () => {
+    if (!email.trim() || !password.trim()) {
+      Alert.alert('Missing Fields', 'Please enter your email and password.');
       return;
     }
-    Alert.alert('Google Sign In Failed', err.message || 'Could not sign in with Google.');
-  } finally {
-    setGoogleLoading(false);
-  }
-};
-
-useEffect(() => {
-  GoogleSignin.configure({
-    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID,
-  });
-}, []);
-
-
-
+    setLoading(true);
+    try {
+      await login(email.trim().toLowerCase(), password);
+    } catch (err) {
+      const msg = err.message || 'Login failed';
+      if (msg.includes('EMAIL_NOT_VERIFIED') || msg.includes('verify your email')) {
+        Alert.alert(
+          'Email Not Verified',
+          'Please check your inbox and verify your email address before logging in.',
+          [
+            { text: 'Resend Email', onPress: () => navigation.navigate('ResendVerification', { email: email.trim().toLowerCase() }) },
+            { text: 'OK', style: 'cancel' },
+          ]
+        );
+      } else {
+        Alert.alert('Login Failed', msg);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
     try {
-      await GoogleSignin.signIn();
-    } catch (error) {
-      if (error.code === statusCodes.IN_PROGRESS) {
-        // operation in progress
-      } else if (error.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-        Alert.alert('Google Sign In Failed', 'Google Play Services not available.');
-      } else {
-        Alert.alert('Google Sign In Failed', error.message || 'Could not sign in with Google. Please try again.');
+      await GoogleSignin.hasPlayServices();
+      const userInfo = await GoogleSignin.signIn();
+      // SDK v16 returns idToken inside data; older versions return it at root
+      const idToken = userInfo.data?.idToken || userInfo.idToken;
+      if (!idToken) throw new Error('No ID token returned from Google');
+      await loginWithGoogle(idToken);
+    } catch (err) {
+      if (err.code === statusCodes.SIGN_IN_CANCELLED) return; // user tapped back
+      if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+        Alert.alert('Not Available', 'Google Sign In is not available on this device.');
+        return;
       }
+      if (err.code === statusCodes.IN_PROGRESS) return; // already signing in
+      Alert.alert('Google Sign In Failed', err.message || 'Could not sign in with Google. Please try again.');
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -81,10 +100,9 @@ useEffect(() => {
           AppleAuth.AppleAuthenticationScope.EMAIL,
         ],
       });
-      // identityToken is the JWT from Apple we send to our backend for verification
       await loginWithApple(credential.identityToken, credential.fullName, credential.email);
     } catch (err) {
-      if (err.code === 'ERR_REQUEST_CANCELED') return; // User dismissed the sheet
+      if (err.code === 'ERR_REQUEST_CANCELED') return;
       Alert.alert('Apple Sign In Failed', err.message || 'Could not sign in with Apple. Please try email and password.');
     } finally {
       setAppleLoading(false);
@@ -107,7 +125,7 @@ useEffect(() => {
           <Text style={styles.title}>Welcome back</Text>
           <Text style={styles.subtitle}>Sign in to your account</Text>
 
-          {/* Sign in with Apple — only shown on iPhones running iOS 13+ */}
+          {/* Apple Sign In — iPhone only */}
           {appleAvailable && AppleAuth && (
             <>
               {appleLoading ? (
@@ -123,25 +141,28 @@ useEffect(() => {
                   onPress={handleAppleSignIn}
                 />
               )}
-
-
               <View style={styles.dividerRow}>
                 <View style={styles.divider} />
-                <Text style={styles.dividerText}>or continue with email</Text>
+                <Text style={styles.dividerText}>or</Text>
                 <View style={styles.divider} />
               </View>
             </>
           )}
 
-<GoogleSigninButton
-  style={{ width: '100%', height: 52 }}
-  size={GoogleSigninButton.Size.Wide}
-  color={GoogleSigninButton.Color.Dark}
-  onPress={handleGoogleSignIn}
-  disabled={googleLoading}
-/>
+          {/* Google Sign In */}
+          <GoogleSigninButton
+            style={{ width: '100%', height: 52, marginBottom: 4 }}
+            size={GoogleSigninButton.Size.Wide}
+            color={GoogleSigninButton.Color.Dark}
+            onPress={handleGoogleSignIn}
+            disabled={googleLoading}
+          />
 
-
+          <View style={styles.dividerRow}>
+            <View style={styles.divider} />
+            <Text style={styles.dividerText}>or continue with email</Text>
+            <View style={styles.divider} />
+          </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Email</Text>
@@ -162,7 +183,12 @@ useEffect(() => {
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Password</Text>
+            <View style={styles.labelRow}>
+              <Text style={styles.label}>Password</Text>
+              <Pressable onPress={() => navigation.navigate('ForgotPassword')} hitSlop={8}>
+                <Text style={styles.forgotLink}>Forgot password?</Text>
+              </Pressable>
+            </View>
             <View style={styles.inputRow}>
               <Ionicons name="lock-closed-outline" size={18} color="#9ca3af" style={styles.inputIcon} />
               <TextInput
@@ -208,7 +234,9 @@ const styles = StyleSheet.create({
   divider:        { flex: 1, height: 1, backgroundColor: '#e5e7eb' },
   dividerText:    { color: '#9ca3af', fontSize: 12 },
   inputGroup:     { gap: 6 },
+  labelRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   label:          { fontWeight: '600', color: '#374151', fontSize: 14 },
+  forgotLink:     { color: '#0a0a0a', fontSize: 13, fontWeight: '600' },
   inputRow:       { flexDirection: 'row', alignItems: 'center', backgroundColor: '#f9fafb', borderRadius: 14, borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 12 },
   inputIcon:      { marginRight: 8 },
   input:          { flex: 1, paddingVertical: 14, fontSize: 16, color: '#111827' },
