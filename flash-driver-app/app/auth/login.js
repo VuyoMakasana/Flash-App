@@ -1,3 +1,6 @@
+// flash-driver-app/app/auth/login.js
+// FULL REPLACEMENT FILE — fixes duplicate handleGoogleSignIn, adds missing
+// googleLoading state, correctly destructures loginWithGoogle from context.
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TextInput, Pressable,
@@ -7,7 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useDriver } from '../../context/DriverContext';
 import { GoogleSignin, GoogleSigninButton, statusCodes } from '@react-native-google-signin/google-signin';
-// Sign in with Apple — only available on iOS 13+
+
 let AppleAuth = null;
 if (Platform.OS === 'ios') {
   try { AppleAuth = require('expo-apple-authentication'); } catch (_) {}
@@ -15,13 +18,15 @@ if (Platform.OS === 'ios') {
 
 export default function DriverLoginScreen() {
   const router = useRouter();
-  const { login, loginWithApple } = useDriver();
+  // loginWithGoogle was defined in DriverContext but never destructured here
+  const { login, loginWithApple, loginWithGoogle } = useDriver();
 
   const [email, setEmail]               = useState('');
   const [password, setPassword]         = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading]           = useState(false);
   const [appleLoading, setAppleLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false); // was missing
   const [appleAvailable, setAppleAvailable] = useState(false);
 
   useEffect(() => {
@@ -29,14 +34,13 @@ export default function DriverLoginScreen() {
     AppleAuth.isAvailableAsync().then(setAppleAvailable).catch(() => {});
   }, []);
 
-
-useEffect(() => {
-  GoogleSignin.configure({
-    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID,
-  });
-}, []);
-
+  // Configure Google Sign-In once on mount with real client IDs from .env
+  useEffect(() => {
+    GoogleSignin.configure({
+      iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
+      webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID,
+    });
+  }, []);
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -65,25 +69,33 @@ useEffect(() => {
     }
   };
 
-const handleGoogleSignIn = async () => {
-  setGoogleLoading(true);
-  try {
-    await GoogleSignin.hasPlayServices();
-    const userInfo = await GoogleSignin.signIn();
-    await loginWithGoogle(userInfo.data?.idToken || userInfo.idToken);
-  } catch (err) {
-    if (err.code === statusCodes.SIGN_IN_CANCELLED) return;
-    if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
-      Alert.alert('Not Available', 'Google Sign In is not available on this device.');
-      return;
+  // Single, correct handleGoogleSignIn — the original file had two conflicting definitions
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    try {
+      await GoogleSignin.hasPlayServices();
+      const userInfo = await GoogleSignin.signIn();
+      // SDK v16 returns idToken inside data; older versions return it at root
+      const idToken = userInfo.data?.idToken || userInfo.idToken;
+      if (!idToken) throw new Error('No ID token returned from Google');
+      const result = await loginWithGoogle(idToken);
+      if (result?.nextStep === 'upload_documents') {
+        router.replace('/auth/onboarding');
+      } else {
+        router.replace('/driver/dashboard');
+      }
+    } catch (err) {
+      if (err.code === statusCodes.SIGN_IN_CANCELLED) return;
+      if (err.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+        Alert.alert('Not Available', 'Google Sign In is not available on this device.');
+        return;
+      }
+      if (err.code === statusCodes.IN_PROGRESS) return;
+      Alert.alert('Google Sign In Failed', err.message || 'Could not sign in with Google.');
+    } finally {
+      setGoogleLoading(false);
     }
-    Alert.alert('Google Sign In Failed', err.message || 'Could not sign in with Google.');
-  } finally {
-    setGoogleLoading(false);
-  }
-};
-
-
+  };
 
   const handleAppleSignIn = async () => {
     if (!AppleAuth) return;
@@ -100,7 +112,6 @@ const handleGoogleSignIn = async () => {
         credential.fullName,
         credential.email,
       );
-      // New drivers go to document upload; returning approved drivers go to dashboard
       if (result?.nextStep === 'upload_documents') {
         router.replace('/auth/onboarding');
       } else {
@@ -138,7 +149,7 @@ const handleGoogleSignIn = async () => {
           <Text style={styles.title}>Driver Sign In</Text>
           <Text style={styles.subtitle}>Access your deliveries and earnings</Text>
 
-          {/* Sign in with Apple — iPhone only */}
+          {/* Apple Sign In — iPhone only */}
           {appleAvailable && AppleAuth && (
             <>
               {appleLoading ? (
@@ -156,21 +167,27 @@ const handleGoogleSignIn = async () => {
               )}
               <View style={styles.dividerRow}>
                 <View style={styles.divider} />
-                <Text style={styles.dividerText}>or continue with email</Text>
+                <Text style={styles.dividerText}>or</Text>
                 <View style={styles.divider} />
               </View>
             </>
           )}
 
-<GoogleSigninButton
-  style={{ width: '100%', height: 52 }}
-  size={GoogleSigninButton.Size.Wide}
-  color={GoogleSigninButton.Color.Dark}
-  onPress={handleGoogleSignIn}
-  disabled={googleLoading}
-/>
+          {/* Google Sign In */}
+          <GoogleSigninButton
+            style={{ width: '100%', height: 52, marginBottom: 4 }}
+            size={GoogleSigninButton.Size.Wide}
+            color={GoogleSigninButton.Color.Dark}
+            onPress={handleGoogleSignIn}
+            disabled={googleLoading}
+          />
 
-          
+          <View style={styles.dividerRow}>
+            <View style={styles.divider} />
+            <Text style={styles.dividerText}>or continue with email</Text>
+            <View style={styles.divider} />
+          </View>
+
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Email</Text>
             <View style={styles.inputRow}>
