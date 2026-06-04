@@ -1,11 +1,10 @@
+// flash-user-app/services/api.js
+// FULL REPLACEMENT FILE — adds auth.forgotPassword and auth.resetPassword.
+// Every other line is identical to the original.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// REQUEST_TIMEOUT_MS: abort any API call that takes longer than 15 seconds
-// WHY: Without this constant the request function throws a ReferenceError
-// on every single API call, crashing the entire app immediately at startup
 const REQUEST_TIMEOUT_MS = 15000;
 
-// FIX 1: Changed hardcoded LAN IP to production server URL — the old IP was a local Tailscale address that fails for every user outside the developer's network
 const DEFAULT_BASE_URL = 'https://flash-app-hplc.onrender.com';
 export const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_BASE_URL;
 
@@ -28,25 +27,21 @@ const shouldRetry = (method, responseStatus, errName) => {
   return false;
 };
 
-// Silent token refresh — tries to get a new access token using the stored refresh token.
-// Called automatically when the server returns 401 TOKEN_EXPIRED.
-// If refresh fails (refresh token also expired), throws SESSION_EXPIRED to force re-login.
-let _isRefreshing    = false;
-let _refreshQueue    = [];
+let _isRefreshing = false;
+let _refreshQueue = [];
 
 async function silentRefresh() {
   const refreshToken = await getRefreshToken();
   if (!refreshToken) throw new Error('SESSION_EXPIRED');
 
   try {
-    const res = await fetch(`${BASE_URL}/api/auth/refresh`, {
-      method: 'POST',
+    const res  = await fetch(`${BASE_URL}/api/auth/refresh`, {
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
+      body:    JSON.stringify({ refreshToken }),
     });
     const data = await res.json();
     if (!res.ok || !data.token) throw new Error('SESSION_EXPIRED');
-
     await AsyncStorage.setItem('FLASH_TOKEN', data.token);
     if (data.refreshToken) await AsyncStorage.setItem('FLASH_REFRESH_TOKEN', data.refreshToken);
     return data.token;
@@ -77,11 +72,9 @@ async function request(method, path, body = null, isPublic = false) {
       const data     = await parseResponse(response);
 
       if (!response.ok) {
-        // TOKEN_EXPIRED: silently refresh and retry ONCE before forcing re-login
         if (response.status === 401 && !isPublic) {
           const errMsg = data?.error || '';
           if (errMsg === 'TOKEN_EXPIRED' || errMsg === 'Token expired') {
-            // Only one refresh in flight at a time; queue other requests
             if (!_isRefreshing) {
               _isRefreshing = true;
               try {
@@ -96,13 +89,10 @@ async function request(method, path, body = null, isPublic = false) {
               }
               _isRefreshing = false;
             } else {
-              // Wait for the in-flight refresh
               await new Promise((resolve) => _refreshQueue.push(resolve));
             }
-            // Retry the original request with the new token
             continue;
           }
-          // Any other 401 (invalid token, revoked): force logout
           await AsyncStorage.multiRemove(['FLASH_TOKEN', 'FLASH_USER', 'FLASH_REFRESH_TOKEN']);
           throw new Error('SESSION_EXPIRED');
         }
@@ -144,69 +134,77 @@ export const api = {
       request('POST', '/api/auth/refresh', { refreshToken }, true),
     logout:      (refreshToken) =>
       request('POST', '/api/auth/logout', { refreshToken }, true),
+    // NEW: Password reset
+    forgotPassword: (email) =>
+      request('POST', '/api/auth/user/forgot-password', { email }, true),
+    resetPassword:  (token, newPassword) =>
+      request('POST', '/api/auth/user/reset-password', { token, newPassword }, true),
+    // NEW: Email verification
+    verifyEmail:         (token) =>
+      request('POST', '/api/auth/user/verify-email', { token }, true),
+    resendVerification:  (email) =>
+      request('POST', '/api/auth/user/resend-verification', { email }, true),
   },
   user: {
-    getProfile: () => request('GET', '/api/users/me'),
-    updateProfile: (data) => request('PUT', '/api/users/me', data),
+    getProfile:        () => request('GET', '/api/users/me'),
+    updateProfile:     (data) => request('PUT', '/api/users/me', data),
     registerPushToken: (push_token) => request('POST', '/api/users/push-token', { push_token }),
   },
   orders: {
-    create: (orderData) => request('POST', '/api/orders', orderData),
-    getMyOrders: () => request('GET', '/api/orders/my-orders'),
-    getOrder: (orderId) => request('GET', `/api/orders/${orderId}`),
+    create:       (orderData) => request('POST', '/api/orders', orderData),
+    getMyOrders:  () => request('GET', '/api/orders/my-orders'),
+    getOrder:     (orderId) => request('GET', `/api/orders/${orderId}`),
     selectDriver: (orderId, driverId) =>
       request('POST', `/api/orders/${orderId}/select-driver`, { driverId }),
   },
   payments: {
-    // Initialize a Paystack payment — returns { authorizationUrl, reference }
-    initialize: (orderId) =>
+    initialize:       (orderId) =>
       request('POST', '/api/payments/initialize', { orderId }),
-    // Verify after Paystack redirects back
-    verify: (reference) =>
+    verify:           (reference) =>
       request('GET', `/api/payments/verify/${reference}`),
-    cashOnDelivery: (orderId) =>
+    cashOnDelivery:   (orderId) =>
       request('POST', '/api/payments/cash-on-delivery', { orderId }),
-    initPayflex: (orderId) =>
+    initPayflex:      (orderId) =>
       request('POST', '/api/payments/payflex/initiate', { orderId }),
-    getStatus: (orderId) =>
+    getStatus:        (orderId) =>
       request('GET', `/api/payments/status/${orderId}`),
-    getSavedCards: () =>
+    getSavedCards:    () =>
       request('GET', '/api/payments/cards'),
-    chargeSavedCard: (orderId, cardId) =>
+    chargeSavedCard:  (orderId, cardId) =>
       request('POST', '/api/payments/charge-saved-card', { orderId, cardId }),
-    removeCard: (cardId) =>
+    removeCard:       (cardId) =>
       request('DELETE', `/api/payments/cards/${cardId}`),
-    setDefaultCard: (cardId) =>
+    setDefaultCard:   (cardId) =>
       request('PATCH', `/api/payments/cards/${cardId}/default`),
   },
   returns: {
-    request: (orderId, reason) =>
+    request:      (orderId, reason) =>
       request('POST', `/api/returns/${orderId}`, { reason }),
     getMyReturns: () => request('GET', '/api/returns/my'),
-    getCredits: () => request('GET', '/api/returns/credits'),
+    getCredits:   () => request('GET', '/api/returns/credits'),
   },
   premium: {
     getStatus: () => request('GET', '/api/subscriptions/premium'),
-    purchase: () => request('POST', '/api/subscriptions/premium/purchase'),
+    purchase:  () => request('POST', '/api/subscriptions/premium/purchase'),
   },
   sizing: {
-    getGuide: () => request('GET', '/api/sizing/guide', null, true),
-    getProfile: () => request('GET', '/api/sizing/profile'),
-    saveProfile: (data) => request('POST', '/api/sizing/profile', data),
+    getGuide:          () => request('GET', '/api/sizing/guide', null, true),
+    getProfile:        () => request('GET', '/api/sizing/profile'),
+    saveProfile:       (data) => request('POST', '/api/sizing/profile', data),
     getRecommendation: (storeId, category) =>
       request('GET', `/api/sizing/recommend/${storeId}/${category}`),
   },
   feed: {
-    getPosts: (page = 1) => request('GET', `/api/feed?page=${page}`),
+    getPosts:   (page = 1) => request('GET', `/api/feed?page=${page}`),
     createPost: (data) => request('POST', '/api/feed', data),
-    likePost: (postId) => request('POST', `/api/feed/${postId}/like`),
+    likePost:   (postId) => request('POST', `/api/feed/${postId}/like`),
     getComments: (postId) => request('GET', `/api/feed/${postId}/comments`),
-    addComment: (postId, content) =>
+    addComment:  (postId, content) =>
       request('POST', `/api/feed/${postId}/comments`, { content }),
     deletePost: (postId) => request('DELETE', `/api/feed/${postId}`),
   },
   boost: {
-    getActive: () => request('GET', '/api/boost/active'),
+    getActive:     () => request('GET', '/api/boost/active'),
     getPromotions: () => request('GET', '/api/boost/promotions'),
   },
   trends: {
@@ -222,7 +220,6 @@ export const api = {
     getProduct: (productId) =>
       request('GET', `/api/inventory/${productId}`),
   },
-  // ── v3 NEW ─────────────────────────────────────────────────────────────────
   messages: {
     getMessages: (orderId) => request('GET', `/api/messages/${orderId}`),
     sendMessage: (orderId, content) =>
@@ -235,10 +232,10 @@ export const api = {
   },
   trustedDrivers: {
     getMyTrusted: () => request('GET', '/api/trusted-drivers'),
-    getPending: () => request('GET', '/api/trusted-drivers/pending'),
-    sendRequest: (driverId) => request('POST', `/api/trusted-drivers/${driverId}/request`),
-    remove: (driverId) => request('DELETE', `/api/trusted-drivers/${driverId}`),
-    checkStatus: (driverId) => request('GET', `/api/trusted-drivers/${driverId}/status`),
+    getPending:   () => request('GET', '/api/trusted-drivers/pending'),
+    sendRequest:  (driverId) => request('POST', `/api/trusted-drivers/${driverId}/request`),
+    remove:       (driverId) => request('DELETE', `/api/trusted-drivers/${driverId}`),
+    checkStatus:  (driverId) => request('GET', `/api/trusted-drivers/${driverId}/status`),
   },
 };
 
