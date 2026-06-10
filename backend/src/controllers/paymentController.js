@@ -1,70 +1,74 @@
-const crypto = require("crypto");
-const Payment = require("../models/Payment");
-const Order = require("../models/Order");
-const paystackService = require("../services/paystackService");
-const db = require("../config/database");
-const { updateOrderStatus } = require("../services/orderStateMachineService");
-const { autoAssignNearestDriver } = require("../services/fleetIntelligenceService");
-const cashOtpService = require("../services/cashOtpService");
-const { notifyDriversNewOrder } = require("../services/notificationService");
-const { isClosedNow, getNextOpenTime } = require("../services/operatingHoursService");
+'use strict';
+
+const crypto = require('crypto');
+const Payment = require('../models/Payment');
+const Order = require('../models/Order');
+const paystackService = require('../services/paystackService');
+const db = require('../config/database');
+const { updateOrderStatus } = require('../services/orderStateMachineService');
+const { autoAssignNearestDriver } = require('../services/fleetIntelligenceService');
+const cashOtpService = require('../services/cashOtpService');
+const { notifyDriversNewOrder } = require('../services/notificationService');
+const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
+const { recordCashCommission, checkCommissionBlock } = require('../services/driverCommissionService');
 
 class PaymentController {
   static async initializePayment(req, res) {
     const { orderId } = req.body;
+    if (!orderId) {
+      return res.status(400).json({ error: 'orderId is required' });
+    }
     try {
-      const result = await paystackService.initializePayment(
-        orderId,
-        req.userId,
-      );
+      const result = await paystackService.initializePayment(orderId, req.userId);
       res.json(result);
     } catch (err) {
-      console.error("[Paystack] Initialize error:", err);
-      res.status(500).json({ error: "Failed to initialize payment" });
+      console.error('[Paystack] Initialize error:', err.message);
+      res.status(500).json({ error: 'Failed to initialize payment' });
     }
   }
 
   static async verifyPayment(req, res) {
     const { reference } = req.params;
-    const io = req.app.get("io");
-
+    const io = req.app.get('io');
     try {
       const result = await paystackService.verifyPayment(reference, io, req.userId);
       res.json(result);
     } catch (err) {
-      console.error("[Paystack] Verify error:", err);
-      res.status(500).json({ error: "Failed to verify payment" });
+      console.error('[Paystack] Verify error:', err.message);
+      res.status(500).json({ error: 'Failed to verify payment' });
     }
   }
 
   static async cashOnDelivery(req, res) {
     const { orderId } = req.body;
-    const io = req.app.get("io");
+    const io = req.app.get('io');
+
+    if (!orderId) {
+      return res.status(400).json({ error: 'orderId is required' });
+    }
 
     try {
       const result = await Payment.cashOnDelivery(orderId, req.userId, io);
 
-      // Mark as paid first
-      await updateOrderStatus(orderId, "paid", {
+      await updateOrderStatus(orderId, 'paid', {
         actorId: req.userId,
-        actorRole: "user",
+        actorRole: 'user',
         io,
       });
 
       if (isClosedNow()) {
-        // Outside operating hours — schedule for next morning
         const openAt = getNextOpenTime();
         await db.query(
           `UPDATE orders SET scheduled_for = $1, updated_at = NOW() WHERE id = $2`,
-          [openAt, orderId]
+          [openAt, orderId],
         );
-        await updateOrderStatus(orderId, "scheduled_for_morning", {
+        await updateOrderStatus(orderId, 'scheduled_for_morning', {
           actorId: req.userId,
-          actorRole: "user",
+          actorRole: 'user',
           io,
         });
         if (io) {
-          io.to(`user:${req.userId}`).emit("order_scheduled", {
+          io.to(`user:${req.userId}`).emit('order_scheduled', {
             orderId,
             openAt: openAt.toISOString(),
             message: `Flash opens at 07:00. Your order will be assigned to a driver then.`,
@@ -73,10 +77,9 @@ class PaymentController {
         return res.json({ ...result, scheduled: true, openAt });
       }
 
-      // Within operating hours — queue immediately
-      await updateOrderStatus(orderId, "waiting_for_driver", {
+      await updateOrderStatus(orderId, 'waiting_for_driver', {
         actorId: req.userId,
-        actorRole: "user",
+        actorRole: 'user',
         io,
       });
 
@@ -84,17 +87,22 @@ class PaymentController {
       notifyDriversNewOrder(orderId, true).catch(() => null);
       res.json(result);
     } catch (err) {
-      res.status(500).json({ error: "Failed to set cash delivery" });
+      console.error('[Payment] cashOnDelivery error:', err.message);
+      res.status(500).json({ error: 'Failed to set cash delivery' });
     }
   }
 
   static async initiatePayflex(req, res) {
     const { orderId } = req.body;
+    if (!orderId) {
+      return res.status(400).json({ error: 'orderId is required' });
+    }
     try {
       const result = await Payment.initiatePayflex(orderId, req.userId);
       res.json(result);
     } catch (err) {
-      res.status(500).json({ error: "Failed to initiate Payflex" });
+      console.error('[Payflex] initiate error:', err.message);
+      res.status(500).json({ error: 'Failed to initiate Payflex' });
     }
   }
 
@@ -103,11 +111,12 @@ class PaymentController {
     try {
       const status = await Order.getPaymentStatus(orderId, req.userId);
       if (!status) {
-        return res.status(404).json({ error: "Order not found" });
+        return res.status(404).json({ error: 'Order not found' });
       }
       res.json(status);
     } catch (err) {
-      res.status(500).json({ error: "Failed to fetch payment status" });
+      console.error('[Payment] getPaymentStatus error:', err.message);
+      res.status(500).json({ error: 'Failed to fetch payment status' });
     }
   }
 
@@ -116,7 +125,8 @@ class PaymentController {
       const cards = await Payment.getSavedCards(req.userId);
       res.json({ cards });
     } catch (err) {
-      res.status(500).json({ error: "Failed to fetch cards" });
+      console.error('[Payment] getSavedCards error:', err.message);
+      res.status(500).json({ error: 'Failed to fetch cards' });
     }
   }
 
@@ -126,7 +136,8 @@ class PaymentController {
       await Payment.removeCard(cardId, req.userId);
       res.json({ success: true });
     } catch (err) {
-      res.status(500).json({ error: "Failed to remove card" });
+      console.error('[Payment] removeCard error:', err.message);
+      res.status(500).json({ error: 'Failed to remove card' });
     }
   }
 
@@ -136,7 +147,8 @@ class PaymentController {
       await Payment.setDefaultCard(cardId, req.userId);
       res.json({ success: true });
     } catch (err) {
-      res.status(500).json({ error: "Failed to set default card" });
+      console.error('[Payment] setDefaultCard error:', err.message);
+      res.status(500).json({ error: 'Failed to set default card' });
     }
   }
 
@@ -145,26 +157,21 @@ class PaymentController {
     let reference;
 
     if (!orderId || !cardId) {
-      return res.status(400).json({ error: "orderId and cardId are required" });
+      return res.status(400).json({ error: 'orderId and cardId are required' });
     }
 
     try {
       const card = await Payment.getSavedCardById(cardId, req.userId);
       if (!card) {
-        return res.status(404).json({ error: "Saved card not found" });
+        return res.status(404).json({ error: 'Saved card not found' });
       }
-      const userResult = await db.query(
-        "SELECT email FROM users WHERE id=$1",
-        [req.userId],
-      );
+      const userResult = await db.query('SELECT email FROM users WHERE id=$1', [req.userId]);
       const email = userResult.rows[0]?.email;
 
-      // Lock the order row to prevent concurrent charge attempts and to persist
-      // the reference atomically before calling Paystack.
       const client = await db.connect();
       let order;
       try {
-        await client.query("BEGIN");
+        await client.query('BEGIN');
 
         const lockedResult = await client.query(
           `SELECT id, total, payment_status, paystack_reference, user_id
@@ -173,28 +180,27 @@ class PaymentController {
         );
 
         if (!lockedResult.rows.length) {
-          await client.query("ROLLBACK");
-          return res.status(404).json({ error: "Order not found" });
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Order not found' });
         }
 
         order = lockedResult.rows[0];
 
-        if (order.payment_status === "paid") {
-          await client.query("ROLLBACK");
-          return res.status(409).json({ error: "Order already paid" });
+        if (order.payment_status === 'paid') {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: 'Order already paid' });
         }
 
-        // Reject concurrent charge attempts while a charge is already in flight.
-        if (order.payment_status === "pending" && order.paystack_reference) {
-          await client.query("ROLLBACK");
+        if (order.payment_status === 'pending' && order.paystack_reference) {
+          await client.query('ROLLBACK');
           return res.status(409).json({
-            error: "Payment already pending confirmation",
+            error: 'Payment already pending confirmation',
             awaitingWebhook: true,
             reference: order.paystack_reference,
           });
         }
 
-        reference = `flash_sc_${orderId}_${crypto.randomBytes(8).toString("hex")}`;
+        reference = `flash_sc_${orderId}_${crypto.randomBytes(8).toString('hex')}`;
         await client.query(
           `UPDATE orders
            SET paystack_reference = $1, payment_status = 'pending', updated_at = NOW()
@@ -202,9 +208,9 @@ class PaymentController {
           [reference, orderId],
         );
 
-        await client.query("COMMIT");
+        await client.query('COMMIT');
       } catch (err) {
-        await client.query("ROLLBACK");
+        await client.query('ROLLBACK');
         throw err;
       } finally {
         client.release();
@@ -216,157 +222,193 @@ class PaymentController {
         card.authorization_code,
         email,
         amountInCents,
-        {
-          orderId,
-          userId: req.userId,
-          cardId: card.id,
-          source: "saved_card",
-        },
+        { orderId, userId: req.userId, cardId: card.id, source: 'saved_card' },
         reference,
       );
 
       if (!paystackRes?.status) {
-        // Paystack explicitly rejected the charge — clear the reference so the client can retry.
         await db.query(
           `UPDATE orders
            SET payment_status = 'pending', paystack_reference = NULL, updated_at = NOW()
            WHERE id = $1`,
           [orderId],
         );
-        return res
-          .status(400)
-          .json({ error: paystackRes?.message || "Card charge failed" });
+        return res.status(400).json({ error: paystackRes?.message || 'Card charge failed' });
       }
 
-      if (paystackRes.data?.status !== "success") {
-        // Non-immediate-success statuses (e.g. send_otp, pending) mean Paystack may still
-        // complete the charge asynchronously and send a webhook. Keep the reference so the
-        // webhook finalization path can match the order.
+      if (paystackRes.data?.status !== 'success') {
         return res.status(202).json({
           success: false,
-          status: paystackRes.data?.status || "pending",
-          message: paystackRes.data?.gateway_response || "Payment pending",
+          status: paystackRes.data?.status || 'pending',
+          message: paystackRes.data?.gateway_response || 'Payment pending',
           reference,
           awaitingWebhook: true,
         });
       }
 
-      // Charge accepted — webhook is the source of truth for final paid transition.
       res.status(202).json({
         success: true,
         orderId,
         reference,
-        message: "Charge accepted. Awaiting webhook confirmation.",
+        message: 'Charge accepted. Awaiting webhook confirmation.',
         awaitingWebhook: true,
       });
     } catch (err) {
-      console.error("[Paystack] Saved card charge error:", err.message);
-      // If chargeAuthorization threw (network/API error), the request may or may
-      // not have reached Paystack. Conditionally revert only when the reference
-      // still matches (paystack_reference = $2), so we don't overwrite state that
-      // was already advanced by an arriving webhook.
+      console.error('[Paystack] Saved card charge error:', err.message);
       if (reference) {
         await db.query(
           `UPDATE orders
            SET payment_status = 'pending', paystack_reference = NULL, updated_at = NOW()
            WHERE id = $1 AND paystack_reference = $2`,
           [orderId, reference],
-        ).catch((e) => console.error("[Paystack] Cleanup revert failed:", e.message));
+        ).catch((e) => console.error('[Paystack] Cleanup revert failed:', e.message));
       }
-      res.status(500).json({ error: "Failed to charge saved card" });
+      res.status(500).json({ error: 'Failed to charge saved card' });
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // confirmCashReceived
+  //
+  // CRITICAL: records R20 Flash commission inside the SAME transaction that
+  // marks the order paid + completed. This is the revenue capture step.
+  // ─────────────────────────────────────────────────────────────────────────
   static async confirmCashReceived(req, res) {
     const { orderId, otp } = req.body;
-    const io = req.app.get("io");
+    const io = req.app.get('io');
 
     if (!orderId) {
-      return res.status(400).json({ error: "orderId is required" });
+      return res.status(400).json({ error: 'orderId is required' });
+    }
+    if (!otp) {
+      return res.status(400).json({ error: 'OTP confirmation is required' });
     }
 
+    const client = await db.connect();
     try {
-      const result = await db.query(
-        `SELECT * FROM orders WHERE id = $1`,
+      // Validate OTP before opening transaction
+      await cashOtpService.verifyOtp(orderId, otp);
+
+      await client.query('BEGIN');
+
+      // Lock the order row for the entire commission + completion transaction
+      const result = await client.query(
+        `SELECT id, driver_id, user_id, payment_method, payment_status, status
+         FROM orders WHERE id = $1 FOR UPDATE`,
         [orderId],
       );
+
       if (!result.rows.length) {
-        return res.status(404).json({ error: "Order not found" });
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Order not found' });
       }
 
       const order = result.rows[0];
+
       if (order.driver_id !== req.userId) {
-        return res.status(403).json({ error: "Not your order" });
+        await client.query('ROLLBACK');
+        return res.status(403).json({ error: 'Not your order' });
       }
-      if (order.payment_method !== "cash" || order.payment_status !== "pending_cash") {
-        return res.status(409).json({ error: "Order is not awaiting cash confirmation" });
+      if (order.payment_method !== 'cash' || order.payment_status !== 'pending_cash') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Order is not awaiting cash confirmation' });
       }
-      if (order.status !== "delivered") {
-        return res.status(409).json({ error: "Cash can only be confirmed after delivery" });
-      }
-      if (!otp) {
-        return res.status(400).json({ error: "OTP confirmation is required" });
+      if (order.status !== 'delivered') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Cash can only be confirmed after delivery' });
       }
 
-      await cashOtpService.verifyOtp(orderId, otp);
-
-      await db.query(
+      // Mark order paid
+      await client.query(
         `UPDATE orders
          SET payment_status = 'paid', cash_received_at = NOW(), updated_at = NOW()
          WHERE id = $1`,
         [orderId],
       );
 
-      await updateOrderStatus(orderId, "completed", {
+      // ── COMMISSION RECORDING ─────────────────────────────────────────────
+      // R20 Flash commission is recorded here. This is the revenue capture.
+      // recordCashCommission is idempotent (unique on order_id).
+      await recordCashCommission(client, order.driver_id, orderId);
+      // ─────────────────────────────────────────────────────────────────────
+
+      await client.query('COMMIT');
+
+      // Complete the order status outside the transaction (state machine may
+      // emit socket events and use its own transactions internally)
+      await updateOrderStatus(orderId, 'completed', {
         actorId: req.userId,
-        actorRole: "driver",
+        actorRole: 'driver',
         io,
       });
 
-      return res.json({ success: true, payment_status: "paid", status: "completed" });
+      // Notify driver of their commission status
+      const { checkCommissionBlock: checkBlock } = require('../services/driverCommissionService');
+      const commissionStatus = await checkBlock(order.driver_id);
+      if (commissionStatus.blocked && io) {
+        io.to(`driver:${order.driver_id}`).emit('commission_blocked', {
+          message: `You have been blocked due to R${commissionStatus.debtAmount.toFixed(2)} outstanding commission debt. Pay to go back online.`,
+          debtAmount: commissionStatus.debtAmount,
+          unpaidDeliveries: commissionStatus.unpaidDeliveries,
+        });
+      }
+
+      return res.json({
+        success: true,
+        payment_status: 'paid',
+        status: 'completed',
+        commission: {
+          recorded: true,
+          amount: 20.00,
+          blocked: commissionStatus.blocked,
+        },
+      });
     } catch (err) {
-      return res.status(400).json({ error: err.message || "Failed to confirm cash" });
+      await client.query('ROLLBACK').catch(() => {});
+      console.error('[Payment] confirmCashReceived error:', err.message);
+      return res.status(400).json({ error: err.message || 'Failed to confirm cash' });
+    } finally {
+      client.release();
     }
   }
 
   static async sendCashOtp(req, res) {
     const { orderId } = req.body;
-    const io = req.app.get("io");
+    const io = req.app.get('io');
 
     if (!orderId) {
-      return res.status(400).json({ error: "orderId is required" });
+      return res.status(400).json({ error: 'orderId is required' });
     }
 
     try {
       const orderResult = await db.query(
         `SELECT id, user_id, driver_id, payment_method, payment_status, status
-         FROM orders
-         WHERE id = $1`,
+         FROM orders WHERE id = $1`,
         [orderId],
       );
 
       if (!orderResult.rows.length) {
-        return res.status(404).json({ error: "Order not found" });
+        return res.status(404).json({ error: 'Order not found' });
       }
 
       const order = orderResult.rows[0];
       if (String(order.driver_id) !== String(req.userId)) {
-        return res.status(403).json({ error: "Not your order" });
+        return res.status(403).json({ error: 'Not your order' });
       }
-      if (order.payment_method !== "cash" || order.payment_status !== "pending_cash") {
-        return res.status(409).json({ error: "Order is not awaiting cash payment" });
+      if (order.payment_method !== 'cash' || order.payment_status !== 'pending_cash') {
+        return res.status(409).json({ error: 'Order is not awaiting cash payment' });
       }
-      if (!["in_transit", "delivered"].includes(order.status)) {
-        return res.status(409).json({ error: "Cash OTP can only be sent once the order is in transit or delivered" });
+      if (!['in_transit', 'delivered'].includes(order.status)) {
+        return res.status(409).json({ error: 'Cash OTP can only be sent once the order is in transit or delivered' });
       }
 
       const otpResult = await cashOtpService.generateOtp(orderId);
 
       if (io) {
-        io.to(`user:${order.user_id}`).emit("cash_otp_requested", {
+        io.to(`user:${order.user_id}`).emit('cash_otp_requested', {
           orderId,
           expiresAt: otpResult.order.cash_otp_expires_at,
-          message: "Your Flash driver requested a cash confirmation OTP.",
+          message: 'Your Flash driver requested a cash confirmation OTP.',
         });
       }
 
@@ -376,14 +418,14 @@ class PaymentController {
         expiresAt: otpResult.order.cash_otp_expires_at,
       };
 
-      // Only return OTP in non-production for QA/testing flows.
-      if (process.env.NODE_ENV !== "production") {
+      if (process.env.NODE_ENV !== 'production') {
         response.devOtp = otpResult.otp;
       }
 
       return res.json(response);
     } catch (err) {
-      return res.status(400).json({ error: err.message || "Failed to send cash OTP" });
+      console.error('[Payment] sendCashOtp error:', err.message);
+      return res.status(400).json({ error: err.message || 'Failed to send cash OTP' });
     }
   }
 
@@ -391,7 +433,7 @@ class PaymentController {
     const { orderId, reason } = req.body;
 
     if (!orderId) {
-      return res.status(400).json({ error: "orderId is required" });
+      return res.status(400).json({ error: 'orderId is required' });
     }
 
     try {
@@ -402,14 +444,14 @@ class PaymentController {
       );
 
       if (!result.rows.length) {
-        return res.status(404).json({ error: "Order not found" });
+        return res.status(404).json({ error: 'Order not found' });
       }
       const order = result.rows[0];
       if (order.driver_id !== req.userId) {
-        return res.status(403).json({ error: "Not your order" });
+        return res.status(403).json({ error: 'Not your order' });
       }
-      if (order.payment_method !== "cash") {
-        return res.status(409).json({ error: "Not a cash order" });
+      if (order.payment_method !== 'cash') {
+        return res.status(409).json({ error: 'Not a cash order' });
       }
 
       await db.query(
@@ -432,12 +474,13 @@ class PaymentController {
       await db.query(
         `INSERT INTO payments (order_id, user_id, amount, method, provider, status, type, metadata)
          VALUES ($1, $2, 0, 'cash', 'cash_on_delivery', 'failed', 'delivery', $3::jsonb)`,
-        [orderId, order.user_id, JSON.stringify({ reason: reason || "customer_refused_cash" })],
+        [orderId, order.user_id, JSON.stringify({ reason: reason || 'customer_refused_cash' })],
       );
 
-      return res.json({ success: true, payment_status: "failed" });
+      return res.json({ success: true, payment_status: 'failed' });
     } catch (err) {
-      return res.status(400).json({ error: err.message || "Failed to mark cash failure" });
+      console.error('[Payment] markCashFailed error:', err.message);
+      return res.status(400).json({ error: err.message || 'Failed to mark cash failure' });
     }
   }
 }
