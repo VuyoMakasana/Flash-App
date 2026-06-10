@@ -1,37 +1,46 @@
-const express = require("express");
-const router = express.Router();
-const { authenticate, requireRole } = require("../middleware/auth");
-const AdminController = require("../controllers/adminController");
+'use strict';
 
-router.post("/login", AdminController.login);
+const express    = require('express');
+const router     = express.Router();
+const { authenticate, requireRole } = require('../middleware/auth');
+const AdminController = require('../controllers/adminController');
+const { adminLimiter } = require('../middleware/rateLimiter');
+
+// POST /api/admin/login — 5 attempts per 15 min to prevent brute-force
+router.post('/login', adminLimiter, AdminController.login);
+
 router.get(
-  "/drivers",
+  '/drivers',
   authenticate,
-  requireRole("admin"),
+  requireRole('admin'),
   AdminController.getDrivers,
 );
+
 router.get(
-  "/drivers/:driverId",
+  '/drivers/:driverId',
   authenticate,
-  requireRole("admin"),
+  requireRole('admin'),
   AdminController.getDriverById,
 );
+
 router.put(
-  "/drivers/:driverId/status",
+  '/drivers/:driverId/status',
   authenticate,
-  requireRole("admin"),
+  requireRole('admin'),
   AdminController.updateDriverStatus,
 );
+
 router.get(
-  "/orders",
+  '/orders',
   authenticate,
-  requireRole("admin"),
+  requireRole('admin'),
   AdminController.getOrders,
 );
+
 router.get(
-  "/stats",
+  '/stats',
   authenticate,
-  requireRole("admin"),
+  requireRole('admin'),
   AdminController.getStats,
 );
 
