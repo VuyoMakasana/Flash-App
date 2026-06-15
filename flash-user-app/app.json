@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "splash": { "backgroundColor": "#0a0a0a" },
+
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.za.flash.userapp",
@@ -20,9 +20,13 @@
         "NSLocationAlwaysUsageDescription": "Flash uses your location to track your delivery in real-time."
       }
     },
+
     "android": {
-      "adaptiveIcon": { "backgroundColor": "#0a0a0a" },
       "package": "co.za.flash.userapp",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#0a0a0a"
+      },
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
@@ -35,21 +39,28 @@
         }
       }
     },
+
     "plugins": [
-  "expo-location",
-  "expo-notifications",
-  "expo-apple-authentication",
-  "@react-native-google-signin/google-signin",
-  [
-    "expo-build-properties",
-    {
-      "android": {
-        "compileSdkVersion": 34,
-        "targetSdkVersion": 34
-      },
-      "ios": {}
+      "expo-location",
+      "expo-notifications",
+      "expo-apple-authentication",
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 35
+          }
+        }
+      ],
+      "expo-font"
+    ],
+
+    "extra": {
+      "eas": {
+        "projectId": "5caa686a-c2d2-491c-bc29-c2b23a12f6ce"
+      }
     }
-  ]
-]
   }
 }

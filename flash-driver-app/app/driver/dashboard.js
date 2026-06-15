@@ -683,14 +683,15 @@ const styles = StyleSheet.create({
   quickActions: { flexDirection: 'row', marginHorizontal: 16, gap: 10 },
   quickBtn: { flex: 1, backgroundColor: '#1a1a1a', borderRadius: 14, padding: 16, alignItems: 'center', gap: 6 },
   quickBtnText: { color: '#9ca3af', fontSize: 12, fontWeight: '500' },
+
+  // FIXED: OTP styles now INSIDE StyleSheet
+  otpContainer: { marginTop: 12, backgroundColor: '#0d1e0d', borderRadius: 12, padding: 14, borderColor: '#10b981', borderWidth: 1 },
+  otpTitle: { color: '#10b981', fontWeight: '700', fontSize: 14, marginBottom: 4 },
+  otpSubtitle: { color: '#6b7280', fontSize: 12, marginBottom: 12 },
+  otpInput: { backgroundColor: '#1a1a1a', borderRadius: 10, borderColor: '#374151', borderWidth: 1, color: '#fff', fontSize: 20, letterSpacing: 6, padding: 14, textAlign: 'center', marginBottom: 10 },
+  otpBtnRow: { flexDirection: 'row', gap: 8 },
+  otpBtn: { backgroundColor: '#f59e0b', borderRadius: 10, padding: 13, alignItems: 'center', justifyContent: 'center' },
+  otpBtnText: { color: '#0a0a0a', fontWeight: '700', fontSize: 14 },
+  otpConfirmBtn: { backgroundColor: '#10b981', borderRadius: 10, padding: 13, alignItems: 'center', justifyContent: 'center' },
+  otpConfirmBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 }
 });
-    // Cash OTP confirmation section inside the active order card
-    otpContainer: { marginTop: 12, backgroundColor: '#0d1e0d', borderRadius: 12, padding: 14, borderColor: '#10b981', borderWidth: 1 },
-    otpTitle: { color: '#10b981', fontWeight: '700', fontSize: 14, marginBottom: 4 },
-    otpSubtitle: { color: '#6b7280', fontSize: 12, marginBottom: 12 },
-    otpInput: { backgroundColor: '#1a1a1a', borderRadius: 10, borderColor: '#374151', borderWidth: 1, color: '#fff', fontSize: 20, letterSpacing: 6, padding: 14, textAlign: 'center', marginBottom: 10 },
-    otpBtnRow: { flexDirection: 'row', gap: 8 },
-    otpBtn: { backgroundColor: '#f59e0b', borderRadius: 10, padding: 13, alignItems: 'center', justifyContent: 'center' },
-    otpBtnText: { color: '#0a0a0a', fontWeight: '700', fontSize: 14 },
-    otpConfirmBtn: { backgroundColor: '#10b981', borderRadius: 10, padding: 13, alignItems: 'center', justifyContent: 'center' },
-    otpConfirmBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
