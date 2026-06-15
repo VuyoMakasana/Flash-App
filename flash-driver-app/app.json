@@ -6,13 +6,11 @@
     "orientation": "portrait",
     "icon": "./assets/flash-logo.png",
     "userInterfaceStyle": "light",
-
     "splash": {
       "image": "./assets/flash-logo.png",
       "resizeMode": "contain",
       "backgroundColor": "#0a0a0a"
     },
-
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.za.flash.driverapp",
@@ -22,33 +20,31 @@
       },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Flash Driver uses your location so customers can track their deliveries.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "Flash Driver uses your location in the background to update your delivery position."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Flash Driver uses your location in the background to update your delivery position.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
-
     "android": {
       "package": "co.za.flash.driverapp",
-
       "adaptiveIcon": {
         "foregroundImage": "./assets/flash-logo.png",
         "backgroundColor": "#0a0a0a"
       },
-
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
         "RECEIVE_BOOT_COMPLETED",
-        "VIBRATE"
+        "VIBRATE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ],
-
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
         }
       }
     },
-
     "plugins": [
       "expo-location",
       "expo-notifications",
@@ -66,7 +62,6 @@
         }
       ]
     ],
-
     "extra": {
       "eas": {
         "projectId": "461d43ca-086d-4104-9a07-81897f2d7962"
