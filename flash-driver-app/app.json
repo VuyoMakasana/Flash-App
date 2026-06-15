@@ -4,11 +4,15 @@
     "slug": "flash-driver-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/flash-logo.png",
     "userInterfaceStyle": "light",
+
     "splash": {
+      "image": "./assets/flash-logo.png",
+      "resizeMode": "contain",
       "backgroundColor": "#0a0a0a"
     },
+
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.za.flash.driverapp",
@@ -21,11 +25,15 @@
         "NSLocationAlwaysAndWhenInUseUsageDescription": "Flash Driver uses your location in the background to update your delivery position."
       }
     },
+
     "android": {
+      "package": "co.za.flash.driverapp",
+
       "adaptiveIcon": {
+        "foregroundImage": "./assets/flash-logo.png",
         "backgroundColor": "#0a0a0a"
       },
-      "package": "co.za.flash.driverapp",
+
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
@@ -33,28 +41,36 @@
         "RECEIVE_BOOT_COMPLETED",
         "VIBRATE"
       ],
+
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
         }
       }
     },
+
     "plugins": [
-  "expo-location",
-  "expo-notifications",
-  "expo-document-picker",
-  "expo-apple-authentication",
-  "@react-native-google-signin/google-signin",
-  [
-    "expo-build-properties",
-    {
-      "android": {
-        "compileSdkVersion": 34,
-        "targetSdkVersion": 34
-      },
-      "ios": {}
+      "expo-location",
+      "expo-notifications",
+      "expo-document-picker",
+      "expo-apple-authentication",
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35
+          },
+          "ios": {}
+        }
+      ]
+    ],
+
+    "extra": {
+      "eas": {
+        "projectId": "461d43ca-086d-4104-9a07-81897f2d7962"
+      }
     }
-  ]
-]
   }
 }
