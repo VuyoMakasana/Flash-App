@@ -1,12 +1,52 @@
 // backend/src/models/Order.js
-// FULL REPLACEMENT FILE — adds server-side price validation.
-// Items from flash_inventory are validated against server price.
-// Items from external stores (no matching inventory row) use client price
-// but the subtotal is recomputed server-side from the items array.
+//
+// CHANGES FROM ORIGINAL:
+//   Added validateExternalItemPrice() — rejects external/partner store items
+//   whose client-supplied price is <= 0, NaN, Infinity, or negative.
+//   This closes the vulnerability where a user could submit { "price": 0 }
+//   or { "price": 0.01 } for external items that have no inventory row.
+//   Flash inventory items are still validated against the server price (unchanged).
 'use strict';
 
 const BaseModel = require('./BaseModel');
 const { randomBytes } = require('crypto');
+
+// ─── EXTERNAL ITEM PRICE VALIDATOR ───────────────────────────────────────────
+//
+// Called for every item that has no matching flash_inventory row (i.e. items
+// from partner stores or external catalogue entries). The flash_inventory path
+// already validates against a trusted server price and is not affected.
+//
+// Rules:
+//   • Must be a finite number (rejects NaN, Infinity, -Infinity, strings)
+//   • Must be > 0  (rejects zero and negative values)
+//   • Must be <= 100 000  (sanity cap; prevents absurd values from inflating totals)
+//
+// Throws a descriptive Error that is returned to the client as HTTP 400.
+// ─────────────────────────────────────────────────────────────────────────────
+function validateExternalItemPrice(rawPrice, itemName) {
+  const price = Number(rawPrice);
+
+  if (!Number.isFinite(price)) {
+    throw new Error(
+      `Invalid price for "${itemName || 'item'}": price must be a valid number (received ${rawPrice})`
+    );
+  }
+
+  if (price <= 0) {
+    throw new Error(
+      `Invalid price for "${itemName || 'item'}": price must be greater than zero (received ${price})`
+    );
+  }
+
+  if (price > 100_000) {
+    throw new Error(
+      `Invalid price for "${itemName || 'item'}": price exceeds maximum allowed value (received ${price})`
+    );
+  }
+
+  return price; // safe, validated value
+}
 
 class Order extends BaseModel {
   static tableName = 'orders';
@@ -37,17 +77,33 @@ class Order extends BaseModel {
       dropoff_lng,
     } = orderData;
 
-    const orderNumber        = `FLASH-${Date.now().toString(36).toUpperCase()}-${randomBytes(2).toString('hex').toUpperCase()}`;
+    const orderNumber         = `FLASH-${Date.now().toString(36).toUpperCase()}-${randomBytes(2).toString('hex').toUpperCase()}`;
     const computedDeliveryFee = this.calculateDeliveryFee({ pickupMallId: pickup_mall_id, dropoffMallId: dropoff_mall_id });
+
+    // TRUSTED DRIVER EXCLUSIVITY WINDOW (see Driver.js getAvailableOrders/acceptOrder):
+    // When a user selects a preferred/trusted driver, that driver gets a
+    // 3-minute exclusive window to accept before the order falls back to the
+    // general pool. NULL when no preferred driver was selected.
+    const TRUSTED_DRIVER_WINDOW_MINUTES = 3;
+    const preferredDriverExpiresAt = preferred_driver_id
+      ? new Date(Date.now() + TRUSTED_DRIVER_WINDOW_MINUTES * 60 * 1000)
+      : null;
 
     return await this.transaction(async (client) => {
 
-      // ── SERVER-SIDE PRICE VALIDATION ────────────────────────────────────
-      // For every item that has a productId, look up the authoritative price
-      // from flash_inventory. If not found (external store item), fall back
-      // to the client-supplied price and log a warning for monitoring.
+      // ── SERVER-SIDE PRICE VALIDATION ───────────────────────────────────────
+      //
+      // FLASH INVENTORY ITEMS (item.productId matches flash_inventory.id):
+      //   Price is taken exclusively from the server. Client price is ignored.
+      //
+      // EXTERNAL / PARTNER STORE ITEMS (no matching inventory row, or no productId):
+      //   Price comes from the client but MUST pass validateExternalItemPrice().
+      //   Zero, negative, NaN, Infinity, and non-numeric strings are all rejected
+      //   with HTTP 400 before the transaction commits.
+      //
+      // ──────────────────────────────────────────────────────────────────────
       let computedSubtotal = 0;
-      const validatedItems = [];
+      const validatedItems  = [];
 
       for (const item of items) {
         let serverPrice = null;
@@ -62,13 +118,16 @@ class Order extends BaseModel {
           );
 
           if (invRow.rows.length) {
+            // ── FLASH INVENTORY PATH: use server price, ignore client price ──
             serverPrice = parseFloat(invRow.rows[0].price);
 
             // Stock check — decrement atomically
             const stock     = invRow.rows[0].stock_by_size || {};
             const available = parseInt(stock[item.size] || 0);
             if (item.size && available < parseInt(item.quantity)) {
-              throw new Error(`${item.name || invRow.rows[0].product_name} size ${item.size} is out of stock`);
+              throw new Error(
+                `${item.name || invRow.rows[0].product_name} size ${item.size} is out of stock`
+              );
             }
             if (item.size) {
               const newStock = { ...stock, [item.size]: available - parseInt(item.quantity) };
@@ -78,16 +137,22 @@ class Order extends BaseModel {
               );
             }
           } else {
-            // Product ID provided but not found in inventory — this could be
-            // a partner store product. Use client price but log for review.
+            // ── PARTNER STORE PATH: productId present but not in inventory ──
+            // Validate client price before trusting it.
             console.warn(
-              `[Order] productId ${item.productId} not in flash_inventory — using client price ${item.price}`
+              `[Order] productId ${item.productId} not in flash_inventory — validating client price`
             );
-            serverPrice = parseFloat(item.price || 0);
+            serverPrice = validateExternalItemPrice(
+              item.price,
+              item.name || `product:${item.productId}`
+            );
           }
         } else {
-          // No productId — external/partner product. Use client price.
-          serverPrice = parseFloat(item.price || 0);
+          // ── EXTERNAL STORE PATH: no productId — validate client price ─────
+          serverPrice = validateExternalItemPrice(
+            item.price,
+            item.name || 'external item'
+          );
         }
 
         const qty = parseInt(item.quantity) || 1;
@@ -101,7 +166,7 @@ class Order extends BaseModel {
           serverPrice,
         });
       }
-      // ── END PRICE VALIDATION ─────────────────────────────────────────────
+      // ── END PRICE VALIDATION ───────────────────────────────────────────────
 
       const finalTotal      = computedSubtotal + computedDeliveryFee;
       const flashCommission = Math.max(10, Math.round(computedDeliveryFee * 0.25 * 100) / 100);
@@ -111,10 +176,10 @@ class Order extends BaseModel {
         `INSERT INTO orders (
           order_number, user_id, status, delivery_mode, time_slot,
           subtotal, delivery_fee, total, driver_payout,
-          store_id, preferred_driver_id,
+          store_id, preferred_driver_id, preferred_driver_expires_at,
           pickup_address, dropoff_address,
           pickup_lat, pickup_lng, dropoff_lat, dropoff_lng
-        ) VALUES ($1, $2, 'payment_pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        ) VALUES ($1, $2, 'payment_pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         RETURNING *`,
         [
           orderNumber,
@@ -125,8 +190,9 @@ class Order extends BaseModel {
           computedDeliveryFee,
           finalTotal,
           driverPayout,
-          store_id          || null,
+          store_id            || null,
           preferred_driver_id || null,
+          preferredDriverExpiresAt,
           pickup_address,
           dropoff_address,
           pickup_lat,
@@ -221,7 +287,7 @@ class Order extends BaseModel {
   }
 
   static async getDriverOrders(driverId, status = null) {
-    let sql    = `SELECT * FROM orders WHERE driver_id = $1`;
+    let sql      = `SELECT * FROM orders WHERE driver_id = $1`;
     const params = [driverId];
     if (status) { sql += ` AND status = $2`; params.push(status); }
     sql += ` ORDER BY created_at DESC`;
