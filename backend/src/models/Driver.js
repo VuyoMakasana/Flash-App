@@ -2,6 +2,8 @@ const BaseModel = require("./BaseModel");
 const bcrypt = require("bcryptjs");
 const s3Service = require("../services/s3Service");
 
+
+
 class Driver extends BaseModel {
   static tableName = "drivers";
   static _pingCounters = new Map();
@@ -165,21 +167,21 @@ class Driver extends BaseModel {
         if (distKm <= 0.15) {
           milestone = {
             key: "arrived",
-            message: "🚗 Your driver has arrived!",
+            message: "Your driver has arrived!",
           };
         } else if (mins <= 2) {
-          milestone = { key: "2min", message: "⚡ Driver is 2 minutes away!" };
+          milestone = { key: "2min", message: "Driver is 2 minutes away!" };
         } else if (mins <= 5) {
-          milestone = { key: "5min", message: "📍 Driver is 5 minutes away" };
+          milestone = { key: "5min", message: "Driver is 5 minutes away" };
         } else if (mins <= 10) {
           milestone = {
             key: "10min",
-            message: "🕐 Driver is about 10 minutes away",
+            message: "Driver is about 10 minutes away",
           };
         } else if (mins <= 15) {
           milestone = {
             key: "15min",
-            message: "🕐 Driver is about 15 minutes away",
+            message: "Driver is about 15 minutes away",
           };
         }
 
@@ -196,7 +198,7 @@ class Driver extends BaseModel {
             io.to(`user:${order.user_id}`).emit("cash_reminder", {
               orderId,
               message:
-                "💵 Please have your cash ready — driver is almost there!",
+                "Please have your cash ready — driver is almost there!",
             });
           }
         }
@@ -223,6 +225,11 @@ class Driver extends BaseModel {
 
   static async getAvailableOrders(driverId) {
     // FIXED: Removed customer address and personal details from pre-accept order list — drivers should not see dropoff location or customer identity before accepting, privacy and safety risk
+    //
+    // FIXED (trusted driver): an order is excluded from this general pool
+    // while it has an unexpired preferred_driver_id that is NOT this driver.
+    // This is what makes the exclusivity window actually exclusive — without
+    // this filter, "trusted driver" was purely cosmetic.
     const sql = `
       SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
              o.driver_payout, o.is_cash_delivery, o.cash_to_collect,
@@ -230,20 +237,45 @@ class Driver extends BaseModel {
              o.created_at, COUNT(oi.id) as item_count
       FROM orders o
       LEFT JOIN order_items oi ON oi.order_id = o.id
-            WHERE o.status = 'waiting_for_driver' AND o.driver_id IS NULL
-            GROUP BY o.id
+      WHERE o.status = 'waiting_for_driver'
+        AND o.driver_id IS NULL
+        AND (
+          o.preferred_driver_id IS NULL
+          OR o.preferred_driver_id = $1
+          OR o.preferred_driver_expires_at IS NULL
+          OR o.preferred_driver_expires_at <= NOW()
+        )
+      GROUP BY o.id
       ORDER BY o.created_at DESC
       LIMIT 20
     `;
-    const result = await this.query(sql);
+    const result = await this.query(sql, [driverId]);
     return result.rows;
   }
 
   static async acceptOrder(driverId, orderId) {
+    // NOTE: This method is not called by the live HTTP route.
+    // backend/src/routes/driverRoutes.js wires POST /orders/:orderId/accept
+    // to DriverController.acceptOrder, which calls
+    // orderStateMachineService.assignDriver(orderId, driverId, {
+    //   enforceTrustedDriverWindow: true
+    // }) directly — that is where the trusted-driver exclusivity check now
+    // lives (see orderStateMachineService.js). This model method is kept
+    // for backward compatibility with any other internal callers, and is
+    // updated with the same WHERE-clause guard for consistency / defense in
+    // depth in case it is wired up elsewhere in the future.
     return await this.transaction(async (client) => {
       const result = await client.query(
         `UPDATE orders SET driver_id=$1, status='driver_assigned', delivery_payment_status='assigned', updated_at=NOW()
-         WHERE id=$2 AND status='waiting_for_driver' AND driver_id IS NULL
+         WHERE id=$2
+           AND status='waiting_for_driver'
+           AND driver_id IS NULL
+           AND (
+             preferred_driver_id IS NULL
+             OR preferred_driver_id = $1
+             OR preferred_driver_expires_at IS NULL
+             OR preferred_driver_expires_at <= NOW()
+           )
          RETURNING *`,
         [driverId, orderId],
       );

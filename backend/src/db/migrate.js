@@ -1,14 +1,5 @@
 'use strict';
-/**
- * migrate.js — Flash database migrations v1 through v8
- *
- * Fixes from audit:
- *   - STRUCTURAL BUG FIXED: migrateV7 was defined AFTER migrate().catch() call.
- *     Function is now defined before it is called. Each version runs in its
- *     own explicit client.query('BEGIN') / COMMIT block.
- *   - v8 added: driver commission debt system (commission_blocked column,
- *     cash_commission_debt + unpaid_cash_deliveries columns, driver_commission_debts table)
- */
+
 
 const { Pool } = require('pg');
 require('dotenv').config();
@@ -567,6 +558,10 @@ async function migrate() {
     await client.query(`ALTER TABLE drivers  ADD COLUMN IF NOT EXISTS push_token TEXT`);
     await client.query(`ALTER TABLE drivers  ADD COLUMN IF NOT EXISTS paystack_recipient_code TEXT`);
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS preferred_driver_id UUID REFERENCES drivers(id)`);
+    // FIXED (trusted driver exclusivity): powers the time-boxed exclusivity
+    // window — while in the future, only preferred_driver_id may see/accept
+    // this order. See Driver.js / orderStateMachineService.js.
+    await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS preferred_driver_expires_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS store_paid BOOLEAN DEFAULT false`);
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS driver_paid BOOLEAN DEFAULT false`);
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS cash_to_collect DECIMAL(10,2)`);
@@ -652,6 +647,7 @@ async function migrate() {
       `CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(order_id, sender_role, read_at)`,
       `CREATE INDEX IF NOT EXISTS idx_trusted_status ON trusted_drivers(driver_id, status)`,
       `CREATE INDEX IF NOT EXISTS idx_orders_preferred_driver ON orders(preferred_driver_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_orders_preferred_driver_expiry ON orders(preferred_driver_expires_at) WHERE preferred_driver_id IS NOT NULL`,
       `CREATE INDEX IF NOT EXISTS idx_payment_methods_user ON payment_methods(user_id, is_default)`,
       `CREATE INDEX IF NOT EXISTS idx_driver_wallet_ledger_driver ON driver_wallet_ledger(driver_id, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_driver_penalties_driver ON driver_penalties(driver_id, created_at DESC)`,
