@@ -1,3 +1,5 @@
+
+
 const pool = require("../config/database");
 const DriverWallet = require("../models/DriverWallet");
 
@@ -193,6 +195,26 @@ async function assignDriver(orderId, driverId, context = {}) {
     }
 
     if (order.driver_id) throw new Error("Order already assigned");
+
+    // ── TRUSTED DRIVER EXCLUSIVITY CHECK ───────────────────────────────────
+    // Only enforced when the caller explicitly asks for it (the driver
+    // self-accept path). The explicit-selection path (orderController.
+    // selectDriver) intentionally never sets this flag, because in that flow
+    // the assignment IS the act of choosing — there's nothing to protect
+    // against.
+    if (context.enforceTrustedDriverWindow) {
+      const hasUnexpiredPreference =
+        order.preferred_driver_id &&
+        order.preferred_driver_expires_at &&
+        new Date(order.preferred_driver_expires_at).getTime() > Date.now();
+
+      if (hasUnexpiredPreference && String(order.preferred_driver_id) !== String(driverId)) {
+        throw new Error(
+          "This order is currently reserved for the customer's trusted driver. Please try again shortly."
+        );
+      }
+    }
+    // ── END TRUSTED DRIVER EXCLUSIVITY CHECK ───────────────────────────────
 
     logTransition(orderId, currentState, "driver_assigned", "driver", driverId);
 

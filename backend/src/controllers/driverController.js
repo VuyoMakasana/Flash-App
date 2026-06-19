@@ -172,6 +172,10 @@ class DriverController {
         return res.status(403).json({ error: subCheck.reason, requiresSubscription: true });
       }
 
+      // NOTE: Driver.getAvailableOrders(req.userId) already excludes orders
+      // that have an unexpired preferred_driver_id pointing at a different
+      // driver (see Driver.js fix). This driver simply won't see those
+      // orders in the list until the exclusivity window lapses.
       const orders = await Driver.getAvailableOrders(req.userId);
       res.json({ orders });
     } catch (err) {
@@ -181,7 +185,14 @@ class DriverController {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // acceptOrder — COMMISSION BLOCK CHECK
+  // acceptOrder — COMMISSION BLOCK CHECK + TRUSTED DRIVER EXCLUSIVITY CHECK
+  //
+  // CHANGE FROM ORIGINAL: passes enforceTrustedDriverWindow: true so that
+  // assignDriver() (orderStateMachineService) rejects the accept attempt if
+  // this order is still inside another driver's trusted-driver window. This
+  // is the self-accept path — it must never let an uninvited driver win an
+  // order the customer routed to someone specific. Compare to
+  // orderController.selectDriver, which intentionally omits this flag.
   // ─────────────────────────────────────────────────────────────────────────
   static async acceptOrder(req, res) {
     const { orderId } = req.params;
@@ -199,7 +210,10 @@ class DriverController {
         });
       }
 
-      const order = await assignDriver(orderId, req.userId, { io });
+      const order = await assignDriver(orderId, req.userId, {
+        io,
+        enforceTrustedDriverWindow: true,
+      });
 
       if (io) {
         io.to(`order:${orderId}`).emit('order_update', {

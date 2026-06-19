@@ -212,15 +212,43 @@ class WebhookController {
           console.warn('[Webhook] waiting_for_driver transition skipped:', transitionErr.message);
         }
 
+        // FIXED (trusted driver): look up preferred_driver_id /
+        // preferred_driver_expires_at so the broadcast and push notification
+        // can be scoped to just that driver while the exclusivity window is
+        // open, instead of unconditionally alerting the entire driver_pool.
+        const prefRow = await pool.query(
+          `SELECT preferred_driver_id, preferred_driver_expires_at FROM orders WHERE id = $1`,
+          [orderId],
+        );
+        const pref = prefRow.rows[0] || {};
+        const hasUnexpiredPreference =
+          pref.preferred_driver_id &&
+          pref.preferred_driver_expires_at &&
+          new Date(pref.preferred_driver_expires_at).getTime() > Date.now();
+
         if (io) {
           io.to(`user:${userId}`).emit('payment_confirmed', { orderId });
-          io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
+          if (hasUnexpiredPreference) {
+            io.to(`driver:${pref.preferred_driver_id}`).emit('new_order_available', {
+              orderId,
+              isCashDelivery: false,
+              preferredAssignment: true,
+            });
+          } else {
+            io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
+          }
         }
 
         await autoAssignNearestDriver(orderId, io).catch(() => null);
 
         // Push notification to online drivers — fire and forget, non-blocking.
-        notifyDriversNewOrder(orderId, false).catch(() => null);
+        // Scoped to the preferred driver while the exclusivity window is open.
+        notifyDriversNewOrder(
+          orderId,
+          false,
+          pref.preferred_driver_id || null,
+          pref.preferred_driver_expires_at || null,
+        ).catch(() => null);
       }
 
     } catch (err) {
@@ -473,13 +501,40 @@ class WebhookController {
             console.warn('[Webhook] payflex waiting_for_driver transition skipped:', transitionErr.message);
           }
 
+          // FIXED (trusted driver): same scoping as the Paystack webhook
+          // above — only alert the preferred driver while their exclusivity
+          // window is open, otherwise fall back to the full driver_pool.
+          const payflexPrefRow = await client.query(
+            `SELECT preferred_driver_id, preferred_driver_expires_at FROM orders WHERE id = $1`,
+            [orderId],
+          );
+          const payflexPref = payflexPrefRow.rows[0] || {};
+          const payflexHasUnexpiredPreference =
+            payflexPref.preferred_driver_id &&
+            payflexPref.preferred_driver_expires_at &&
+            new Date(payflexPref.preferred_driver_expires_at).getTime() > Date.now();
+
           if (io && result.rows.length) {
             io.to(`user:${result.rows[0].user_id}`).emit('payment_confirmed', { orderId });
-            io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
+            if (payflexHasUnexpiredPreference) {
+              io.to(`driver:${payflexPref.preferred_driver_id}`).emit('new_order_available', {
+                orderId,
+                isCashDelivery: false,
+                preferredAssignment: true,
+              });
+            } else {
+              io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
+            }
           }
           await autoAssignNearestDriver(orderId, io).catch(() => null);
           // Push notification to online drivers — fire and forget, non-blocking.
-          notifyDriversNewOrder(orderId, false).catch(() => null);
+          // Scoped to the preferred driver while the exclusivity window is open.
+          notifyDriversNewOrder(
+            orderId,
+            false,
+            payflexPref.preferred_driver_id || null,
+            payflexPref.preferred_driver_expires_at || null,
+          ).catch(() => null);
         } catch (err) {
           await client.query('ROLLBACK');
           throw err;

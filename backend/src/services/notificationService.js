@@ -63,16 +63,35 @@ async function sendPushNotification({ tokens, title, body, data = {} }) {
   });
 }
 
-// Notify all online drivers that a new order is available.
-// We look up drivers who are online and have a push token registered.
-async function notifyDriversNewOrder(orderId, isCashDelivery = false) {
+async function notifyDriversNewOrder(
+  orderId,
+  isCashDelivery = false,
+  preferredDriverId = null,
+  preferredDriverExpiresAt = null,
+) {
   try {
-    const result = await db.query(
-      `SELECT push_token FROM drivers
-       WHERE is_online = true
-         AND status = 'approved'
-         AND push_token IS NOT NULL`,
-    );
+    const hasUnexpiredPreference =
+      preferredDriverId &&
+      preferredDriverExpiresAt &&
+      new Date(preferredDriverExpiresAt).getTime() > Date.now();
+
+    let result;
+    if (hasUnexpiredPreference) {
+      result = await db.query(
+        `SELECT push_token FROM drivers
+         WHERE id = $1
+           AND status = 'approved'
+           AND push_token IS NOT NULL`,
+        [preferredDriverId],
+      );
+    } else {
+      result = await db.query(
+        `SELECT push_token FROM drivers
+         WHERE is_online = true
+           AND status = 'approved'
+           AND push_token IS NOT NULL`,
+      );
+    }
 
     const tokens = result.rows.map((r) => r.push_token);
     if (!tokens.length) return;
@@ -80,7 +99,9 @@ async function notifyDriversNewOrder(orderId, isCashDelivery = false) {
     await sendPushNotification({
       tokens,
       title: isCashDelivery ? "New Cash Order Available!" : "New Order Available!",
-      body: "Tap to view and accept the delivery.",
+      body: hasUnexpiredPreference
+        ? "A customer has requested you for a delivery. Tap to view and accept."
+        : "Tap to view and accept the delivery.",
       data: { orderId, type: "new_order" },
     });
   } catch (err) {

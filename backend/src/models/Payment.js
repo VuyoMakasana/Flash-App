@@ -192,13 +192,38 @@ class Payment extends BaseModel {
         [orderId, userId, order.total],
       );
 
+      // FIXED (trusted driver): re-fetch preferred_driver_id /
+      // preferred_driver_expires_at so the broadcast can be scoped. If a
+      // customer selected a trusted driver and the exclusivity window has
+      // not yet expired, only that driver's room is notified. Once the
+      // window lapses (or no preferred driver was chosen), behaviour is
+      // unchanged — broadcast to the whole driver_pool.
+      const prefResult = await client.query(
+        `SELECT preferred_driver_id, preferred_driver_expires_at FROM orders WHERE id=$1`,
+        [orderId],
+      );
+      const pref = prefResult.rows[0] || {};
+      const hasUnexpiredPreference =
+        pref.preferred_driver_id &&
+        pref.preferred_driver_expires_at &&
+        new Date(pref.preferred_driver_expires_at).getTime() > Date.now();
+
       if (io) {
-        io.to("driver_pool").emit("new_order_available", {
+        const payload = {
           orderId,
           isCashDelivery: true,
           deliveryFee: order.delivery_fee,
           cashNote: `Cash delivery — collect R${parseFloat(order.total || 0).toFixed(2)} on arrival`,
-        });
+        };
+
+        if (hasUnexpiredPreference) {
+          io.to(`driver:${pref.preferred_driver_id}`).emit("new_order_available", {
+            ...payload,
+            preferredAssignment: true,
+          });
+        } else {
+          io.to("driver_pool").emit("new_order_available", payload);
+        }
       }
 
       return {
