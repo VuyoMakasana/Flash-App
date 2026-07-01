@@ -6,15 +6,21 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0a"
+    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "co.za.flash.userapp",
       "usesAppleSignIn": true,
       "config": {
-        "googleMapsApiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
+        "googleMapsApiKey": "AIzaSyBx_Y-spzI7JK5Jx1NHG9ctjQFAZckHkmU"
       },
       "infoPlist": {
         "NSCameraUsageDescription": "Flash needs camera access to take photos of your documents.",
+        "NSPhotoLibraryUsageDescription": "Flash needs access to your photo library so you can upload a profile photo.",
         "NSLocationWhenInUseUsageDescription": "Flash uses your location to find nearby stores and track your delivery.",
         "NSLocationAlwaysUsageDescription": "Flash uses your location to track your delivery in real-time.",
         "ITSAppUsesNonExemptEncryption": false
@@ -36,7 +42,7 @@
       ],
       "config": {
         "googleMaps": {
-          "apiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
+          "apiKey": "AIzaSyBx_Y-spzI7JK5Jx1NHG9ctjQFAZckHkmU"
         }
       }
     },
@@ -49,14 +55,16 @@
         "expo-build-properties",
         {
           "android": {
-            "compileSdkVersion": 36,
+            "compileSdkVersion": 35,
             "targetSdkVersion": 35
           }
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-secure-store"
     ],
     "extra": {
+      "privacyPolicyUrl": "https://flash.co.za/privacy",
       "eas": {
         "projectId": "5caa686a-c2d2-491c-bc29-c2b23a12f6ce"
       }
