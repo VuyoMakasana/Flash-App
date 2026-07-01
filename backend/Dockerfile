@@ -1,9 +1,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Flash Backend — Dockerfile
 # ─────────────────────────────────────────────────────────────────────────────
-# This builds a production-ready Docker image of the Flash backend.
-# It is used by docker-compose.yml when you run the full stack locally,
-# and by Render/Railway/Fly.io when you deploy to production.
+# MEDIUM-12 FIX: Container now runs as a non-root user 'flash'.
+# If a vulnerability allows container escape, the attacker has no root on host.
 #
 # To build and run manually (without docker compose):
 #   docker build -t flash-backend .
@@ -16,6 +15,11 @@ FROM node:20-alpine
 # Install dumb-init so Node.js shuts down cleanly when Docker stops the container.
 # Without this, SIGTERM is not forwarded properly and the process force-kills.
 RUN apk add --no-cache dumb-init
+
+# Create a non-root user and group to run the application.
+# Running as root inside a container is a security risk — if a vulnerability
+# allows container escape, root inside == root on the host.
+RUN addgroup -S flash && adduser -S flash -G flash
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -30,6 +34,12 @@ RUN npm ci --only=production
 
 # Copy the rest of the backend source code
 COPY . .
+
+# Set correct ownership so the non-root user can read the app files
+RUN chown -R flash:flash /app
+
+# Switch to the non-root user before running the server
+USER flash
 
 # The backend listens on port 3000
 EXPOSE 3000

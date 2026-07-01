@@ -1,4 +1,17 @@
-const BaseModel = require("./BaseModel");
+'use strict';
+
+const BaseModel = require('./BaseModel');
+
+/**
+ * TrustedDriver model
+ *
+ * HIGH-2 FIX: sendTrustRequest now enforces:
+ *   1. 7-day cooldown after a driver declines
+ *   2. Max 10 pending requests per user
+ *
+ * MEDIUM-11 FIX: After emitting the Socket.IO event, sends a push
+ *   notification so drivers receive the request even if their app is closed.
+ */
 
 class TrustedDriver extends BaseModel {
   static async getTrustedDrivers(userId) {
@@ -32,39 +45,113 @@ class TrustedDriver extends BaseModel {
     return result.rows;
   }
 
+  /**
+   * Send (or re-send) a trust request from a user to a driver.
+   *
+   * Guards:
+   *   - Driver must exist and be approved
+   *   - 7-day cooldown if driver previously declined
+   *   - User may not have more than 10 pending requests total
+   */
   static async sendTrustRequest(userId, driverId, io) {
+    // 1. Verify driver exists and is approved
     const driver = await this.query(
-      "SELECT id, name FROM drivers WHERE id=$1 AND status='approved'",
+      "SELECT id, name, push_token FROM drivers WHERE id=$1 AND status='approved'",
       [driverId],
     );
-
     if (!driver.rows.length) {
-      throw new Error("Driver not found");
+      throw new Error('Driver not found');
     }
 
+    // 2. Check 7-day cooldown after a decline
+    const cooldownCheck = await this.query(
+      `SELECT updated_at FROM trusted_drivers
+       WHERE user_id=$1 AND driver_id=$2 AND status='declined'
+         AND updated_at > NOW() - INTERVAL '7 days'`,
+      [userId, driverId],
+    );
+    if (cooldownCheck.rows.length) {
+      const err = new Error('This driver declined your request recently. Please wait 7 days before trying again.');
+      err.code = 'COOLDOWN';
+      throw err;
+    }
+
+    // 3. Check pending request cap (max 10 pending per user)
+    const pendingCount = await this.query(
+      `SELECT COUNT(*) AS cnt FROM trusted_drivers
+       WHERE user_id=$1 AND status='pending'`,
+      [userId],
+    );
+    if (parseInt(pendingCount.rows[0].cnt, 10) >= 10) {
+      const err = new Error('You have too many pending trusted driver requests. Wait for some to be responded to before sending more.');
+      err.code = 'TOO_MANY_PENDING';
+      throw err;
+    }
+
+    // 4. Insert or update (only allowed if not in cooldown)
     const result = await this.query(
       `INSERT INTO trusted_drivers (user_id, driver_id, status)
        VALUES ($1, $2, 'pending')
-       ON CONFLICT (user_id, driver_id) DO UPDATE SET status='pending', updated_at=NOW()
+       ON CONFLICT (user_id, driver_id) DO UPDATE
+         SET status='pending', updated_at=NOW()
+         WHERE trusted_drivers.status IN ('accepted')
        RETURNING *`,
       [userId, driverId],
     );
 
+    // If the conflict row was 'declined' the DO UPDATE WHERE clause won't match,
+    // so we upsert for cases where there's no existing row or it was 'accepted'
+    // (re-request after removal). If result is empty, just insert fresh.
+    let row;
+    if (result.rows.length) {
+      row = result.rows[0];
+    } else {
+      // No row returned means an existing 'declined' row blocked the upsert —
+      // but we already checked cooldown above, so this shouldn't happen.
+      // Insert fresh as a safety net:
+      const insertResult = await this.query(
+        `INSERT INTO trusted_drivers (user_id, driver_id, status)
+         VALUES ($1, $2, 'pending')
+         ON CONFLICT (user_id, driver_id) DO UPDATE
+           SET status='pending', updated_at=NOW()
+         RETURNING *`,
+        [userId, driverId],
+      );
+      row = insertResult.rows[0];
+    }
+
+    // 5. Real-time notification via Socket.IO
     if (io) {
-      io.to(`driver:${driverId}`).emit("trust_request", {
-        type: "trust_request",
-        requestId: result.rows[0].id,
-        userId: userId,
-        message: "A customer wants to add you as a trusted driver",
+      io.to(`driver:${driverId}`).emit('trust_request', {
+        type: 'trust_request',
+        requestId: row.id,
+        userId,
+        message: 'A customer wants to add you as a trusted driver',
       });
     }
 
-    return result.rows[0];
+    // 6. Push notification for backgrounded driver apps (MEDIUM-11)
+    const driverRecord = driver.rows[0];
+    if (driverRecord.push_token) {
+      try {
+        const { sendPushNotification } = require('../services/pushNotificationService');
+        await sendPushNotification(
+          driverRecord.push_token,
+          'New Trust Request',
+          'A customer wants to add you as a trusted driver',
+          { type: 'trust_request', requestId: row.id },
+        );
+      } catch (pushErr) {
+        console.warn('[TrustedDriver] Push notification failed:', pushErr.message);
+      }
+    }
+
+    return row;
   }
 
   static async removeTrustedDriver(userId, driverId) {
     await this.query(
-      "DELETE FROM trusted_drivers WHERE user_id=$1 AND driver_id=$2",
+      'DELETE FROM trusted_drivers WHERE user_id=$1 AND driver_id=$2',
       [userId, driverId],
     );
   }
@@ -83,7 +170,7 @@ class TrustedDriver extends BaseModel {
   }
 
   static async respondToRequest(requestId, driverId, action, io) {
-    const newStatus = action === "accept" ? "accepted" : "declined";
+    const newStatus = action === 'accept' ? 'accepted' : 'declined';
     const result = await this.query(
       `UPDATE trusted_drivers SET status=$1, updated_at=NOW()
        WHERE id=$2 AND driver_id=$3
@@ -92,17 +179,17 @@ class TrustedDriver extends BaseModel {
     );
 
     if (!result.rows.length) {
-      throw new Error("Request not found");
+      throw new Error('Request not found');
     }
 
     if (io) {
-      io.to(`user:${result.rows[0].user_id}`).emit("trust_response", {
-        driverId: driverId,
+      io.to(`user:${result.rows[0].user_id}`).emit('trust_response', {
+        driverId,
         status: newStatus,
         message:
-          action === "accept"
-            ? "A driver accepted your trusted driver request!"
-            : "A driver declined your trusted driver request.",
+          action === 'accept'
+            ? 'A driver accepted your trusted driver request!'
+            : 'A driver declined your trusted driver request.',
       });
     }
 
@@ -111,7 +198,7 @@ class TrustedDriver extends BaseModel {
 
   static async removeSelf(driverId, userId) {
     await this.query(
-      "DELETE FROM trusted_drivers WHERE driver_id=$1 AND user_id=$2",
+      'DELETE FROM trusted_drivers WHERE driver_id=$1 AND user_id=$2',
       [driverId, userId],
     );
   }

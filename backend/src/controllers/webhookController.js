@@ -1,11 +1,22 @@
-const crypto = require('crypto');
-const pool   = require('../config/database');
+'use strict';
+
+/**
+ * webhookController.js
+ *
+ * CRITICAL-3 FIX: handlePayflex() method removed.
+ *   The /webhooks/payflex route is also removed from webhookRoutes.js.
+ *   The payflex_webhook_events table is kept in the DB for historical records
+ *   but no new rows are written here.
+ */
+
+const crypto  = require('crypto');
+const pool    = require('../config/database');
 const { getOptional, isProd } = require('../config/env');
 const Payment = require('../models/Payment');
 const { autoAssignNearestDriver } = require('../services/fleetIntelligenceService');
-const { updateOrderStatus } = require('../services/orderStateMachineService');
-const { notifyDriversNewOrder } = require('../services/notificationService');
-const PayoutService = require('../services/payoutService');
+const { updateOrderStatus }       = require('../services/orderStateMachineService');
+const { notifyDriversNewOrder }   = require('../services/notificationService');
+const PayoutService               = require('../services/payoutService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
 
 class WebhookController {
@@ -31,7 +42,7 @@ class WebhookController {
           .digest('hex');
 
         const signatureHeaderRaw = req.headers['x-paystack-signature'];
-        const signatureHeader = signatureHeaderRaw == null ? '' : String(signatureHeaderRaw);
+        const signatureHeader    = signatureHeaderRaw == null ? '' : String(signatureHeaderRaw);
 
         if (!signatureHeader) {
           console.warn('[Webhook] Paystack signature missing — rejecting request');
@@ -167,7 +178,7 @@ class WebhookController {
 
       try {
         await updateOrderStatus(orderId, 'paid', {
-          actorId: String(event.id || 'paystack'),
+          actorId:   String(event.id || 'paystack'),
           actorRole: 'webhook',
           io,
         });
@@ -176,15 +187,14 @@ class WebhookController {
       }
 
       if (isClosedNow()) {
-        // Outside operating hours — hold order until morning
         const openAt = getNextOpenTime();
         await pool.query(
           `UPDATE orders SET scheduled_for = $1, updated_at = NOW() WHERE id = $2`,
-          [openAt, orderId]
+          [openAt, orderId],
         );
         try {
           await updateOrderStatus(orderId, 'scheduled_for_morning', {
-            actorId: String(event.id || 'paystack'),
+            actorId:   String(event.id || 'paystack'),
             actorRole: 'webhook',
             io,
           });
@@ -195,16 +205,15 @@ class WebhookController {
           io.to(`user:${userId}`).emit('payment_confirmed', { orderId, scheduled: true, openAt });
           io.to(`user:${userId}`).emit('order_scheduled', {
             orderId,
-            openAt: openAt.toISOString(),
+            openAt:  openAt.toISOString(),
             message: `Flash opens at 07:00. Your order will be assigned to a driver then.`,
           });
         }
         console.log(`[Webhook] Card order ${orderId} scheduled for morning — outside operating hours`);
       } else {
-        // Within operating hours — release immediately
         try {
           await updateOrderStatus(orderId, 'waiting_for_driver', {
-            actorId: String(event.id || 'paystack'),
+            actorId:   String(event.id || 'paystack'),
             actorRole: 'webhook',
             io,
           });
@@ -212,10 +221,6 @@ class WebhookController {
           console.warn('[Webhook] waiting_for_driver transition skipped:', transitionErr.message);
         }
 
-        // FIXED (trusted driver): look up preferred_driver_id /
-        // preferred_driver_expires_at so the broadcast and push notification
-        // can be scoped to just that driver while the exclusivity window is
-        // open, instead of unconditionally alerting the entire driver_pool.
         const prefRow = await pool.query(
           `SELECT preferred_driver_id, preferred_driver_expires_at FROM orders WHERE id = $1`,
           [orderId],
@@ -231,7 +236,7 @@ class WebhookController {
           if (hasUnexpiredPreference) {
             io.to(`driver:${pref.preferred_driver_id}`).emit('new_order_available', {
               orderId,
-              isCashDelivery: false,
+              isCashDelivery:      false,
               preferredAssignment: true,
             });
           } else {
@@ -241,8 +246,6 @@ class WebhookController {
 
         await autoAssignNearestDriver(orderId, io).catch(() => null);
 
-        // Push notification to online drivers — fire and forget, non-blocking.
-        // Scoped to the preferred driver while the exclusivity window is open.
         notifyDriversNewOrder(
           orderId,
           false,
@@ -274,8 +277,6 @@ class WebhookController {
     try {
       await client.query('BEGIN');
 
-      // Idempotency: insert event ID within the transaction so retries are
-      // safe if processing rolls back before completing.
       if (event.id) {
         try {
           await client.query(
@@ -298,10 +299,6 @@ class WebhookController {
         return;
       }
 
-      // Lock the row and validate that the failure reference matches the
-      // current order reference before applying the failed transition.
-      // This prevents a stale failure webhook from an older attempt from
-      // overwriting the state of a newer charge attempt.
       const orderResult = await client.query(
         `SELECT paystack_reference, payment_status FROM orders WHERE id = $1 FOR UPDATE`,
         [orderId],
@@ -323,7 +320,6 @@ class WebhookController {
         return;
       }
 
-      // Only mark failed when not already paid and the reference matches.
       if (currentStatus !== 'paid') {
         await client.query(
           `UPDATE orders
@@ -351,229 +347,29 @@ class WebhookController {
     }
   }
 
-    // Called by the Paystack transfer.success webhook.
-    static async handleTransferSuccess(event) {
-      const data      = event.data || {};
-      const reference = data.reference;
-      if (!reference) return;
+  static async handleTransferSuccess(event) {
+    const data      = event.data || {};
+    const reference = data.reference;
+    if (!reference) return;
 
-      const txRow = await pool.query(
-        `SELECT pt.id, pt.driver_id, pt.amount, pt.payout_request_id
-         FROM payout_transactions pt
-         WHERE pt.reference = $1`,
-        [reference],
-      );
-      if (!txRow.rows.length) return;
+    const txRow = await pool.query(
+      `SELECT pt.id, pt.driver_id, pt.amount, pt.payout_request_id
+       FROM payout_transactions pt
+       WHERE pt.reference = $1`,
+      [reference],
+    );
+    if (!txRow.rows.length) return;
 
-      const { id: txId, driver_id, amount, payout_request_id } = txRow.rows[0];
-      await PayoutService.finalizeSuccessfulPayout(driver_id, amount, payout_request_id, txId);
-      console.log(`[Webhook] Transfer success finalized driverId=${driver_id} ref=${reference}`);
-    }
+    const { id: txId, driver_id, amount, payout_request_id } = txRow.rows[0];
+    await PayoutService.finalizeSuccessfulPayout(driver_id, amount, payout_request_id, txId);
+    console.log(`[Webhook] Transfer success finalized driverId=${driver_id} ref=${reference}`);
+  }
 
-    // Called by the Paystack transfer.failed / transfer.reversed webhook.
-    static async handleTransferFailed(event) {
-      const reference = event.data?.reference;
-      if (!reference) return;
-      await PayoutService.handleFailedPayout(reference);
-      console.log(`[Webhook] Transfer failed/reversed ref=${reference}`);
-    }
-
-  static async handlePayflex(req, res) {
-    // FIX 8: Added event_id to Payflex webhook body — needed for idempotency to prevent duplicate driver assignments
-    const { orderId, status, event_id } = req.body;
-    const io = req.app.get('io');
-
-    const payflexSecret = process.env.PAYFLEX_WEBHOOK_SECRET;
-    if (payflexSecret) {
-      const headerValue = req.headers['x-payflex-signature'];
-      const incomingSecret = typeof headerValue === 'string'
-        ? headerValue
-        : Array.isArray(headerValue) ? headerValue[0] : '';
-
-      const expectedBuf = Buffer.from(String(payflexSecret), 'utf8');
-      const incomingBuf = Buffer.from(String(incomingSecret), 'utf8');
-
-      if (incomingBuf.length !== expectedBuf.length ||
-          !crypto.timingSafeEqual(incomingBuf, expectedBuf)) {
-        console.warn('[Webhook] Payflex signature mismatch — ignoring request');
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-    } else {
-      if (isProd) {
-        console.error('[Webhook] CRITICAL: PAYFLEX_WEBHOOK_SECRET is required in production');
-        return res.status(500).json({ error: 'Webhook secret not configured' });
-      }
-      console.warn('[Webhook] PAYFLEX_WEBHOOK_SECRET not set — set before going live');
-    }
-
-    if (!orderId) {
-      return res.status(400).json({ error: 'orderId is required' });
-    }
-
-    try {
-      // Payflex idempotency — prevent double-processing the same event.
-      const payflexEventId = req.headers['x-payflex-event-id']
-        ? String(req.headers['x-payflex-event-id'])
-        : `${orderId}_${String(status)}_${Date.now()}`;
-      try {
-        await pool.query(
-          `INSERT INTO payflex_webhook_events (payflex_event_id, order_id, event_status)
-           VALUES ($1, $2, $3)`,
-          [payflexEventId, orderId, status],
-        );
-      } catch (dupErr) {
-        if (dupErr.code === '23505') {
-          console.log(`[Webhook] Duplicate Payflex event ${payflexEventId} — skipping`);
-          return res.json({ received: true });
-        }
-        throw dupErr;
-      }
-
-      if (status === 'APPROVED') {
-        // FIX 8: Payflex idempotency — Paystack webhook had this but Payflex did not, creating a risk of double driver assignment on duplicate callbacks
-        if (event_id) {
-          const idempClient = await pool.connect();
-          try {
-            await idempClient.query('BEGIN');
-            await idempClient.query(
-              `INSERT INTO webhook_events (paystack_event_id, event_type) VALUES ($1, $2)`,
-              [String(event_id), `payflex_${status}`]
-            );
-            await idempClient.query('COMMIT');
-          } catch (dupErr) {
-            await idempClient.query('ROLLBACK');
-            idempClient.release();
-            if (dupErr.code === '23505') {
-              return res.json({ received: true });
-            }
-            throw dupErr;
-          }
-          idempClient.release();
-        }
-
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
-
-          const orderCheck = await client.query(
-            `SELECT id, payment_status FROM orders WHERE id = $1 FOR UPDATE`,
-            [orderId],
-          );
-
-          if (!orderCheck.rows.length) {
-            await client.query('ROLLBACK');
-            return res.json({ received: true });
-          }
-
-          if (orderCheck.rows[0].payment_status === 'paid') {
-            await client.query('ROLLBACK');
-            return res.json({ received: true });
-          }
-
-          const result = await client.query(
-            `UPDATE orders
-             SET payment_status = 'paid', payment_method = 'payflex',
-                 delivery_payment_status = 'pending_driver', store_paid = true, updated_at = NOW()
-             WHERE id = $1
-             RETURNING user_id`,
-            [orderId],
-          );
-
-          await client.query('COMMIT');
-
-          try {
-            await updateOrderStatus(orderId, 'paid', {
-              actorId: String(req.headers['x-payflex-signature'] || 'payflex'),
-              actorRole: 'webhook',
-              io,
-            });
-          } catch (transitionErr) {
-            console.warn('[Webhook] payflex paid transition skipped:', transitionErr.message);
-          }
-
-          try {
-            await updateOrderStatus(orderId, 'waiting_for_driver', {
-              actorId: String(req.headers['x-payflex-signature'] || 'payflex'),
-              actorRole: 'webhook',
-              io,
-            });
-          } catch (transitionErr) {
-            console.warn('[Webhook] payflex waiting_for_driver transition skipped:', transitionErr.message);
-          }
-
-          // FIXED (trusted driver): same scoping as the Paystack webhook
-          // above — only alert the preferred driver while their exclusivity
-          // window is open, otherwise fall back to the full driver_pool.
-          const payflexPrefRow = await client.query(
-            `SELECT preferred_driver_id, preferred_driver_expires_at FROM orders WHERE id = $1`,
-            [orderId],
-          );
-          const payflexPref = payflexPrefRow.rows[0] || {};
-          const payflexHasUnexpiredPreference =
-            payflexPref.preferred_driver_id &&
-            payflexPref.preferred_driver_expires_at &&
-            new Date(payflexPref.preferred_driver_expires_at).getTime() > Date.now();
-
-          if (io && result.rows.length) {
-            io.to(`user:${result.rows[0].user_id}`).emit('payment_confirmed', { orderId });
-            if (payflexHasUnexpiredPreference) {
-              io.to(`driver:${payflexPref.preferred_driver_id}`).emit('new_order_available', {
-                orderId,
-                isCashDelivery: false,
-                preferredAssignment: true,
-              });
-            } else {
-              io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
-            }
-          }
-          await autoAssignNearestDriver(orderId, io).catch(() => null);
-          // Push notification to online drivers — fire and forget, non-blocking.
-          // Scoped to the preferred driver while the exclusivity window is open.
-          notifyDriversNewOrder(
-            orderId,
-            false,
-            payflexPref.preferred_driver_id || null,
-            payflexPref.preferred_driver_expires_at || null,
-          ).catch(() => null);
-        } catch (err) {
-          await client.query('ROLLBACK');
-          throw err;
-        } finally {
-          client.release();
-        }
-
-      } else if (status === 'DECLINED' || status === 'CANCELLED') {
-        const client = await pool.connect();
-        try {
-          await client.query('BEGIN');
-
-          const orderCheck = await client.query(
-            `SELECT id, payment_status FROM orders WHERE id = $1 FOR UPDATE`,
-            [orderId],
-          );
-
-          // Only mark failed when not already paid to prevent out-of-order overwrites.
-          if (orderCheck.rows.length && orderCheck.rows[0].payment_status !== 'paid') {
-            await client.query(
-              `UPDATE orders SET payment_status = 'failed', updated_at = NOW() WHERE id = $1`,
-              [orderId],
-            );
-          }
-
-          await client.query('COMMIT');
-        } catch (err) {
-          await client.query('ROLLBACK');
-          throw err;
-        } finally {
-          client.release();
-        }
-      }
-
-      res.json({ received: true });
-    } catch (err) {
-      console.error('[Webhook] Payflex error:', err.message);
-      res.status(500).json({ error: 'Webhook processing failed' });
-    }
+  static async handleTransferFailed(event) {
+    const reference = event.data?.reference;
+    if (!reference) return;
+    await PayoutService.handleFailedPayout(reference);
+    console.log(`[Webhook] Transfer failed/reversed ref=${reference}`);
   }
 }
 

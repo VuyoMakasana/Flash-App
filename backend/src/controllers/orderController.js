@@ -172,7 +172,7 @@ class OrderController {
         refundMode = 'store_refund_keep_delivery';
         const deliveryFee = parseFloat(order.delivery_fee || 0);
         const penalty     = Math.round(deliveryFee * 0.25 * 100) / 100;
-        if (penalty > 0 && ['card', 'payflex'].includes(order.payment_method) && order.payment_status === 'paid') {
+        if (penalty > 0 && order.payment_method === 'card' && order.payment_status === 'paid') {
           await db.query(
             `INSERT INTO payments (order_id, user_id, amount, method, provider, status, type, metadata)
              VALUES ($1, $2, $3, $4, $5, 'paid', 'penalty', $6::jsonb)`,
@@ -181,7 +181,7 @@ class OrderController {
               req.userId,
               penalty,
               order.payment_method,
-              order.payment_method === 'card' ? 'paystack' : 'payflex',
+              'paystack',
               JSON.stringify({ reason: 'late_cancellation_penalty', penalty_percent: 25 }),
             ],
           );
@@ -218,7 +218,7 @@ class OrderController {
       let refund = null;
       if (
         refundMode === 'full_refund' &&
-        ['card', 'payflex'].includes(order.payment_method) &&
+        order.payment_method === 'card' &&
         order.payment_status === 'paid'
       ) {
         refund = await RefundService.refundOrderPayment(
