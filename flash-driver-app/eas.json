@@ -1,21 +1,53 @@
 {
   "cli": {
-    "version": ">= 20.1.0",
+    "version": ">= 7.0.0",
     "appVersionSource": "remote"
   },
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "http://localhost:3000"
+      }
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://flash-app-hplc.onrender.com",
+        "GOOGLE_MAPS_API_KEY": "AIzaSyBx_Y-spzI7JK5Jx1NHG9ctjQFAZckHkmU"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://flash-app-hplc.onrender.com",
+        "GOOGLE_MAPS_API_KEY": "AIzaSyBx_Y-spzI7JK5Jx1NHG9ctjQFAZckHkmU",
+        "PAYSTACK_PUBLIC_KEY": "pk_test_9db77a6ebc076fa07d4b3b434bb403ad0851aea9"
+      }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "developer@flash.co.za",
+        "ascAppId": "YOUR_DRIVER_APP_STORE_CONNECT_APP_ID",
+        "appleTeamId": "YOUR_APPLE_TEAM_ID"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./google-play-key.json",
+        "track": "production"
+      }
+    }
   }
 }

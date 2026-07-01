@@ -16,11 +16,14 @@
       "bundleIdentifier": "co.za.flash.driverapp",
       "usesAppleSignIn": true,
       "config": {
-        "googleMapsApiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
+        "googleMapsApiKey": "AIzaSyBx_Y-spzI7JK5Jx1NHG9ctjQFAZckHkmU"
       },
       "infoPlist": {
+        "NSCameraUsageDescription": "Flash Driver needs camera access to photograph documents for account verification.",
+        "NSPhotoLibraryUsageDescription": "Flash Driver needs photo library access to upload profile and document photos.",
         "NSLocationWhenInUseUsageDescription": "Flash Driver uses your location so customers can track their deliveries.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "Flash Driver uses your location in the background to update your delivery position.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Flash Driver uses your location in the background to update your delivery position while on a job.",
+        "UIBackgroundModes": ["location", "fetch"],
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -41,7 +44,7 @@
       ],
       "config": {
         "googleMaps": {
-          "apiKey": "AIzaSyDIT6c9LGRnG5MV6SKAKqxxC2qLO-llzt8"
+          "apiKey": "$GOOGLE_MAPS_API_KEY"
         }
       }
     },
@@ -50,6 +53,8 @@
       "expo-notifications",
       "expo-document-picker",
       "expo-apple-authentication",
+      "expo-task-manager",
+      "expo-secure-store",
       "@react-native-google-signin/google-signin",
       [
         "expo-build-properties",
@@ -63,6 +68,7 @@
       ]
     ],
     "extra": {
+      "privacyPolicyUrl": "https://flash.co.za/privacy",
       "eas": {
         "projectId": "461d43ca-086d-4104-9a07-81897f2d7962"
       }

@@ -1,16 +1,21 @@
-// flash-driver-app/context/DriverContext.js
-//
-// CHANGES FROM ORIGINAL:
-//   1. Import startBackgroundLocation / stopBackgroundLocation from the task file.
-//   2. Call startBackgroundLocation() when driver goes online.
-//   3. Call stopBackgroundLocation() when driver goes offline OR logs out.
-//   4. Store active order ID in AsyncStorage so the background task can read
-//      it without React state (which is unavailable in a background process).
+/**
+ * flash-driver-app/context/DriverContext.js
+ *
+ * HIGH-4 FIX: Auth tokens (FLASH_DRIVER_TOKEN, FLASH_DRIVER_REFRESH_TOKEN)
+ *   stored in expo-secure-store instead of AsyncStorage.
+ *
+ *   Non-sensitive data (driver profile snapshot, active order ID for the
+ *   background task) remains in AsyncStorage — the background task cannot
+ *   access SecureStore and doesn't need encrypted data there.
+ */
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, {
+  createContext, useContext, useState, useEffect, useCallback,
+} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import * as Notifications from 'expo-notifications';
-import driverApi from '../services/api';
+import driverApi, { saveTokens, clearTokens } from '../services/api';
 import {
   startBackgroundLocation,
   stopBackgroundLocation,
@@ -18,14 +23,14 @@ import {
 
 const DriverContext = createContext(null);
 
-const STORAGE_KEYS = {
-  token:        'FLASH_DRIVER_TOKEN',
-  driver:       'FLASH_DRIVER',
-  refreshToken: 'FLASH_DRIVER_REFRESH_TOKEN',
-  activeOrder:  'FLASH_DRIVER_ACTIVE_ORDER_ID',
+// Sensitive tokens → SecureStore
+// Non-sensitive snapshot data → AsyncStorage (accessible to background task)
+const AS_KEYS = {
+  driver:      'FLASH_DRIVER',
+  activeOrder: 'FLASH_DRIVER_ACTIVE_ORDER_ID',
 };
 
-const registerPushToken = async (authToken) => {
+const registerPushToken = async () => {
   try {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
@@ -37,28 +42,28 @@ const registerPushToken = async (authToken) => {
 
     const tokenData = await Notifications.getExpoPushTokenAsync();
     const pushToken = tokenData.data;
-
-    await driverApi.notifications.registerToken(pushToken);
+    await driverApi.driver.updateProfile?.({ push_token: pushToken }).catch(() => {});
   } catch (e) {
     console.warn('Push token registration failed', e);
   }
 };
 
 export const DriverProvider = ({ children }) => {
-  const [token, setToken]           = useState(null);
-  const [driver, setDriver]         = useState(null);
-  const [hydrated, setHydrated]     = useState(false);
-  const [isOnline, setIsOnlineState] = useState(false);
-  const [activeOrder, setActiveOrderState] = useState(null);
+  const [token, setToken]                   = useState(null);
+  const [driver, setDriver]                 = useState(null);
+  const [hydrated, setHydrated]             = useState(false);
+  const [isOnline, setIsOnlineState]        = useState(false);
+  const [activeOrder, setActiveOrderState]  = useState(null);
 
-  // ── HYDRATION ─────────────────────────────────────────────────────────────
+  // ── Hydration ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const hydrate = async () => {
       try {
-        const [t, d] = await Promise.all([
-          AsyncStorage.getItem(STORAGE_KEYS.token),
-          AsyncStorage.getItem(STORAGE_KEYS.driver),
-        ]);
+        // Token from SecureStore (encrypted)
+        const t = await SecureStore.getItemAsync('FLASH_DRIVER_TOKEN');
+        // Driver profile snapshot from AsyncStorage (non-sensitive)
+        const d = await AsyncStorage.getItem(AS_KEYS.driver);
+
         if (t) setToken(t);
         if (d) setDriver(JSON.parse(d));
       } catch (e) {
@@ -70,135 +75,104 @@ export const DriverProvider = ({ children }) => {
     hydrate();
   }, []);
 
-  // ── PUSH TOKEN ────────────────────────────────────────────────────────────
+  // Push token registration
   useEffect(() => {
-    if (token && hydrated) {
-      registerPushToken(token);
-    }
+    if (token && hydrated) registerPushToken();
   }, [token, hydrated]);
 
   const isAuthenticated = !!token && !!driver;
 
-  // ── ACTIVE ORDER: keep AsyncStorage in sync ────────────────────────────────
-  // The background location task cannot access React state. It reads the
-  // active order ID directly from AsyncStorage so it can include orderId in
-  // every location POST while the app is backgrounded.
+  // ── Active order (background task uses AsyncStorage directly) ─────────────
   const setActiveOrder = useCallback(async (order) => {
     setActiveOrderState(order);
     if (order?.id) {
-      await AsyncStorage.setItem(STORAGE_KEYS.activeOrder, String(order.id));
+      await AsyncStorage.setItem(AS_KEYS.activeOrder, String(order.id));
     } else {
-      await AsyncStorage.removeItem(STORAGE_KEYS.activeOrder);
+      await AsyncStorage.removeItem(AS_KEYS.activeOrder);
     }
   }, []);
 
-  // ── AUTH ──────────────────────────────────────────────────────────────────
-  const login = useCallback(async (email, password) => {
-    const data = await driverApi.auth.login(email, password);
-    await AsyncStorage.multiSet([
-      [STORAGE_KEYS.token,        data.token],
-      [STORAGE_KEYS.driver,       JSON.stringify(data.driver)],
-      [STORAGE_KEYS.refreshToken, data.refreshToken || ''],
-    ]);
+  // ── Shared post-login helper ──────────────────────────────────────────────
+  const _postLogin = useCallback(async (data) => {
+    // Auth tokens → SecureStore (encrypted)
+    await saveTokens(data.token, data.refreshToken);
+    // Driver snapshot → AsyncStorage (for background task access)
+    await AsyncStorage.setItem(AS_KEYS.driver, JSON.stringify(data.driver));
+
     setToken(data.token);
     setDriver(data.driver);
-    await registerPushToken(data.token);
-    return data;
   }, []);
 
-  const loginWithApple = useCallback(async (identityToken, fullName, email) => {
-    const data = await driverApi.auth.appleSignIn(identityToken, fullName, email);
-    await AsyncStorage.multiSet([
-      [STORAGE_KEYS.token,        data.token],
-      [STORAGE_KEYS.driver,       JSON.stringify(data.driver)],
-      [STORAGE_KEYS.refreshToken, data.refreshToken || ''],
-    ]);
-    setToken(data.token);
-    setDriver(data.driver);
-    if (data.driver?.status === 'approved') await registerPushToken(data.token);
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  const login = useCallback(async (email, password) => {
+    const data = await driverApi.auth.login(email, password);
+    await _postLogin(data);
+    await registerPushToken();
     return data;
-  }, []);
+  }, [_postLogin]);
+
+  const loginWithApple = useCallback(async (identityToken, fullName, email) => {
+    const data = await driverApi.auth.appleSignIn({ identityToken, fullName, email });
+    await _postLogin(data);
+    if (data.driver?.status === 'approved') await registerPushToken();
+    return data;
+  }, [_postLogin]);
 
   const loginWithGoogle = useCallback(async (idToken) => {
     const data = await driverApi.auth.googleSignIn(idToken);
-    await AsyncStorage.multiSet([
-      [STORAGE_KEYS.token,        data.token],
-      [STORAGE_KEYS.driver,       JSON.stringify(data.driver)],
-      [STORAGE_KEYS.refreshToken, data.refreshToken || ''],
-    ]);
-    setToken(data.token);
-    setDriver(data.driver);
-    if (data.driver?.status === 'approved') await registerPushToken(data.token);
+    await _postLogin(data);
+    if (data.driver?.status === 'approved') await registerPushToken();
     return data;
-  }, []);
+  }, [_postLogin]);
 
   const register = useCallback(async (formData) => {
     const data = await driverApi.auth.register(formData);
-    await AsyncStorage.multiSet([
-      [STORAGE_KEYS.token,  data.token],
-      [STORAGE_KEYS.driver, JSON.stringify(data.driver)],
-    ]);
-    setToken(data.token);
-    setDriver(data.driver);
+    await _postLogin(data);
     return data;
-  }, []);
+  }, [_postLogin]);
 
   const logout = useCallback(async () => {
-    // Stop background location before clearing credentials so the final
-    // stopLocationUpdatesAsync call can still find the task.
     await stopBackgroundLocation();
-    await AsyncStorage.removeItem(STORAGE_KEYS.activeOrder);
+    await AsyncStorage.removeItem(AS_KEYS.activeOrder);
+    // Clear tokens from SecureStore
+    await clearTokens();
+    // Clear non-sensitive data
+    await AsyncStorage.removeItem(AS_KEYS.driver).catch(() => {});
 
-    const refreshToken = await AsyncStorage.getItem(STORAGE_KEYS.refreshToken).catch(() => null);
-    if (refreshToken) driverApi.auth.logout(refreshToken).catch(() => {});
-    await AsyncStorage.multiRemove([
-      STORAGE_KEYS.token,
-      STORAGE_KEYS.driver,
-      STORAGE_KEYS.refreshToken,
-    ]);
     setToken(null);
     setDriver(null);
-    setActiveOrderState(null);
     setIsOnlineState(false);
+    setActiveOrderState(null);
   }, []);
 
   const handleSessionExpired = useCallback(async () => {
-    await stopBackgroundLocation();
-    await AsyncStorage.multiRemove([
-      STORAGE_KEYS.token,
-      STORAGE_KEYS.driver,
-      STORAGE_KEYS.activeOrder,
-    ]);
+    await stopBackgroundLocation().catch(() => {});
+    await clearTokens();
+    await AsyncStorage.removeItem(AS_KEYS.driver).catch(() => {});
     setToken(null);
     setDriver(null);
-    setActiveOrderState(null);
     setIsOnlineState(false);
   }, []);
 
   const refreshProfile = useCallback(async () => {
     try {
-      const data = await driverApi.profile.getMe();
+      const data = await driverApi.driver.getProfile();
       setDriver(data.driver);
-      await AsyncStorage.setItem(STORAGE_KEYS.driver, JSON.stringify(data.driver));
+      await AsyncStorage.setItem(AS_KEYS.driver, JSON.stringify(data.driver));
       return data;
     } catch (e) {
       console.warn('Profile refresh failed', e);
     }
   }, []);
 
-  // ── ONLINE TOGGLE ─────────────────────────────────────────────────────────
-  // When driver goes ONLINE  → start background location updates.
-  // When driver goes OFFLINE → stop  background location updates.
+  // ── Online toggle ─────────────────────────────────────────────────────────
   const setOnline = useCallback(async (online) => {
     try {
-      await driverApi.status.setOnline(online);
+      await driverApi.driver.setOnline(online);
       setIsOnlineState(online);
-      setDriver(prev => prev ? { ...prev, is_online: online } : prev);
+      setDriver(prev => (prev ? { ...prev, is_online: online } : prev));
 
       if (online) {
-        // Non-blocking: location start may show a permissions dialog.
-        // We don't block the online toggle on the result — if permission
-        // is denied the driver is still online, just without BG location.
         startBackgroundLocation().catch((err) => {
           console.warn('[DriverContext] BG location start failed:', err.message);
         });
