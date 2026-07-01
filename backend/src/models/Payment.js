@@ -235,30 +235,6 @@ class Payment extends BaseModel {
     });
   }
 
-  static async initiatePayflex(orderId, userId) {
-    const orderResult = await this.query(
-      "SELECT id, subtotal, user_id FROM orders WHERE id=$1",
-      [orderId],
-    );
-
-    if (!orderResult.rows.length) {
-      throw new Error("Order not found");
-    }
-
-    const order = orderResult.rows[0];
-    if (order.user_id !== userId) {
-      throw new Error("Not your order");
-    }
-
-    const payflexUrl = `https://checkout.payflex.co.za/?token=${process.env.PAYFLEX_API_KEY}&orderId=${orderId}`;
-
-    await this.query(
-      "UPDATE orders SET payflex_order_id=$1, payment_method=$2, updated_at=NOW() WHERE id=$3",
-      [orderId, "payflex", orderId],
-    );
-
-    return { checkoutUrl: payflexUrl, payflexOrderId: orderId };
-  }
 }
 
 module.exports = Payment;

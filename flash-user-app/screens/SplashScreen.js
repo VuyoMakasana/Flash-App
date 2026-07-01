@@ -1,40 +1,150 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, Animated } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+/**
+ * flash-user-app/screens/SplashScreen.js
+ *
+ * MEDIUM-4 FIX: Premium animated splash screen.
+ *   - Black background (#0a0a0a)
+ *   - "FLASH" wordmark fades in and scales up
+ *   - Amber underline bar slides in
+ *   - Tagline fades in below
+ *   - Pulses once, then fades out — calls onFinish prop
+ *   - Uses only React Native's built-in Animated API (no third-party deps)
+ */
 
-export default function SplashScreen({ navigation }) {
-  const opacity = new Animated.Value(0);
-  const scale = new Animated.Value(0.8);
+import React, { useEffect, useRef } from 'react';
+import {
+  View, Text, StyleSheet, Animated, StatusBar, Dimensions,
+} from 'react-native';
+
+const { width } = Dimensions.get('window');
+
+export default function SplashScreen({ onFinish }) {
+  // Animation values
+  const logoOpacity    = useRef(new Animated.Value(0)).current;
+  const logoScale      = useRef(new Animated.Value(0.8)).current;
+  const barWidth       = useRef(new Animated.Value(0)).current;
+  const taglineOpacity = useRef(new Animated.Value(0)).current;
+  const containerOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(opacity, { toValue: 1, duration: 600, useNativeDriver: true }),
-      Animated.spring(scale, { toValue: 1, tension: 80, friction: 8, useNativeDriver: true }),
-    ]).start();
+    Animated.sequence([
+      // 1. Logo fades in + scales up
+      Animated.parallel([
+        Animated.timing(logoOpacity, {
+          toValue: 1, duration: 500, useNativeDriver: true,
+        }),
+        Animated.spring(logoScale, {
+          toValue: 1, tension: 120, friction: 8, useNativeDriver: true,
+        }),
+      ]),
 
-    const timer = setTimeout(() => {
-      navigation.replace('Login');
-    }, 2000);
-    return () => clearTimeout(timer);
+      // 2. Amber underline bar slides in from left
+      Animated.timing(barWidth, {
+        toValue: 1, duration: 400, useNativeDriver: false,
+      }),
+
+      // 3. Tagline fades in
+      Animated.timing(taglineOpacity, {
+        toValue: 1, duration: 350, useNativeDriver: true,
+      }),
+
+      // 4. Hold
+      Animated.delay(600),
+
+      // 5. Pulse — scale up slightly
+      Animated.spring(logoScale, {
+        toValue: 1.05, tension: 180, friction: 6, useNativeDriver: true,
+      }),
+
+      // 6. Pulse — scale back
+      Animated.spring(logoScale, {
+        toValue: 1, tension: 180, friction: 6, useNativeDriver: true,
+      }),
+
+      // 7. Hold
+      Animated.delay(300),
+
+      // 8. Entire screen fades to black before navigating away
+      Animated.timing(containerOpacity, {
+        toValue: 0, duration: 400, useNativeDriver: true,
+      }),
+    ]).start(() => {
+      if (onFinish) onFinish();
+    });
   }, []);
 
+  const animatedBarWidth = barWidth.interpolate({
+    inputRange:  [0, 1],
+    outputRange: ['0%', '100%'],
+  });
+
   return (
-    <View style={styles.container}>
-      <Animated.View style={[styles.logoWrap, { opacity, transform: [{ scale }] }]}>
-        <View style={styles.circle}>
-          <Ionicons name="flash" size={56} color="#fff" />
-        </View>
-        <Text style={styles.brand}>FLASH</Text>
-        <Text style={styles.tag}>Same-day clothing delivery</Text>
-      </Animated.View>
-    </View>
+    <Animated.View style={[styles.container, { opacity: containerOpacity }]}>
+      <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
+
+      <View style={styles.logoWrap}>
+        {/* Wordmark */}
+        <Animated.Text
+          style={[
+            styles.wordmark,
+            { opacity: logoOpacity, transform: [{ scale: logoScale }] },
+          ]}
+        >
+          FLASH
+        </Animated.Text>
+
+        {/* Amber underline bar */}
+        <Animated.View style={[styles.bar, { width: animatedBarWidth }]} />
+
+        {/* Tagline */}
+        <Animated.Text style={[styles.tagline, { opacity: taglineOpacity }]}>
+          Fashion. Fast.
+        </Animated.Text>
+      </View>
+
+      {/* Subtle bottom attribution */}
+      <Animated.Text style={[styles.poweredBy, { opacity: taglineOpacity }]}>
+        flash.co.za
+      </Animated.Text>
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0a0a0a', alignItems: 'center', justifyContent: 'center' },
-  logoWrap: { alignItems: 'center', gap: 16 },
-  circle: { width: 100, height: 100, borderRadius: 28, backgroundColor: '#1f2937', alignItems: 'center', justifyContent: 'center' },
-  brand: { fontSize: 40, fontWeight: '900', color: '#fff', letterSpacing: 6 },
-  tag: { color: '#9ca3af', fontSize: 15, fontWeight: '500' },
+  container: {
+    flex: 1,
+    backgroundColor: '#0a0a0a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoWrap: {
+    alignItems: 'center',
+    gap: 12,
+  },
+  wordmark: {
+    fontSize: 64,
+    fontWeight: '900',
+    color: '#ffffff',
+    letterSpacing: 10,
+    includeFontPadding: false,
+  },
+  bar: {
+    height: 4,
+    backgroundColor: '#f59e0b',
+    borderRadius: 2,
+    alignSelf: 'stretch',
+  },
+  tagline: {
+    fontSize: 16,
+    color: '#9ca3af',
+    letterSpacing: 4,
+    fontWeight: '400',
+    marginTop: 4,
+  },
+  poweredBy: {
+    position: 'absolute',
+    bottom: 48,
+    color: '#374151',
+    fontSize: 12,
+    letterSpacing: 2,
+  },
 });

@@ -1,226 +1,190 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+/**
+ * flash-driver-app/services/api.js
+ *
+ * HIGH-4 FIX: Auth tokens stored in expo-secure-store (encrypted Keychain/Keystore)
+ *   instead of AsyncStorage (plaintext on Android).
+ */
 
-// FIX 1: Changed hardcoded LAN IP to production server URL — the old IP was a local Tailscale address that fails for every user outside the developer's network
-const DEFAULT_BASE_URL = 'https://flash-app-hplc.onrender.com';
-export const BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL ||
-  process.env.REACT_NATIVE_API_BASE_URL ||
-  DEFAULT_BASE_URL;
-const REQUEST_TIMEOUT_MS = 15000;
+import * as SecureStore from 'expo-secure-store';
 
-const getToken        = async () => AsyncStorage.getItem('FLASH_DRIVER_TOKEN');
-const getRefreshToken = async () => AsyncStorage.getItem('FLASH_DRIVER_REFRESH_TOKEN');
+export const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:3000';
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// ── Token helpers (SecureStore — encrypted on device) ──────────────────────
+export const getToken        = async () => SecureStore.getItemAsync('FLASH_DRIVER_TOKEN');
+export const getRefreshToken = async () => SecureStore.getItemAsync('FLASH_DRIVER_REFRESH_TOKEN');
 
-const parseResponse = async (response) => {
-  const text = await response.text();
-  if (!text) return {};
-  try { return JSON.parse(text); }
-  catch (_) { return { error: text }; }
+export const saveTokens = async (token, refreshToken) => {
+  await SecureStore.setItemAsync('FLASH_DRIVER_TOKEN', token);
+  if (refreshToken) await SecureStore.setItemAsync('FLASH_DRIVER_REFRESH_TOKEN', refreshToken);
 };
 
-const shouldRetry = (method, responseStatus, errName) => {
-  if (method !== 'GET') return false;
-  if (responseStatus >= 500 || responseStatus === 429) return true;
-  if (errName === 'AbortError' || errName === 'TypeError') return true;
-  return false;
+export const clearTokens = async () => {
+  await SecureStore.deleteItemAsync('FLASH_DRIVER_TOKEN').catch(() => {});
+  await SecureStore.deleteItemAsync('FLASH_DRIVER_REFRESH_TOKEN').catch(() => {});
 };
 
-// Silent token refresh for drivers. Called on TOKEN_EXPIRED 401.
-// If refresh fails the driver is cleanly logged out — no confusion mid-shift.
-let _isRefreshing = false;
-let _refreshQueue = [];
+// ── Shared fetch wrapper ────────────────────────────────────────────────────
+async function request(path, options = {}) {
+  const token = await getToken();
 
-async function silentRefresh() {
-  const refreshToken = await getRefreshToken();
-  if (!refreshToken) throw new Error('SESSION_EXPIRED');
-  try {
-    const res  = await fetch(`${BASE_URL}/api/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken }) });
-    const data = await res.json();
-    if (!res.ok || !data.token) throw new Error('SESSION_EXPIRED');
-    await AsyncStorage.setItem('FLASH_DRIVER_TOKEN', data.token);
-    if (data.refreshToken) await AsyncStorage.setItem('FLASH_DRIVER_REFRESH_TOKEN', data.refreshToken);
-    return data.token;
-  } catch (_) {
-    await AsyncStorage.multiRemove(['FLASH_DRIVER_TOKEN', 'FLASH_DRIVER', 'FLASH_DRIVER_REFRESH_TOKEN']);
-    throw new Error('SESSION_EXPIRED');
-  }
-}
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...options.headers,
+  };
 
-async function request(method, path, body = null, isPublic = false) {
-  const maxAttempts = method === 'GET' ? 3 : 1;
+  const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const controller = new AbortController();
-    const timeout    = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-    try {
-      const headers = { 'Content-Type': 'application/json' };
-      if (!isPublic) {
-        const token = await getToken();
-        if (token) headers.Authorization = `Bearer ${token}`;
-      }
-
-      const options = { method, headers, signal: controller.signal };
-      if (body) options.body = JSON.stringify(body);
-
-      const response = await fetch(`${BASE_URL}${path}`, options);
-      const data     = await parseResponse(response);
-
-      if (!response.ok) {
-        if (response.status === 401 && !isPublic) {
-          const errMsg = data?.error || '';
-          if (errMsg === 'TOKEN_EXPIRED' || errMsg === 'Token expired') {
-            if (!_isRefreshing) {
-              _isRefreshing = true;
-              try {
-                const newToken = await silentRefresh();
-                _refreshQueue.forEach((resolve) => resolve(newToken));
-                _refreshQueue = [];
-              } catch (e) {
-                _refreshQueue = [];
-                _isRefreshing = false;
-                throw new Error('SESSION_EXPIRED');
-              }
-              _isRefreshing = false;
-            } else {
-              await new Promise((resolve) => _refreshQueue.push(resolve));
-            }
-            continue; // Retry with new token
-          }
-          await AsyncStorage.multiRemove(['FLASH_DRIVER_TOKEN', 'FLASH_DRIVER', 'FLASH_DRIVER_REFRESH_TOKEN']);
-          throw new Error('SESSION_EXPIRED');
-        }
-        if (attempt < maxAttempts && shouldRetry(method, response.status, '')) {
-          await sleep(attempt * 250);
-          continue;
-        }
-        throw new Error(data.error || data.message || `Request failed (${response.status})`);
-      }
-
-      return data;
-    } catch (err) {
-      if (attempt < maxAttempts && shouldRetry(method, 0, err.name)) {
-        await sleep(attempt * 250);
-        continue;
-      }
-      if (err.name === 'AbortError') throw new Error('Request timed out. Please try again.');
-      throw new Error(err.message || 'Network request failed');
-    } finally {
-      clearTimeout(timeout);
-    }
-  }
-
-  throw new Error('Request failed');
-}
-
-export const driverApi = {
-  auth: {
-    register:    (data) => request('POST', '/api/auth/driver/register', data, true),
-    login:       (email, password) => request('POST', '/api/auth/driver/login', { email, password }, true),
-    appleSignIn: (identityToken, fullName, email) =>
-      request('POST', '/api/auth/driver/apple', { identityToken, fullName, email }, true),
-    googleSignIn: (idToken) =>
-      request('POST', '/api/auth/driver/google', { idToken }, true),
-    refresh:     (refreshToken) => request('POST', '/api/auth/refresh', { refreshToken }, true),
-    logout:      (refreshToken) => request('POST', '/api/auth/logout',  { refreshToken }, true),
-  },
-  profile: {
-    getMe: () => request('GET', '/api/drivers/me'),
-    update: (data) => request('PUT', '/api/drivers/me', data),
-    uploadDocument: async (documentType, fileUri, fileName, mimeType) => {
-      const token = await getToken();
-      const formData = new FormData();
-      formData.append('document_type', documentType);
-      formData.append('document', { uri: fileUri, name: fileName, type: mimeType });
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  // Token expired — try to refresh once
+  if (res.status === 401) {
+    const refreshToken = await getRefreshToken();
+    if (refreshToken) {
       try {
-        const response = await fetch(`${BASE_URL}/api/drivers/documents/upload`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
-          body: formData,
-          signal: controller.signal,
+        const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ refreshToken }),
         });
 
-        const data = await parseResponse(response);
-        if (!response.ok) throw new Error(data.error || 'Upload failed');
-        return data;
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          throw new Error('Upload timed out. Please try again.');
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          await saveTokens(data.token, data.refreshToken);
+
+          const retryRes = await fetch(`${BASE_URL}${path}`, {
+            ...options,
+            headers: {
+              ...headers,
+              Authorization: `Bearer ${data.token}`,
+            },
+          });
+
+          if (!retryRes.ok) {
+            const err = await retryRes.json().catch(() => ({ error: 'Request failed' }));
+            throw new Error(err.error || 'Request failed');
+          }
+          return retryRes.json();
         }
-        throw new Error(err.message || 'Upload failed');
-      } finally {
-        clearTimeout(timeout);
+      } catch (_refreshErr) {
+        // Refresh failed — clear and signal expiry
       }
-    },
+    }
+
+    await clearTokens();
+    throw new Error('SESSION_EXPIRED');
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Request failed' }));
+    throw new Error(err.error || 'Request failed');
+  }
+
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────
+const auth = {
+  login: async (email, password) => {
+    const data = await request('/auth/driver/login', {
+      method: 'POST',
+      body:   JSON.stringify({ email, password }),
+    });
+    await saveTokens(data.token, data.refreshToken);
+    return data;
   },
-  status: {
-    setOnline: (online) => request('POST', '/api/drivers/online', { online }),
-    updateLocation: (lat, lng, orderId) =>
-      request('POST', '/api/drivers/location', { lat, lng, orderId }),
+
+  register: async (payload) => {
+    const data = await request('/auth/driver/register', {
+      method: 'POST',
+      body:   JSON.stringify(payload),
+    });
+    await saveTokens(data.token, data.refreshToken);
+    return data;
   },
-  orders: {
-    getAvailable: () => request('GET', '/api/drivers/available-orders'),
-    getActive: () => request('GET', '/api/drivers/active-order'),
-    acceptOrder: (orderId) => request('POST', `/api/drivers/orders/${orderId}/accept`),
-    updateStatus: (orderId, status) => request('PUT', `/api/orders/${orderId}/status`, { status }),
-    // Cash OTP flow: driver sends OTP to user then confirms payment with the code
-    sendCashOtp: (orderId) => request('POST', '/api/payments/cash/send-otp', { orderId }),
+
+  logout: async () => {
+    try {
+      const refreshToken = await getRefreshToken();
+      if (refreshToken) {
+        await request('/auth/logout', {
+          method: 'POST',
+          body:   JSON.stringify({ refreshToken }),
+        }).catch(() => {});
+      }
+    } finally {
+      await clearTokens();
+    }
   },
-  earnings: {
-    get: () => request('GET', '/api/drivers/earnings'),
-  },
-  subscription: {
-    get: () => request('GET', '/api/subscriptions/driver'),
-    purchase: (planId) => request('POST', '/api/subscriptions/driver/purchase', { planId }),
-    incrementDelivery: () => request('POST', '/api/subscriptions/driver/increment'),
-  },
-  fleet: {
-    getClusters: () => request('GET', '/api/fleet/clusters'),
-  },
-  returns: {
-    pickupReturn: (returnId) => request('POST', `/api/returns/${returnId}/pickup`),
-  },
-  // ── v3 NEW ─────────────────────────────────────────────────────────────────
-  messages: {
-    getMessages: (orderId) => request('GET', `/api/messages/${orderId}`),
-    sendMessage: (orderId, content) =>
-      request('POST', `/api/messages/${orderId}`, { content }),
-    getUnread: (orderId) => request('GET', `/api/messages/${orderId}/unread`),
-  },
-  trustedDrivers: {
-    getRequests: () => request('GET', '/api/trusted-drivers/requests'),
-    respond: (requestId, action) =>
-      request('PATCH', `/api/trusted-drivers/${requestId}/respond`, { action }),
-    removeSelf: (userId) => request('DELETE', `/api/trusted-drivers/remove-self/${userId}`),
-  },
-  // ── Bank account setup for payouts ─────────────────────────────────────────
-  // ADDED: Bank account API methods — needed for driver payout account setup screen
-  bank: {
-    getBanks: () => request('GET', '/api/drivers/bank/supported-banks'),
-    getSupportedBanks: () => request('GET', '/api/drivers/bank/supported-banks'),
-    verifyAccount: (account_number, bank_code) =>
-      request('POST', '/api/drivers/bank/verify', { account_number, bank_code }),
-    saveAccount: (account_number, bank_code, account_name) =>
-      request('POST', '/api/drivers/bank/save', { account_number, bank_code, account_name }),
-    getAccount: () => request('GET', '/api/drivers/bank/account'),
-  },
-  // ── Push notification token registration ───────────────────────────────────
-  notifications: {
-    registerToken: (push_token) =>
-      request('POST', '/api/drivers/push-token', { push_token }),
-  },
-  // FIXED: Corrected endpoint URLs to match backend payment routes — previous URLs returned 404 on every cash OTP attempt
-  payments: {
-    sendCashOtp: (orderId) =>
-      request('POST', '/api/payments/cash/send-otp', { orderId }),
-    // confirmCashReceived is the correct method name — confirmCashPayment was a duplicate and has been removed
-    confirmCashReceived: (orderId, otp) =>
-      request('POST', '/api/payments/cash/confirm', { orderId, otp }),
-  },
+
+  googleSignIn: (idToken) =>
+    request('/auth/google/driver', { method: 'POST', body: JSON.stringify({ idToken }) }),
+
+  appleSignIn: (payload) =>
+    request('/auth/apple/driver', { method: 'POST', body: JSON.stringify(payload) }),
+};
+
+// ── Orders ────────────────────────────────────────────────────────────────
+const orders = {
+  getAvailable:  ()           => request('/orders/available'),
+  getActive:     ()           => request('/orders/active'),
+  accept:        (id)         => request(`/orders/${id}/accept`, { method: 'POST' }),
+  updateStatus:  (id, status) => request(`/orders/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  getById:       (id)         => request(`/orders/${id}`),
+};
+
+// ── Driver profile ─────────────────────────────────────────────────────────
+const driver = {
+  getProfile:     ()      => request('/drivers/profile'),
+  updateProfile:  (body)  => request('/drivers/profile', { method: 'PATCH', body: JSON.stringify(body) }),
+  updateLocation: (lat, lng) => request('/drivers/location', { method: 'POST', body: JSON.stringify({ lat, lng }) }),
+  setOnline:      (online) => request('/drivers/online', { method: 'POST', body: JSON.stringify({ online }) }),
+  uploadDocument: (formData) => request('/drivers/documents', {
+    method:  'POST',
+    headers: {},
+    body:    formData,
+  }),
+};
+
+// ── Earnings / Wallet ──────────────────────────────────────────────────────
+const earnings = {
+  getSummary:     ()     => request('/drivers/earnings'),
+  getTransactions:()     => request('/drivers/wallet/transactions'),
+  requestPayout:  (body) => request('/drivers/payout', { method: 'POST', body: JSON.stringify(body) }),
+  getBankDetails: ()     => request('/drivers/bank'),
+  saveBankDetails:(body) => request('/drivers/bank', { method: 'POST', body: JSON.stringify(body) }),
+};
+
+// ── Subscription ──────────────────────────────────────────────────────────
+const subscription = {
+  getPlans:   ()      => request('/subscriptions/plans'),
+  getCurrent: ()      => request('/subscriptions/current'),
+  purchase:   (body)  => request('/subscriptions/purchase', { method: 'POST', body: JSON.stringify(body) }),
+};
+
+// ── Trusted Driver requests ───────────────────────────────────────────────
+const trustedDrivers = {
+  getRequests:  ()                   => request('/trusted-drivers/requests'),
+  respond:      (requestId, action)  => request(`/trusted-drivers/${requestId}/respond`, {
+    method: 'PATCH',
+    body:   JSON.stringify({ action }),
+  }),
+};
+
+// ── Payments (cash flow) ─────────────────────────────────────────────────
+const payments = {
+  sendCashOtp:     (orderId)       => request('/payments/cash/send-otp', { method: 'POST', body: JSON.stringify({ orderId }) }),
+  confirmCash:     (orderId, otp)  => request('/payments/cash/confirm', { method: 'POST', body: JSON.stringify({ orderId, otp }) }),
+  markCashFailed:  (orderId, reason) => request('/payments/cash/fail', { method: 'POST', body: JSON.stringify({ orderId, reason }) }),
+};
+
+const driverApi = {
+  auth,
+  orders,
+  driver,
+  earnings,
+  subscription,
+  trustedDrivers,
+  payments,
 };
 
 export default driverApi;

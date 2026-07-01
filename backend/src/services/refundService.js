@@ -41,7 +41,7 @@ class RefundService {
         return existingCompleted.rows[0];
       }
 
-      if (!["card", "payflex"].includes(order.payment_method || "")) {
+      if (order.payment_method !== "card") {
         throw new Error("Order payment method does not support automated refund");
       }
 
