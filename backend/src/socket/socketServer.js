@@ -1,5 +1,18 @@
 'use strict';
 
+/**
+ * socketServer.js
+ *
+ * HIGH-9 FIX: JWT tokens are re-verified every 14 minutes. If the token has
+ *   expired, the socket emits 'auth_expired' and disconnects. This prevents
+ *   stale 15-minute access tokens from remaining valid indefinitely on a
+ *   long-lived socket connection.
+ *
+ * HIGH-10 FIX: join_driver_pool now checks drivers.status = 'approved' before
+ *   allowing the driver to join the pool. Unapproved drivers can no longer see
+ *   new_order_available events.
+ */
+
 const jwt  = require('jsonwebtoken');
 const { getRequired } = require('../config/env');
 const pool = require('../config/database');
@@ -13,7 +26,6 @@ function createSocketRateLimiter(maxEvents, windowMs) {
   // Map<socketId, { count, resetAt }>
   const counters = new Map();
 
-  // Clean up stale entries every windowMs to avoid unbounded memory growth
   setInterval(() => {
     const now = Date.now();
     for (const [id, state] of counters.entries()) {
@@ -22,7 +34,7 @@ function createSocketRateLimiter(maxEvents, windowMs) {
   }, windowMs);
 
   return function isAllowed(socketId) {
-    const now = Date.now();
+    const now   = Date.now();
     const state = counters.get(socketId);
 
     if (!state || now >= state.resetAt) {
@@ -30,10 +42,7 @@ function createSocketRateLimiter(maxEvents, windowMs) {
       return true;
     }
 
-    if (state.count >= maxEvents) {
-      return false;
-    }
-
+    if (state.count >= maxEvents) return false;
     state.count += 1;
     return true;
   };
@@ -92,6 +101,30 @@ module.exports = function setupSocket(io) {
   io.on('connection', (socket) => {
     socket.join(`${socket.userRole}:${socket.userId}`);
 
+    // HIGH-9 FIX: Periodically re-verify the JWT so a token that has expired
+    // since connection time is detected and the socket is cleanly terminated.
+    // Runs every 14 minutes — just before the 15-minute access token expiry.
+    const tokenCheckInterval = setInterval(async () => {
+      try {
+        const token = socket.handshake.auth?.token;
+        if (!token) {
+          socket.emit('auth_expired');
+          socket.disconnect(true);
+          clearInterval(tokenCheckInterval);
+          return;
+        }
+        jwt.verify(token, jwtSecret);
+      } catch {
+        socket.emit('auth_expired');
+        socket.disconnect(true);
+        clearInterval(tokenCheckInterval);
+      }
+    }, 14 * 60 * 1000);
+
+    socket.on('disconnect', () => {
+      clearInterval(tokenCheckInterval);
+    });
+
     // ── USER: Track an order ────────────────────────────────────────────────
     socket.on('track_order', async ({ orderId }) => {
       if (!generalRateAllowed(socket.id)) return;
@@ -109,15 +142,10 @@ module.exports = function setupSocket(io) {
       socket.leave(`chat:${orderId}`);
     });
 
-    // ── DRIVER: Live location update ─────────────────────────────────────────
-    // RATE LIMITED: max 60 events per minute per socket (one per second).
-    // Excess events are silently dropped — the client does not need an error.
+    // ── DRIVER: Live location update ──────────────────────────────────────
     socket.on('driver_location_update', async ({ lat, lng, orderId }) => {
-      if (socket.userRole !== 'driver') return;
-
-      // Rate check — enforce before any DB work
+      if (socket.userRole !== 'driver')     return;
       if (!locationRateAllowed(socket.id)) return;
-
       if (orderId && !(await canAccessOrderRoom(orderId, socket.userId, socket.userRole))) return;
 
       const payload = { driverId: socket.userId, lat, lng, timestamp: new Date().toISOString() };
@@ -125,22 +153,37 @@ module.exports = function setupSocket(io) {
       io.to('admin').emit('driver_location', { ...payload, orderId });
     });
 
-    // ── DRIVER: Online / offline status ────────────────────────────────────
+    // ── DRIVER: Online / offline status ──────────────────────────────────
     socket.on('driver_status', ({ online }) => {
-      if (socket.userRole !== 'driver') return;
+      if (socket.userRole !== 'driver')    return;
       if (!generalRateAllowed(socket.id)) return;
       io.to('admin').emit('driver_status_change', {
-        driverId: socket.userId,
+        driverId:  socket.userId,
         online,
         timestamp: new Date().toISOString(),
       });
     });
 
-    // ── DRIVER: Join / leave the order pool ────────────────────────────────
-    socket.on('join_driver_pool', () => {
-      if (socket.userRole === 'driver') {
+    // ── DRIVER: Join / leave the order pool ──────────────────────────────
+    // HIGH-10 FIX: Only approved drivers may join the pool.
+    socket.on('join_driver_pool', async () => {
+      if (socket.userRole !== 'driver') return;
+
+      try {
+        const { rows } = await pool.query(
+          `SELECT 1 FROM drivers WHERE id = $1 AND status = 'approved'`,
+          [socket.userId],
+        );
+        if (!rows.length) {
+          socket.emit('join_driver_pool_denied', {
+            reason: 'Your account is not yet approved. Please wait for admin review.',
+          });
+          return;
+        }
         socket.join('driver_pool');
         socket.join(`driver:${socket.userId}`);
+      } catch (err) {
+        console.error('[Socket] join_driver_pool DB error:', err.message);
       }
     });
 
@@ -148,7 +191,7 @@ module.exports = function setupSocket(io) {
       socket.leave('driver_pool');
     });
 
-    // ── DRIVER: Join order chat room ───────────────────────────────────────
+    // ── DRIVER: Join order chat room ──────────────────────────────────────
     socket.on('join_order_chat', async ({ orderId }) => {
       if (!generalRateAllowed(socket.id)) return;
       if (
@@ -164,19 +207,15 @@ module.exports = function setupSocket(io) {
       socket.leave(`chat:${orderId}`);
     });
 
-    // ── FLEET alert acknowledgement ────────────────────────────────────────
+    // ── FLEET alert acknowledgement ───────────────────────────────────────
     socket.on('ack_fleet_alert', ({ alertId }) => {
-      if (socket.userRole !== 'admin') return;
+      if (socket.userRole !== 'admin')     return;
       if (!generalRateAllowed(socket.id)) return;
       io.to('admin').emit('fleet_alert_acked', {
         alertId,
-        ackedBy: socket.userId,
+        ackedBy:   socket.userId,
         timestamp: new Date().toISOString(),
       });
-    });
-
-    socket.on('disconnect', () => {
-      // Cleanup is handled by Socket.IO automatically
     });
   });
 };

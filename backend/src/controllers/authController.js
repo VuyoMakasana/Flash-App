@@ -229,7 +229,7 @@ class AuthController {
     const { token, newPassword } = req.body;
     if (!token)       return res.status(400).json({ error: 'Token required' });
     if (!newPassword) return res.status(400).json({ error: 'New password required' });
-    if (newPassword.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    if (newPassword.length < 10) return res.status(400).json({ error: 'Password must be at least 10 characters' });
 
     try {
       const result = await pool.query(

@@ -1,40 +1,50 @@
+'use strict';
 
+/**
+ * orderStateMachineService.js
+ *
+ * HIGH-12 FIX: After each status update, notifyUserOrderUpdate() is called so
+ *   users receive push notifications even when their app is backgrounded.
+ *
+ * HIGH-3 FIX: assignDriver() uses a FOR UPDATE + NOT EXISTS subquery to check
+ *   driver availability atomically, preventing double-assignment race conditions.
+ */
 
-const pool = require("../config/database");
-const DriverWallet = require("../models/DriverWallet");
+const pool        = require('../config/database');
+const DriverWallet = require('../models/DriverWallet');
 
 const ORDER_STATES = [
-  "created",
-  "payment_pending",
-  "paid",
-  "scheduled_for_morning",  // order placed outside operating hours — held until 07:00
-  "waiting_for_driver",
-  "driver_assigned",
-  "driver_arrived_store",
-  "picked_up",
-  "in_transit",
-  "delivered",
-  "completed",
-  "cancelled",
+  'created',
+  'payment_pending',
+  'paid',
+  'scheduled_for_morning',
+  'waiting_for_driver',
+  'driver_assigned',
+  'driver_arrived_store',
+  'picked_up',
+  'in_transit',
+  'delivered',
+  'completed',
+  'cancelled',
 ];
 
 const LEGACY_STATE_MAP = {
-  en_route: "driver_arrived_store",
+  en_route: 'driver_arrived_store',
 };
 
 const ALLOWED_TRANSITIONS = {
-  created: ["payment_pending", "cancelled"],
-  payment_pending: ["paid", "scheduled_for_morning", "cancelled"],
-  paid: ["waiting_for_driver", "scheduled_for_morning", "cancelled"],
-  scheduled_for_morning: ["waiting_for_driver", "cancelled"],
-  waiting_for_driver: ["driver_assigned", "cancelled"],
-  driver_assigned: ["driver_arrived_store", "cancelled"],
-  driver_arrived_store: ["picked_up", "cancelled"],
-  picked_up: ["in_transit"],
-  in_transit: ["delivered"],
-  delivered: ["completed"],
-  completed: [],
-  cancelled: [],
+  created:               ['payment_pending', 'cancelled'],
+  payment_pending:       ['paid', 'scheduled_for_morning', 'cancelled'],
+  paid:                  ['waiting_for_driver', 'scheduled_for_morning', 'cancelled'],
+  scheduled_for_morning: ['waiting_for_driver', 'cancelled'],
+  waiting_for_driver:    ['driver_assigned', 'cancelled'],
+  driver_assigned:       ['driver_arrived_store', 'cancelled'],
+  driver_arrived_store:  ['picked_up', 'cancelled'],
+  picked_up:             ['in_transit'],
+  in_transit:            ['delivered'],
+  delivered:             ['completed'],
+  completed:             [],
+  cancelled:             [],
 };
 
 function normalizeState(status) {
@@ -43,27 +53,26 @@ function normalizeState(status) {
 }
 
 function canTransition(current, next) {
-  const from = normalizeState(current);
-  const to = normalizeState(next);
+  const from    = normalizeState(current);
+  const to      = normalizeState(next);
   const allowed = ALLOWED_TRANSITIONS[from] || [];
   return allowed.includes(to);
 }
 
 function getStateRank(state) {
-  const normalized = normalizeState(state);
-  return ORDER_STATES.indexOf(normalized);
+  return ORDER_STATES.indexOf(normalizeState(state));
 }
 
 function logTransition(orderId, fromState, toState, actorRole, actorId) {
   console.log(
-    `[OrderStateMachine] orderId=${orderId} from=${fromState} to=${toState} actor=${actorRole}:${actorId || "n/a"}`,
+    `[OrderStateMachine] orderId=${orderId} from=${fromState} to=${toState} actor=${actorRole}:${actorId || 'n/a'}`,
   );
 }
 
 async function updateOrderStatus(orderId, nextState, context = {}) {
-  const io = context.io;
-  const actorId = context.actorId || null;
-  const actorRole = context.actorRole || "system";
+  const io        = context.io;
+  const actorId   = context.actorId   || null;
+  const actorRole = context.actorRole || 'system';
   const targetState = normalizeState(nextState);
 
   if (!ORDER_STATES.includes(targetState)) {
@@ -72,23 +81,21 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
 
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await client.query('BEGIN');
 
     const orderResult = await client.query(
       `SELECT * FROM orders WHERE id = $1 FOR UPDATE`,
       [orderId],
     );
 
-    if (!orderResult.rows.length) {
-      throw new Error("Order not found");
-    }
+    if (!orderResult.rows.length) throw new Error('Order not found');
 
-    const order = orderResult.rows[0];
+    const order        = orderResult.rows[0];
     const currentState = normalizeState(order.status);
 
     if (currentState === targetState) {
       logTransition(orderId, currentState, targetState, actorRole, actorId);
-      await client.query("COMMIT");
+      await client.query('COMMIT');
       return order;
     }
 
@@ -98,40 +105,40 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
 
     logTransition(orderId, currentState, targetState, actorRole, actorId);
 
-    if (actorRole === "driver") {
+    if (actorRole === 'driver') {
       if (!order.driver_id || String(order.driver_id) !== String(actorId)) {
-        throw new Error("Driver cannot change this order");
+        throw new Error('Driver cannot change this order');
       }
-      if (targetState === "cancelled" && getStateRank(currentState) >= getStateRank("picked_up")) {
-        throw new Error("Cannot cancel after pickup without admin override");
+      if (targetState === 'cancelled' && getStateRank(currentState) >= getStateRank('picked_up')) {
+        throw new Error('Cannot cancel after pickup without admin override');
       }
     }
 
     const updates = { status: targetState };
 
-    if (targetState === "driver_assigned") {
-      updates.delivery_payment_status = "assigned";
+    if (targetState === 'driver_assigned') {
+      updates.delivery_payment_status = 'assigned';
       const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
       if (order.driver_id && payout > 0) {
-        await DriverWallet.addPending(client, order.driver_id, payout, order.id, "driver_assigned_pending");
+        await DriverWallet.addPending(client, order.driver_id, payout, order.id, 'driver_assigned_pending');
       }
     }
 
-    if (["picked_up", "in_transit", "delivered"].includes(targetState) && order.payment_method !== "cash") {
-      updates.delivery_payment_status = "held";
+    if (['picked_up', 'in_transit', 'delivered'].includes(targetState) && order.payment_method !== 'cash') {
+      updates.delivery_payment_status = 'held';
     }
 
-    if (targetState === "completed") {
-      if (order.payment_method !== "cash") {
+    if (targetState === 'completed') {
+      if (order.payment_method !== 'cash') {
         const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
         if (order.driver_id && payout > 0 && order.driver_paid !== true) {
-          await DriverWallet.releasePending(client, order.driver_id, payout, order.id, "delivery_completed_release");
+          await DriverWallet.releasePending(client, order.driver_id, payout, order.id, 'delivery_completed_release');
           updates.driver_paid = true;
         }
-        updates.delivery_payment_status = "released";
+        updates.delivery_payment_status = 'released';
       }
-      if (order.payment_method === "cash" && order.payment_status !== "paid") {
-        throw new Error("Cash orders require payment confirmation before completion");
+      if (order.payment_method === 'cash' && order.payment_status !== 'paid') {
+        throw new Error('Cash orders require payment confirmation before completion');
       }
     }
 
@@ -151,57 +158,86 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
       ],
     );
 
-    await client.query("COMMIT");
+    await client.query('COMMIT');
 
     const updatedOrder = updatedResult.rows[0];
+
+    // Socket.IO real-time update
     if (io) {
-      io.to(`order:${orderId}`).emit("order_update", {
+      io.to(`order:${orderId}`).emit('order_update', {
         orderId,
-        status: updatedOrder.status,
+        status:    updatedOrder.status,
         timestamp: new Date().toISOString(),
       });
       if (updatedOrder.user_id) {
-        io.to(`user:${updatedOrder.user_id}`).emit("order_update", {
+        io.to(`user:${updatedOrder.user_id}`).emit('order_update', {
           orderId,
           status: updatedOrder.status,
         });
       }
     }
 
+    // HIGH-12 FIX: Push notification for backgrounded user app
+    if (updatedOrder.user_id) {
+      const { notifyUserOrderUpdate } = require('./notificationService');
+      await notifyUserOrderUpdate(updatedOrder.user_id, orderId, targetState).catch(() => {});
+    }
+
     return updatedOrder;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
   }
 }
 
+/**
+ * Atomically assign a driver to an order.
+ *
+ * HIGH-3 FIX: Uses SELECT ... FOR UPDATE with a NOT EXISTS subquery inside
+ *   the same transaction that updates the order, preventing double-assignment
+ *   when two requests race.
+ */
 async function assignDriver(orderId, driverId, context = {}) {
   const client = await pool.connect();
   try {
-    await client.query("BEGIN");
+    await client.query('BEGIN');
+
+    // HIGH-3: Lock driver row AND verify they are still free — all in one
+    // atomic operation. If another transaction already assigned this driver,
+    // the lock means we'll see the updated is_online / active order state.
+    const driverCheck = await client.query(
+      `SELECT id FROM drivers
+       WHERE id = $1
+         AND is_online = true
+         AND status = 'approved'
+         AND NOT EXISTS (
+           SELECT 1 FROM orders o
+           WHERE o.driver_id = $1
+             AND o.status IN ('driver_assigned','driver_arrived_store','picked_up','in_transit')
+         )
+       FOR UPDATE`,
+      [driverId],
+    );
+    if (!driverCheck.rows.length) {
+      throw new Error('Driver no longer available');
+    }
 
     const orderResult = await client.query(
       `SELECT * FROM orders WHERE id = $1 FOR UPDATE`,
       [orderId],
     );
-    if (!orderResult.rows.length) throw new Error("Order not found");
+    if (!orderResult.rows.length) throw new Error('Order not found');
     const order = orderResult.rows[0];
 
     const currentState = normalizeState(order.status);
-    if (currentState !== "waiting_for_driver") {
-      throw new Error("Order is not ready for assignment");
+    if (currentState !== 'waiting_for_driver') {
+      throw new Error('Order is not ready for assignment');
     }
+    if (order.driver_id) throw new Error('Order already assigned');
 
-    if (order.driver_id) throw new Error("Order already assigned");
-
-    // ── TRUSTED DRIVER EXCLUSIVITY CHECK ───────────────────────────────────
-    // Only enforced when the caller explicitly asks for it (the driver
-    // self-accept path). The explicit-selection path (orderController.
-    // selectDriver) intentionally never sets this flag, because in that flow
-    // the assignment IS the act of choosing — there's nothing to protect
-    // against.
+    // Trusted driver exclusivity check
     if (context.enforceTrustedDriverWindow) {
       const hasUnexpiredPreference =
         order.preferred_driver_id &&
@@ -210,13 +246,12 @@ async function assignDriver(orderId, driverId, context = {}) {
 
       if (hasUnexpiredPreference && String(order.preferred_driver_id) !== String(driverId)) {
         throw new Error(
-          "This order is currently reserved for the customer's trusted driver. Please try again shortly."
+          "This order is currently reserved for the customer's trusted driver. Please try again shortly.",
         );
       }
     }
-    // ── END TRUSTED DRIVER EXCLUSIVITY CHECK ───────────────────────────────
 
-    logTransition(orderId, currentState, "driver_assigned", "driver", driverId);
+    logTransition(orderId, currentState, 'driver_assigned', 'driver', driverId);
 
     const updatedResult = await client.query(
       `UPDATE orders
@@ -230,56 +265,49 @@ async function assignDriver(orderId, driverId, context = {}) {
     );
 
     const updated = updatedResult.rows[0];
-    const payout = parseFloat(updated.driver_payout || updated.delivery_fee || 0);
+    const payout  = parseFloat(updated.driver_payout || updated.delivery_fee || 0);
     if (payout > 0) {
-      await DriverWallet.addPending(client, driverId, payout, orderId, "driver_assigned_pending");
+      await DriverWallet.addPending(client, driverId, payout, orderId, 'driver_assigned_pending');
     }
 
-    await client.query("COMMIT");
+    await client.query('COMMIT');
 
     if (context.io) {
-      context.io.to(`driver:${driverId}`).emit("new_order_available", {
+      context.io.to(`driver:${driverId}`).emit('new_order_available', {
         orderId,
         assigned: true,
-        payout: payout.toFixed(2),
+        payout:   payout.toFixed(2),
       });
-      context.io.to(`user:${updated.user_id}`).emit("order_update", {
+      context.io.to(`user:${updated.user_id}`).emit('order_update', {
         orderId,
-        status: "driver_assigned",
+        status: 'driver_assigned',
       });
     }
 
-    // FIX 6: Send push notification — ensures driver receives order alert even when app is backgrounded
-    const { sendDriverPushNotification } = require('./pushNotificationService');
-    const driverPushRow = await pool.query('SELECT push_token FROM drivers WHERE id = $1', [driverId]);
-    if (driverPushRow.rows[0]?.push_token) {
-      await sendDriverPushNotification(
-        driverPushRow.rows[0].push_token,
-        'New Flash Order!',
-        'A delivery is waiting for you. Open the app to accept.',
-        { orderId }
-      );
+    // Push notification for backgrounded user (HIGH-12)
+    if (updated.user_id) {
+      const { notifyUserOrderUpdate } = require('./notificationService');
+      await notifyUserOrderUpdate(updated.user_id, orderId, 'driver_assigned').catch(() => {});
     }
 
     return updated;
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();
   }
 }
 
-async function requeueOrderForDriverSearch(orderId, context = {}) {
-  const io = context.io;
-  const actorId = context.actorId || null;
-  const actorRole = context.actorRole || "system";
-  const externalClient = context.client || null;
-  const client = externalClient || await pool.connect();
+async function requeueOrderForDriverSearch(orderId, context = {}, externalClient = null) {
+  const client  = externalClient || await pool.connect();
+  const io      = context.io;
+  const actorId   = context.actorId   || null;
+  const actorRole = context.actorRole || 'system';
 
   try {
     if (!externalClient) {
-      await client.query("BEGIN");
+      await client.query('BEGIN');
     }
 
     const orderResult = await client.query(
@@ -287,22 +315,20 @@ async function requeueOrderForDriverSearch(orderId, context = {}) {
       [orderId],
     );
 
-    if (!orderResult.rows.length) {
-      throw new Error("Order not found");
-    }
+    if (!orderResult.rows.length) throw new Error('Order not found');
 
-    const order = orderResult.rows[0];
+    const order        = orderResult.rows[0];
     const currentState = normalizeState(order.status);
 
-    if (!["driver_assigned", "driver_arrived_store"].includes(currentState)) {
+    if (!['driver_assigned', 'driver_arrived_store'].includes(currentState)) {
       throw new Error(`Order cannot be re-queued from ${currentState}`);
     }
 
-    if (actorRole === "driver" && String(order.driver_id) !== String(actorId)) {
-      throw new Error("Driver cannot re-queue this order");
+    if (actorRole === 'driver' && String(order.driver_id) !== String(actorId)) {
+      throw new Error('Driver cannot re-queue this order');
     }
 
-    logTransition(orderId, currentState, "waiting_for_driver", actorRole, actorId);
+    logTransition(orderId, currentState, 'waiting_for_driver', actorRole, actorId);
 
     const updatedResult = await client.query(
       `UPDATE orders
@@ -316,18 +342,18 @@ async function requeueOrderForDriverSearch(orderId, context = {}) {
     );
 
     if (!externalClient) {
-      await client.query("COMMIT");
+      await client.query('COMMIT');
     }
 
     const updatedOrder = updatedResult.rows[0];
     if (io) {
-      io.to(`order:${orderId}`).emit("order_update", {
+      io.to(`order:${orderId}`).emit('order_update', {
         orderId,
-        status: updatedOrder.status,
+        status:    updatedOrder.status,
         timestamp: new Date().toISOString(),
       });
       if (updatedOrder.user_id) {
-        io.to(`user:${updatedOrder.user_id}`).emit("order_update", {
+        io.to(`user:${updatedOrder.user_id}`).emit('order_update', {
           orderId,
           status: updatedOrder.status,
         });
@@ -337,7 +363,7 @@ async function requeueOrderForDriverSearch(orderId, context = {}) {
     return updatedOrder;
   } catch (err) {
     if (!externalClient) {
-      await client.query("ROLLBACK");
+      await client.query('ROLLBACK');
     }
     throw err;
   } finally {

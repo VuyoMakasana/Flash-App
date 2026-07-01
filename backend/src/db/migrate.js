@@ -700,6 +700,17 @@ async function migrate() {
     throw err;
   } finally {
     client8.release();
+  }
+
+  // ── v9 ─────────────────────────────────────────────────────────────────────
+  const client9 = await pool.connect();
+  try {
+    await migrateV9(client9);
+  } catch (err) {
+    console.error('Migration v9 failed:', err.message);
+    throw err;
+  } finally {
+    client9.release();
     await pool.end();
   }
 
@@ -711,4 +722,54 @@ migrate().catch((err) => {
   process.exit(1);
 });
 
-module.exports = { migrateV7, migrateV8 };
+// ─── v9: order_stops table (multi-mall / multi-shop support) ─────────────────
+async function migrateV9(client) {
+  await client.query('BEGIN');
+  try {
+    // order_stops tracks each pickup location in a multi-store order.
+    // Each row = one pickup stop for the driver.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS order_stops (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id        UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        stop_number     INTEGER NOT NULL,           -- 1 = first pickup, 2 = second, etc.
+        store_name      VARCHAR(255),
+        pickup_address  TEXT NOT NULL,
+        pickup_lat      DOUBLE PRECISION,
+        pickup_lng      DOUBLE PRECISION,
+        items_json      JSONB DEFAULT '[]',         -- line items at this stop
+        status          VARCHAR(50) DEFAULT 'pending',  -- pending | arrived | picked_up
+        arrived_at      TIMESTAMPTZ,
+        picked_up_at    TIMESTAMPTZ,
+        notes           TEXT,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (order_id, stop_number)
+      )
+    `);
+
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_order_stops_order_id ON order_stops(order_id)`
+    );
+
+    // Add pickup_lat/lng to orders table for single-stop distance pricing
+    await client.query(`
+      ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS pickup_lat    DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS pickup_lng    DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS dropoff_lat   DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS dropoff_lng   DOUBLE PRECISION,
+        ADD COLUMN IF NOT EXISTS extra_stops   INTEGER DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS has_heavy_items BOOLEAN DEFAULT false
+    `);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v9 completed: order_stops table + lat/lng columns');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v9 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9 };
