@@ -9,6 +9,18 @@
  *   - AsyncStorage remains for non-sensitive data (cart, preferences)
  *
  *   SecureStore has a value size limit of ~2KB. JWTs are well under this.
+ *
+ * D8 FIX: every path here was missing the /api prefix (every backend route
+ *   is mounted under /api/... in backend/src/server.js), several paths did
+ *   not match the real route shape at all (e.g. GET /orders instead of
+ *   GET /api/orders/my-orders, GET /products instead of GET /api/inventory),
+ *   and register()/appleSignIn() took multiple positional arguments from
+ *   their only callers (FlashContext.js) but only ever bound the first one
+ *   to a single `payload` parameter — every sign-up and Apple sign-in sent
+ *   a bare JSON string as the request body instead of an object. Rewritten
+ *   against backend/src/routes/*.js as the source of truth. Two methods
+ *   (getStores, getByStore) called a /stores endpoint that has never
+ *   existed on the backend and nothing in the app called them — removed.
  */
 
 import * as SecureStore from 'expo-secure-store';
@@ -39,14 +51,14 @@ async function request(path, options = {}) {
     ...options.headers,
   };
 
-  const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${BASE_URL}/api${path}`, { ...options, headers });
 
   // Token expired — try to refresh once
   if (res.status === 401) {
     const refreshToken = await getRefreshToken();
     if (refreshToken) {
       try {
-        const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
+        const refreshRes = await fetch(`${BASE_URL}/api/auth/refresh`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ refreshToken }),
@@ -57,7 +69,7 @@ async function request(path, options = {}) {
           await saveTokens(data.token, data.refreshToken);
 
           // Retry the original request with the new token
-          const retryRes = await fetch(`${BASE_URL}${path}`, {
+          const retryRes = await fetch(`${BASE_URL}/api${path}`, {
             ...options,
             headers: {
               ...headers,
@@ -93,7 +105,7 @@ async function request(path, options = {}) {
 // ── Auth ──────────────────────────────────────────────────────────────────
 const auth = {
   login: async (email, password) => {
-    const data = await request('/auth/login', {
+    const data = await request('/auth/user/login', {
       method: 'POST',
       body:   JSON.stringify({ email, password }),
     });
@@ -101,10 +113,10 @@ const auth = {
     return data;
   },
 
-  register: async (payload) => {
-    const data = await request('/auth/register', {
+  register: async (name, email, password, phone) => {
+    const data = await request('/auth/user/register', {
       method: 'POST',
-      body:   JSON.stringify(payload),
+      body:   JSON.stringify({ name, email, password, phone }),
     });
     await saveTokens(data.token, data.refreshToken);
     return data;
@@ -124,34 +136,46 @@ const auth = {
     }
   },
 
-  googleSignIn: (idToken) =>
-    request('/auth/google/user', { method: 'POST', body: JSON.stringify({ idToken }) }),
+  googleSignIn: async (idToken) => {
+    const data = await request('/auth/user/google', { method: 'POST', body: JSON.stringify({ idToken }) });
+    await saveTokens(data.token, data.refreshToken);
+    return data;
+  },
 
-  appleSignIn: (payload) =>
-    request('/auth/apple/user', { method: 'POST', body: JSON.stringify(payload) }),
+  appleSignIn: async (identityToken, fullName, email) => {
+    const data = await request('/auth/user/apple', {
+      method: 'POST',
+      body:   JSON.stringify({ identityToken, fullName, email }),
+    });
+    await saveTokens(data.token, data.refreshToken);
+    return data;
+  },
+
+  acceptTerms: () => request('/auth/user/accept-terms', { method: 'POST' }),
 
   forgotPassword: (email) =>
-    request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
+    request('/auth/user/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
 
   resetPassword: (token, newPassword) =>
-    request('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword }) }),
+    request('/auth/user/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword }) }),
 };
 
 // ── Products / Stores ─────────────────────────────────────────────────────
+// Mounted as /api/inventory on the backend — "products" is this app's own
+// naming for it, not the real route segment.
 const products = {
-  getAll:       (params = '') => request(`/products${params}`),
-  getById:      (id)          => request(`/products/${id}`),
-  getStores:    ()            => request('/stores'),
-  getByStore:   (storeId)     => request(`/products?storeId=${storeId}`),
+  getAll:  (params = '') => request(`/inventory${params}`),
+  getById: (id)          => request(`/inventory/${id}`),
 };
 
 // ── Orders ────────────────────────────────────────────────────────────────
 const orders = {
-  create:    (body) => request('/orders',          { method: 'POST', body: JSON.stringify(body) }),
-  getAll:    ()     => request('/orders'),
-  getById:   (id)   => request(`/orders/${id}`),
-  cancel:    (id)   => request(`/orders/${id}/cancel`, { method: 'POST' }),
-  return:    (id, body) => request(`/orders/${id}/return`, { method: 'POST', body: JSON.stringify(body) }),
+  create:      (body)         => request('/orders', { method: 'POST', body: JSON.stringify(body) }),
+  getAll:      ()              => request('/orders/my-orders'),
+  getOrder:    (id)            => request(`/orders/${id}`),
+  cancel:      (id)             => request(`/orders/${id}/cancel`, { method: 'POST' }),
+  return:      (id, body)       => request(`/orders/${id}/return`, { method: 'POST', body: JSON.stringify(body) }),
+  selectDriver:(id, driverId)   => request(`/orders/${id}/select-driver`, { method: 'POST', body: JSON.stringify({ driverId }) }),
 };
 
 // ── Payments ──────────────────────────────────────────────────────────────
@@ -166,20 +190,32 @@ const payments = {
   chargeSavedCard:(orderId, cardId)=> request('/payments/charge-saved-card', { method: 'POST', body: JSON.stringify({ orderId, cardId }) }),
 };
 
+// ── Nearby drivers (for "Pick a Driver" checkout mode) ──────────────────────
+const drivers = {
+  getNearby: (lat, lng) => request(`/drivers/nearby${lat && lng ? `?lat=${lat}&lng=${lng}` : ''}`),
+};
+
 // ── User profile ──────────────────────────────────────────────────────────
 const user = {
-  getProfile:    ()      => request('/users/profile'),
-  updateProfile: (body)  => request('/users/profile', { method: 'PATCH', body: JSON.stringify(body) }),
-  uploadPhoto:   (formData) => request('/users/profile/photo', {
-    method:  'POST',
-    headers: {}, // Let fetch set Content-Type for multipart
-    body:    formData,
+  getProfile:      ()      => request('/users/me'),
+  updateProfile:   (body)  => request('/users/me', { method: 'PUT', body: JSON.stringify(body) }),
+  registerPushToken: (pushToken) => request('/users/push-token', {
+    method: 'POST',
+    body:   JSON.stringify({ push_token: pushToken }),
   }),
-  getAddresses:    ()     => request('/users/addresses'),
-  addAddress:      (body) => request('/users/addresses', { method: 'POST', body: JSON.stringify(body) }),
-  updateAddress:   (id, body) => request(`/users/addresses/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-  deleteAddress:   (id)  => request(`/users/addresses/${id}`, { method: 'DELETE' }),
-  deleteAccount:   ()    => request('/users/account', { method: 'DELETE' }),
+
+  // NOTE: none of the four methods below have a real backend route today —
+  // there is no addressRoutes.js and no address table wired into the API,
+  // and there is no account-deletion endpoint anywhere in the backend (only
+  // the path prefix was fixed here for consistency with the rest of this
+  // file). AddressScreen and the "Delete Account" button will keep failing
+  // until that backend work is done — that's a missing feature, not a
+  // client routing bug, and out of scope for this fix pass.
+  getAddresses:    ()          => request('/users/addresses'),
+  addAddress:      (body)      => request('/users/addresses', { method: 'POST', body: JSON.stringify(body) }),
+  updateAddress:   (id, body)  => request(`/users/addresses/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteAddress:   (id)        => request(`/users/addresses/${id}`, { method: 'DELETE' }),
+  deleteAccount:   ()          => request('/users/account', { method: 'DELETE' }),
 };
 
 // ── Trusted Drivers ───────────────────────────────────────────────────────
@@ -192,16 +228,39 @@ const trustedDrivers = {
 };
 
 // ── Notifications ─────────────────────────────────────────────────────────
+// NOTE: no generic notifications list/read-state route exists on the
+// backend either — same caveat as the user.* methods above.
 const notifications = {
-  getAll:   () => request('/notifications'),
-  markRead: (id) => request(`/notifications/${id}/read`, { method: 'PATCH' }),
+  getAll:      () => request('/notifications'),
+  markRead:    (id) => request(`/notifications/${id}/read`, { method: 'PATCH' }),
   markAllRead: () => request('/notifications/read-all', { method: 'POST' }),
 };
 
 // ── Feed ──────────────────────────────────────────────────────────────────
 const feed = {
-  getPosts: ()     => request('/feed'),
-  getById:  (id)   => request(`/feed/${id}`),
+  getPosts:    (page = 1)          => request(`/feed?page=${page}`),
+  likePost:    (postId)            => request(`/feed/${postId}/like`, { method: 'POST' }),
+  getComments: (postId)            => request(`/feed/${postId}/comments`),
+  addComment:  (postId, content)   => request(`/feed/${postId}/comments`, { method: 'POST', body: JSON.stringify({ content }) }),
+  deletePost:  (postId)            => request(`/feed/${postId}`, { method: 'DELETE' }),
+};
+
+// ── Sizing / AI size match ─────────────────────────────────────────────────
+const sizing = {
+  getGuide:    ()       => request('/sizing/guide'),
+  getProfile:  ()       => request('/sizing/profile'),
+  saveProfile: (body)   => request('/sizing/profile', { method: 'POST', body: JSON.stringify(body) }),
+};
+
+// ── Returns / Store credit ──────────────────────────────────────────────────
+const returns = {
+  getCredits: () => request('/returns/credits'),
+};
+
+// ── Messages (chat with driver) ─────────────────────────────────────────────
+const messages = {
+  getMessages: (orderId)          => request(`/messages/${orderId}`),
+  sendMessage: (orderId, content)  => request(`/messages/${orderId}`, { method: 'POST', body: JSON.stringify({ content }) }),
 };
 
 export { BASE_URL, getToken, saveTokens, clearTokens };
@@ -211,8 +270,12 @@ export default {
   products,
   orders,
   payments,
+  drivers,
   user,
   trustedDrivers,
   notifications,
   feed,
+  sizing,
+  returns,
+  messages,
 };

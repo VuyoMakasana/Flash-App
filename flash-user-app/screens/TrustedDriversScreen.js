@@ -13,7 +13,7 @@ export default function TrustedDriversScreen({ navigation }) {
 
   const load = useCallback(async () => {
     try {
-      const data = await api.trustedDrivers.getMyTrusted();
+      const data = await api.trustedDrivers.getAll();
       setTrusted(data.trustedDrivers || []);
     } catch (e) {
       Alert.alert('Error', e.message);

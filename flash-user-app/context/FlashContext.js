@@ -234,7 +234,7 @@ export const FlashProvider = ({ children }) => {
         const { status } = await Notifications.requestPermissionsAsync();
         if (status !== 'granted') return;
         const tokenData = await Notifications.getExpoPushTokenAsync();
-        if (tokenData?.data) await api.user.registerPushToken?.(tokenData.data).catch(() => {});
+        if (tokenData?.data) await api.user.registerPushToken(tokenData.data).catch(() => {});
       } catch (_e) {}
     })();
   }, [token, hydrated]);
