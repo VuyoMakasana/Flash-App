@@ -1,0 +1,93 @@
+// flash-driver-app/app.config.js
+//
+// D9 FIX: replaces the static app.json. The iOS key was hardcoded in plain
+// text (and already rotated once in git history — the old key remains
+// permanently recoverable there regardless of this fix); the Android key
+// was already written as the literal string "$GOOGLE_MAPS_API_KEY", which
+// looked like an env-var reference but a static app.json cannot read
+// environment variables at all — that string was being sent to Google's
+// native Maps SDK as the API key itself, which would never have worked.
+//
+// GOOGLE_MAPS_API_KEY must be provided at build time — for EAS builds, via
+// `eas secret:create --name GOOGLE_MAPS_API_KEY --value <key> --type string`
+// (do this after rotating the key in Google Cloud Console and restricting
+// it to this app's bundle ID / package name / SHA-1 fingerprint). For a
+// local `expo prebuild`, set it in your shell environment first.
+
+module.exports = () => ({
+  expo: {
+    name: 'Flash Driver',
+    slug: 'flash-driver-app',
+    version: '1.0.0',
+    orientation: 'portrait',
+    icon: './assets/flash-logo.png',
+    userInterfaceStyle: 'light',
+    splash: {
+      image: './assets/flash-logo.png',
+      resizeMode: 'contain',
+      backgroundColor: '#0a0a0a',
+    },
+    ios: {
+      supportsTablet: false,
+      bundleIdentifier: 'co.za.flash.driverapp',
+      usesAppleSignIn: true,
+      config: {
+        googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
+      },
+      infoPlist: {
+        NSCameraUsageDescription: 'Flash Driver needs camera access to photograph documents for account verification.',
+        NSPhotoLibraryUsageDescription: 'Flash Driver needs photo library access to upload profile and document photos.',
+        NSLocationWhenInUseUsageDescription: 'Flash Driver uses your location so customers can track their deliveries.',
+        NSLocationAlwaysAndWhenInUseUsageDescription: 'Flash Driver uses your location in the background to update your delivery position while on a job.',
+        UIBackgroundModes: ['location', 'fetch'],
+        ITSAppUsesNonExemptEncryption: false,
+      },
+    },
+    android: {
+      package: 'co.za.flash.driverapp',
+      adaptiveIcon: {
+        foregroundImage: './assets/flash-logo.png',
+        backgroundColor: '#0a0a0a',
+      },
+      permissions: [
+        'ACCESS_FINE_LOCATION',
+        'ACCESS_COARSE_LOCATION',
+        'ACCESS_BACKGROUND_LOCATION',
+        'RECEIVE_BOOT_COMPLETED',
+        'VIBRATE',
+        'android.permission.ACCESS_COARSE_LOCATION',
+        'android.permission.ACCESS_FINE_LOCATION',
+      ],
+      config: {
+        googleMaps: {
+          apiKey: process.env.GOOGLE_MAPS_API_KEY,
+        },
+      },
+    },
+    plugins: [
+      'expo-location',
+      'expo-notifications',
+      'expo-document-picker',
+      'expo-apple-authentication',
+      'expo-task-manager',
+      'expo-secure-store',
+      '@react-native-google-signin/google-signin',
+      [
+        'expo-build-properties',
+        {
+          android: {
+            compileSdkVersion: 35,
+            targetSdkVersion: 35,
+          },
+          ios: {},
+        },
+      ],
+    ],
+    extra: {
+      privacyPolicyUrl: 'https://flash.co.za/privacy',
+      eas: {
+        projectId: '461d43ca-086d-4104-9a07-81897f2d7962',
+      },
+    },
+  },
+});

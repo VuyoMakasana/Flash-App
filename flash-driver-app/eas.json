@@ -21,8 +21,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://flash-app-hplc.onrender.com",
-        "GOOGLE_MAPS_API_KEY": "AIzaSyBx_Y-spzI7JK5Jx1NHG9ctjQFAZckHkmU"
+        "EXPO_PUBLIC_API_BASE_URL": "https://flash-app-hplc.onrender.com"
       }
     },
     "production": {
@@ -32,7 +31,6 @@
       },
       "env": {
         "EXPO_PUBLIC_API_BASE_URL": "https://flash-app-hplc.onrender.com",
-        "GOOGLE_MAPS_API_KEY": "AIzaSyBx_Y-spzI7JK5Jx1NHG9ctjQFAZckHkmU",
         "PAYSTACK_PUBLIC_KEY": "pk_test_9db77a6ebc076fa07d4b3b434bb403ad0851aea9"
       }
     }

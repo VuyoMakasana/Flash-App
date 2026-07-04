@@ -1,0 +1,79 @@
+// flash-user-app/app.config.js
+//
+// D9 FIX: replaces the static app.json, which had the Google Maps API key
+// hardcoded in plain text (and already rotated once in git history — the
+// old key remains permanently recoverable there regardless of this fix).
+// A static app.json cannot read environment variables at all, so there was
+// no way to keep the key out of source control without this conversion.
+//
+// GOOGLE_MAPS_API_KEY must be provided at build time — for EAS builds, via
+// `eas secret:create --name GOOGLE_MAPS_API_KEY --value <key> --type string`
+// (do this after rotating the key in Google Cloud Console and restricting
+// it to this app's bundle ID / package name / SHA-1 fingerprint). For a
+// local `expo prebuild`, set it in your shell environment first.
+
+module.exports = () => ({
+  expo: {
+    name: 'Flash',
+    slug: 'flash-user-app',
+    version: '1.0.0',
+    orientation: 'portrait',
+    icon: './assets/icon.png',
+    userInterfaceStyle: 'light',
+    ios: {
+      supportsTablet: false,
+      bundleIdentifier: 'co.za.flash.userapp',
+      usesAppleSignIn: true,
+      config: {
+        googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
+      },
+      infoPlist: {
+        NSCameraUsageDescription: 'Flash needs camera access to take photos of your documents.',
+        NSPhotoLibraryUsageDescription: 'Flash needs access to your photo library so you can upload a profile photo.',
+        NSLocationWhenInUseUsageDescription: 'Flash uses your location to find nearby stores and track your delivery.',
+        NSLocationAlwaysUsageDescription: 'Flash uses your location to track your delivery in real-time.',
+        ITSAppUsesNonExemptEncryption: false,
+      },
+    },
+    android: {
+      package: 'co.za.flash.userapp',
+      adaptiveIcon: {
+        foregroundImage: './assets/icon.png',
+        backgroundColor: '#0a0a0a',
+      },
+      permissions: [
+        'ACCESS_FINE_LOCATION',
+        'ACCESS_COARSE_LOCATION',
+        'RECEIVE_BOOT_COMPLETED',
+        'VIBRATE',
+      ],
+      config: {
+        googleMaps: {
+          apiKey: process.env.GOOGLE_MAPS_API_KEY,
+        },
+      },
+    },
+    plugins: [
+      'expo-location',
+      'expo-notifications',
+      'expo-apple-authentication',
+      'expo-secure-store',
+      '@react-native-google-signin/google-signin',
+      [
+        'expo-build-properties',
+        {
+          android: {
+            compileSdkVersion: 35,
+            targetSdkVersion: 35,
+          },
+        },
+      ],
+      'expo-font',
+    ],
+    extra: {
+      eas: {
+        projectId: '5caa686a-c2d2-491c-bc29-c2b23a12f6ce',
+      },
+    },
+  },
+});
