@@ -81,11 +81,15 @@ function openNavigation(address) {
 }
 
 export default function DriverDashboard() {
-  const { driver, token, isOnline, setOnline, logout } = useDriver();
+  // D2 FIX: activeOrder/setActiveOrder now come from DriverContext instead of
+  // local state. The background location task reads the active order id from
+  // AsyncStorage, which only the context's setActiveOrder() writes to — local
+  // state here never persisted it, so live location pings never carried an
+  // orderId and customers never saw driver movement during a delivery.
+  const { driver, token, isOnline, setOnline, logout, activeOrder, setActiveOrder } = useDriver();
   const router = useRouter();
 
   const [availableOrders, setAvailableOrders] = useState([]);
-  const [activeOrder, setActiveOrder]         = useState(null);
   const [earnings, setEarnings]               = useState({
     total: '0.00',
     orders: [],
@@ -172,7 +176,7 @@ export default function DriverDashboard() {
       }
 
       if (activeOrderRes.status === 'fulfilled') {
-        setActiveOrder(activeOrderRes.value.order || null);
+        await setActiveOrder(activeOrderRes.value.order || null);
       }
 
       await fetchAvailableOrders();
@@ -193,7 +197,7 @@ export default function DriverDashboard() {
         if (status !== 'granted') return;
         const tokenData = await Notifications.getExpoPushTokenAsync();
         if (tokenData?.data) {
-          await driverApi.driver.updateProfile?.({ push_token: tokenData.data }).catch(() => {});
+          await driverApi.driver.savePushToken(tokenData.data).catch(() => {});
         }
       } catch (_e) {}
     })();
@@ -244,7 +248,7 @@ export default function DriverDashboard() {
     }
     try {
       const data = await driverApi.orders.accept(orderId);
-      setActiveOrder(data.order);
+      await setActiveOrder(data.order);
       setAvailableOrders(prev => prev.filter(o => o.id !== orderId));
       Alert.alert('Order Accepted!', `Collect from:\n${data.order.pickup_address}`);
     } catch (e) {
@@ -259,11 +263,12 @@ export default function DriverDashboard() {
     if (!nextStatus) return;
     try {
       await driverApi.orders.updateStatus(activeOrder.id, nextStatus);
-      setActiveOrder(prev => ({ ...prev, status: nextStatus }));
       if (nextStatus === 'completed') {
-        setActiveOrder(null);
+        await setActiveOrder(null);
         await loadAll();
         Alert.alert('Delivery Complete!', 'Great work! Ready for the next one.');
+      } else {
+        await setActiveOrder({ ...activeOrder, status: nextStatus });
       }
     } catch (e) {
       Alert.alert('Error', e.message);
@@ -292,7 +297,7 @@ export default function DriverDashboard() {
     setOtpLoading(true);
     try {
       await driverApi.payments.confirmCash(activeOrder.id, otpValue.trim());
-      setActiveOrder(null);
+      await setActiveOrder(null);
       setOtpRequested(false);
       setOtpValue('');
       await loadAll();

@@ -42,7 +42,7 @@ const registerPushToken = async () => {
 
     const tokenData = await Notifications.getExpoPushTokenAsync();
     const pushToken = tokenData.data;
-    await driverApi.driver.updateProfile?.({ push_token: pushToken }).catch(() => {});
+    await driverApi.driver.savePushToken(pushToken).catch(() => {});
   } catch (e) {
     console.warn('Push token registration failed', e);
   }
