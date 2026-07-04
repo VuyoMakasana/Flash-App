@@ -69,12 +69,7 @@ class Driver extends BaseModel {
       "vehicle_registration",
     ];
 
-    const filename = `${driverId}-${documentType}-${Date.now()}`;
-    const fileUrl = await s3Service.uploadFile(
-      file.buffer,
-      filename,
-      file.mimetype,
-    );
+    const uploadResult = await s3Service.uploadFile(file, "flash-documents");
 
     const result = await this.query(
       `INSERT INTO driver_documents (driver_id, document_type, file_url, file_name)
@@ -82,7 +77,7 @@ class Driver extends BaseModel {
        ON CONFLICT (driver_id, document_type) DO UPDATE
        SET file_url=$3, file_name=$4, verified=false, uploaded_at=NOW()
        RETURNING *`,
-      [driverId, documentType, fileUrl, file.originalname],
+      [driverId, documentType, uploadResult.url, file.originalname],
     );
 
     const allDocs = await this.query(
