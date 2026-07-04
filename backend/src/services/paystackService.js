@@ -141,6 +141,44 @@ class PaystackService {
     };
   }
 
+  // Generic (non-order) Paystack charge initialization — used for driver
+  // subscriptions and Flash Premium, which have no `orders` row to attach to.
+  // Unlike initializePayment(orderId, userId), this never touches the orders
+  // table; the caller is responsible for finalizing whatever it represents
+  // once payment completes (see webhookController's charge.success handler).
+  async initializeGenericCharge(email, amountInCents, metadata = {}, reference) {
+    let callbackUrl = process.env.APP_URL;
+    if (!callbackUrl) {
+      if (isProd) {
+        throw new Error(
+          "[Paystack] APP_URL must be configured in production for payment callbacks",
+        );
+      }
+      callbackUrl = "http://localhost:8081/payment/callback"; // Safe dev fallback
+      console.warn(
+        "[Paystack] ℹ️  APP_URL not set. Using development default.",
+      );
+    }
+
+    const paystackRes = await this.request("POST", "/transaction/initialize", {
+      email,
+      amount: amountInCents,
+      currency: "ZAR",
+      reference: reference || `flash_${metadata.type || "charge"}_${Date.now()}`,
+      callback_url: `${callbackUrl}/payment/callback`,
+      metadata,
+    });
+
+    if (!paystackRes.status) {
+      throw new Error(paystackRes.message || "Paystack initialization failed");
+    }
+
+    return {
+      authorizationUrl: paystackRes.data.authorization_url,
+      reference: paystackRes.data.reference,
+    };
+  }
+
   async verifyPayment(reference, io, callerUserId) {
     let paystackRes = null;
     let orderId = null;

@@ -1,12 +1,6 @@
 const BaseModel = require("./BaseModel");
 const paystackService = require("../services/paystackService");
-
-const PLANS = {
-  daily: { price: 25, days: 1, deliveries: 10, label: "Daily" },
-  weekly: { price: 120, days: 7, deliveries: 60, label: "Weekly" },
-  monthly: { price: 350, days: 30, deliveries: null, label: "Monthly" },
-  quarterly: { price: 900, days: 90, deliveries: null, label: "Quarterly" },
-};
+const { PLANS } = require("../utils/constants");
 
 class Subscription extends BaseModel {
   static async getDriverSubscription(driverId) {
@@ -26,43 +20,30 @@ class Subscription extends BaseModel {
       throw new Error("Driver not found");
     }
 
-    const savedCard = await this.query(
-      `SELECT paystack_authorization_code FROM saved_cards WHERE user_id=$1 AND is_default=true LIMIT 1`,
-      [driverId],
+    // NOTE: drivers cannot have a payment_methods row (that table's user_id
+    // column is FK'd to users, not drivers) so there is no saved-card path
+    // for driver subscriptions today — every purchase goes through Paystack's
+    // hosted checkout. The subscription itself is created by the webhook
+    // once payment succeeds (see webhookController.handleChargeSuccess).
+    const amountInCents = Math.round(plan.price * 100);
+    const paystackRes = await paystackService.initializeGenericCharge(
+      driverResult.rows[0].email,
+      amountInCents,
+      { driverId, planId, type: "driver_subscription", platform: "flash" },
     );
 
-    const amountInCents = Math.round(plan.price * 100);
+    return {
+      requiresPayment: true,
+      authorizationUrl: paystackRes.authorizationUrl,
+      message: "Complete payment to activate your plan",
+    };
+  }
 
-    let paystackResponse;
-    if (
-      savedCard.rows.length &&
-      savedCard.rows[0].paystack_authorization_code
-    ) {
-      paystackResponse = await paystackService.chargeAuthorization(
-        savedCard.rows[0].paystack_authorization_code,
-        driverResult.rows[0].email,
-        amountInCents,
-        { driverId, planId, type: "driver_subscription", platform: "flash" },
-      );
-
-      if (paystackResponse.data?.status !== "success") {
-        throw new Error(
-          "Card charge failed. Please update your payment method.",
-        );
-      }
-    } else {
-      const paystackRes = await paystackService.initializePayment(
-        driverResult.rows[0].email,
-        amountInCents,
-        { driverId, planId, type: "driver_subscription", platform: "flash" },
-      );
-
-      return {
-        requiresPayment: true,
-        authorizationUrl: paystackRes.data.authorization_url,
-        message: "Complete payment to activate your plan",
-      };
-    }
+  // Called by webhookController once Paystack confirms a driver_subscription
+  // charge succeeded — this is the other half of purchaseDriverPlan() above.
+  static async activateDriverPlan(driverId, planId, paystackReference) {
+    const plan = PLANS[planId];
+    if (!plan) throw new Error(`Unknown plan: ${planId}`);
 
     await this.query(
       `UPDATE driver_subscriptions SET status='expired', updated_at=NOW() WHERE driver_id=$1 AND status='active'`,
@@ -76,21 +57,10 @@ class Subscription extends BaseModel {
       `INSERT INTO driver_subscriptions
          (driver_id, plan_type, price, deliveries_limit, deliveries_used, starts_at, expires_at, status, paystack_reference)
        VALUES ($1,$2,$3,$4,0,NOW(),$5,'active',$6) RETURNING *`,
-      [
-        driverId,
-        planId,
-        plan.price,
-        plan.deliveries,
-        expiresAt,
-        paystackResponse.data.reference,
-      ],
+      [driverId, planId, plan.price, plan.deliveries, expiresAt, paystackReference],
     );
 
-    return {
-      success: true,
-      subscription: sub.rows[0],
-      message: `${plan.label} plan activated!`,
-    };
+    return sub.rows[0];
   }
 
   static async incrementDeliveryCount(driverId) {
@@ -120,7 +90,7 @@ class Subscription extends BaseModel {
       throw new Error("User not found");
     }
 
-    const paystackRes = await paystackService.initializePayment(
+    const paystackRes = await paystackService.initializeGenericCharge(
       userResult.rows[0].email,
       9900, // R99 in cents
       { userId, type: "premium_subscription", platform: "flash" },
@@ -128,9 +98,31 @@ class Subscription extends BaseModel {
 
     return {
       requiresPayment: true,
-      authorizationUrl: paystackRes.data.authorization_url,
+      authorizationUrl: paystackRes.authorizationUrl,
       message: "Complete payment to activate Flash Premium",
     };
+  }
+
+  // Called by webhookController once Paystack confirms a premium_subscription
+  // charge succeeded — this is the other half of purchasePremium() above.
+  // premium_subscriptions.user_id is UNIQUE, so renewals must upsert rather
+  // than insert a second row.
+  static async activatePremium(userId, paystackReference) {
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30);
+
+    const sub = await this.query(
+      `INSERT INTO premium_subscriptions
+         (user_id, price, starts_at, expires_at, status, paystack_reference)
+       VALUES ($1,99,NOW(),$2,'active',$3)
+       ON CONFLICT (user_id) DO UPDATE
+       SET price=99, starts_at=NOW(), expires_at=$2, status='active',
+           paystack_reference=$3, updated_at=NOW()
+       RETURNING *`,
+      [userId, expiresAt, paystackReference],
+    );
+
+    return sub.rows[0];
   }
 
   static async checkDriverSubscriptionAllowed(driverId) {

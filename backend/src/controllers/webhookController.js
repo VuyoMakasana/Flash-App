@@ -13,6 +13,7 @@ const crypto  = require('crypto');
 const pool    = require('../config/database');
 const { getOptional, isProd } = require('../config/env');
 const Payment = require('../models/Payment');
+const Subscription = require('../models/Subscription');
 const { autoAssignNearestDriver } = require('../services/fleetIntelligenceService');
 const { updateOrderStatus }       = require('../services/orderStateMachineService');
 const { notifyDriversNewOrder }   = require('../services/notificationService');
@@ -99,7 +100,15 @@ class WebhookController {
   }
 
   static async handleChargeSuccess(event, io) {
-    const data    = event.data;
+    const data     = event.data;
+    const metaType = data?.metadata?.type;
+
+    // Driver subscription / Flash Premium charges have no orders row to
+    // attach to — handle and finalize them separately from order payments.
+    if (metaType === 'driver_subscription' || metaType === 'premium_subscription') {
+      return WebhookController.handleSubscriptionCharge(event);
+    }
+
     const orderId = data?.metadata?.orderId;
 
     if (!orderId) return;
@@ -260,6 +269,60 @@ class WebhookController {
       throw err;
     } finally {
       client.release();
+    }
+  }
+
+  // Finalizes a driver_subscription or premium_subscription charge — the
+  // counterpart to Subscription.purchaseDriverPlan()/purchasePremium(),
+  // which only initialize the Paystack hosted-checkout redirect. Mirrors
+  // handleChargeSuccess()'s idempotency pattern (event id inserted inside
+  // the same transaction, so a rollback also removes the marker and allows
+  // a safe retry) but there is no orders row to lock here.
+  static async handleSubscriptionCharge(event) {
+    const data = event.data;
+    const { type, driverId, planId, userId } = data?.metadata || {};
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (event.id) {
+        try {
+          await client.query(
+            `INSERT INTO webhook_events (paystack_event_id, event_type) VALUES ($1, $2)`,
+            [String(event.id), event.event || 'unknown'],
+          );
+        } catch (dupErr) {
+          if (dupErr.code === '23505') {
+            await client.query('ROLLBACK');
+            console.log(`[Webhook] Duplicate event ${event.id} — already processed, skipping`);
+            return;
+          }
+          throw dupErr;
+        }
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[Webhook] handleSubscriptionCharge idempotency error:', err.message);
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    try {
+      if (type === 'driver_subscription' && driverId && planId) {
+        await Subscription.activateDriverPlan(driverId, planId, data.reference);
+        console.log(`[Webhook] Activated driver_subscription plan=${planId} driverId=${driverId} ref=${data.reference}`);
+      } else if (type === 'premium_subscription' && userId) {
+        await Subscription.activatePremium(userId, data.reference);
+        console.log(`[Webhook] Activated premium_subscription userId=${userId} ref=${data.reference}`);
+      } else {
+        console.warn('[Webhook] handleSubscriptionCharge: missing/invalid metadata', data?.metadata);
+      }
+    } catch (err) {
+      console.error('[Webhook] Subscription activation failed:', err.message);
     }
   }
 
