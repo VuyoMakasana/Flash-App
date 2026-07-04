@@ -301,6 +301,7 @@ cron.schedule('30 1 * * *', async () => {
       // Find orders stuck in driver_assigned or driver_arrived_store for more than 45 minutes
       const stuckOrders = await pool.query(`
         SELECT o.id, o.driver_id, o.user_id, o.delivery_mode, o.status,
+               o.driver_payout, o.delivery_fee,
                d.push_token as driver_push_token
         FROM orders o
         LEFT JOIN drivers d ON d.id = o.driver_id
@@ -309,8 +310,24 @@ cron.schedule('30 1 * * *', async () => {
           AND o.driver_id IS NOT NULL
       `);
 
+      const { requeueOrderForDriverSearch } = require('./services/orderStateMachineService');
+      const DriverWallet = require('./models/DriverWallet');
+      const ioInstance = _io;
+
       for (const order of stuckOrders.rows) {
         try {
+          // Re-queue through the state machine FIRST: this takes a row lock and
+          // re-validates the order is still driver_assigned/driver_arrived_store,
+          // so a driver's in-flight status update (e.g. just tapped "Picked Up")
+          // can't be clobbered by this cron. If the order has already moved on,
+          // this throws and we skip it entirely below — no penalty, no wallet
+          // change — because the driver did not actually go unavailable.
+          await requeueOrderForDriverSearch(order.id, {
+            actorId: 'system',
+            actorRole: 'system',
+            io: ioInstance,
+          });
+
           // Penalise the driver — increment cancel count
           await pool.query(
             `UPDATE drivers SET cancel_count = COALESCE(cancel_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
@@ -329,16 +346,19 @@ cron.schedule('30 1 * * *', async () => {
             console.warn(`[Cron] Driver ${order.driver_id} auto-suspended after 5 cancellations`);
           }
 
-          // Re-queue the order for fleet or notify user
-          await pool.query(
-            `UPDATE orders SET driver_id = NULL, status = 'waiting_for_driver',
-             delivery_payment_status = 'pending_driver', updated_at = NOW()
-             WHERE id = $1`,
-            [order.id]
-          );
+          // Reverse the driver's pending wallet credit for this assignment — otherwise
+          // pending_balance is left permanently uncorrected on every stuck-order timeout.
+          // Mirrors driverController.cancelAssignedOrder's voluntary-cancel path.
+          const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
+          if (payout > 0) {
+            await DriverWallet.transaction(async (client) => {
+              await DriverWallet.reversePending(
+                client, order.driver_id, payout, order.id, 'driver_timeout_reassigned',
+              );
+            });
+          }
 
-          // Notify user
-          const ioInstance = _io;
+          // Notify user with a friendlier message than the generic order_update
           if (ioInstance) {
             ioInstance.to(`user:${order.user_id}`).emit('order_update', {
               orderId: order.id,
