@@ -36,8 +36,4 @@ module.exports = {
   },
   testTimeout: 30000,
   forceExit: true,
-  // Mock the database module in all unit tests by default
-  moduleNameMapper: {
-    '^../../src/config/database$': '<rootDir>/tests/__mocks__/database.js',
-  },
 };
