@@ -3,6 +3,16 @@
  *
  * HIGH-4 FIX: Auth tokens stored in expo-secure-store (encrypted Keychain/Keystore)
  *   instead of AsyncStorage (plaintext on Android).
+ *
+ * D1/D3/H10 FIX: every path here previously targeted routes that don't exist on
+ *   the real backend — missing the `/api` prefix (every route in
+ *   backend/src/server.js is mounted under /api/...), wrong path shapes
+ *   (e.g. PATCH /orders/:id/status instead of PUT /api/orders/:id/status),
+ *   and whole namespaces (bank, profile document upload) that were never
+ *   implemented at all. Rewritten against backend/src/routes/*.js as the
+ *   source of truth. BASE_URL itself stays a bare origin (no /api) because
+ *   it's also used directly for the Socket.IO connection in dashboard.js —
+ *   the /api prefix is added centrally in request() instead.
  */
 
 import * as SecureStore from 'expo-secure-store';
@@ -24,23 +34,29 @@ export const clearTokens = async () => {
 };
 
 // ── Shared fetch wrapper ────────────────────────────────────────────────────
+function buildHeaders(token, isFormData, extra) {
+  return {
+    // A FormData body needs fetch to set its own multipart boundary —
+    // setting Content-Type here would break the upload.
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra,
+  };
+}
+
 async function request(path, options = {}) {
   const token = await getToken();
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const headers = buildHeaders(token, isFormData, options.headers);
 
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...options.headers,
-  };
-
-  const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${BASE_URL}/api${path}`, { ...options, headers });
 
   // Token expired — try to refresh once
   if (res.status === 401) {
     const refreshToken = await getRefreshToken();
     if (refreshToken) {
       try {
-        const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
+        const refreshRes = await fetch(`${BASE_URL}/api/auth/refresh`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ refreshToken }),
@@ -50,12 +66,9 @@ async function request(path, options = {}) {
           const data = await refreshRes.json();
           await saveTokens(data.token, data.refreshToken);
 
-          const retryRes = await fetch(`${BASE_URL}${path}`, {
+          const retryRes = await fetch(`${BASE_URL}/api${path}`, {
             ...options,
-            headers: {
-              ...headers,
-              Authorization: `Bearer ${data.token}`,
-            },
+            headers: buildHeaders(data.token, isFormData, options.headers),
           });
 
           if (!retryRes.ok) {
@@ -116,49 +129,95 @@ const auth = {
     }
   },
 
-  googleSignIn: (idToken) =>
-    request('/auth/google/driver', { method: 'POST', body: JSON.stringify({ idToken }) }),
+  googleSignIn: async (idToken) => {
+    const data = await request('/auth/driver/google', { method: 'POST', body: JSON.stringify({ idToken }) });
+    await saveTokens(data.token, data.refreshToken);
+    return data;
+  },
 
-  appleSignIn: (payload) =>
-    request('/auth/apple/driver', { method: 'POST', body: JSON.stringify(payload) }),
+  appleSignIn: async (payload) => {
+    const data = await request('/auth/driver/apple', { method: 'POST', body: JSON.stringify(payload) });
+    await saveTokens(data.token, data.refreshToken);
+    return data;
+  },
 };
 
 // ── Orders ────────────────────────────────────────────────────────────────
 const orders = {
-  getAvailable:  ()           => request('/orders/available'),
-  getActive:     ()           => request('/orders/active'),
-  accept:        (id)         => request(`/orders/${id}/accept`, { method: 'POST' }),
-  updateStatus:  (id, status) => request(`/orders/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  getAvailable:  ()           => request('/drivers/available-orders'),
+  getActive:     ()           => request('/drivers/active-order'),
+  accept:        (id)         => request(`/drivers/orders/${id}/accept`, { method: 'POST' }),
+  cancelActive:  (id)         => request(`/drivers/orders/${id}/cancel`, { method: 'POST' }),
+  updateStatus:  (id, status) => request(`/orders/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
   getById:       (id)         => request(`/orders/${id}`),
 };
 
 // ── Driver profile ─────────────────────────────────────────────────────────
 const driver = {
-  getProfile:     ()      => request('/drivers/profile'),
-  updateProfile:  (body)  => request('/drivers/profile', { method: 'PATCH', body: JSON.stringify(body) }),
-  updateLocation: (lat, lng) => request('/drivers/location', { method: 'POST', body: JSON.stringify({ lat, lng }) }),
+  getProfile:     ()      => request('/drivers/me'),
+  updateProfile:  (body)  => request('/drivers/me', { method: 'PUT', body: JSON.stringify(body) }),
+  updateLocation: (lat, lng, orderId) => request('/drivers/location', {
+    method: 'POST',
+    body:   JSON.stringify({ lat, lng, orderId }),
+  }),
   setOnline:      (online) => request('/drivers/online', { method: 'POST', body: JSON.stringify({ online }) }),
-  uploadDocument: (formData) => request('/drivers/documents', {
-    method:  'POST',
-    headers: {},
-    body:    formData,
+  savePushToken:  (pushToken) => request('/drivers/push-token', {
+    method: 'POST',
+    body:   JSON.stringify({ push_token: pushToken }),
+  }),
+  // formData must contain a `document_type` field and a `document` file field —
+  // matches upload.single('document') + req.body.document_type on the backend.
+  uploadDocument: (formData) => request('/drivers/documents/upload', {
+    method: 'POST',
+    body:   formData,
+  }),
+};
+
+// ── Bank account / payout setup ─────────────────────────────────────────────
+const bank = {
+  getBanks: async () => {
+    const data = await request('/drivers/bank/supported-banks');
+    return { banks: data.banks || [] };
+  },
+  getAccount: async () => {
+    const data = await request('/drivers/bank/account');
+    return { account: data.bank_account || null };
+  },
+  verifyAccount: async (accountNumber, bankCode) => {
+    const data = await request('/drivers/bank/verify', {
+      method: 'POST',
+      body:   JSON.stringify({ account_number: accountNumber, bank_code: bankCode }),
+    });
+    // A non-2xx response already throws in request(), so reaching here means
+    // Paystack resolved the account — mark it verified for the caller.
+    return { ...data, verified: true };
+  },
+  saveAccount: (accountNumber, bankCode, accountName) => request('/drivers/bank/save', {
+    method: 'POST',
+    body:   JSON.stringify({
+      account_number: accountNumber,
+      bank_code:      bankCode,
+      account_name:   accountName,
+    }),
   }),
 };
 
 // ── Earnings / Wallet ──────────────────────────────────────────────────────
 const earnings = {
-  getSummary:     ()     => request('/drivers/earnings'),
-  getTransactions:()     => request('/drivers/wallet/transactions'),
-  requestPayout:  (body) => request('/drivers/payout', { method: 'POST', body: JSON.stringify(body) }),
-  getBankDetails: ()     => request('/drivers/bank'),
-  saveBankDetails:(body) => request('/drivers/bank', { method: 'POST', body: JSON.stringify(body) }),
+  getSummary:    ()     => request('/drivers/earnings'),
+  requestPayout: (amount) => request('/drivers/wallet/payout-request', {
+    method: 'POST',
+    body:   JSON.stringify({ amount }),
+  }),
 };
 
 // ── Subscription ──────────────────────────────────────────────────────────
 const subscription = {
-  getPlans:   ()      => request('/subscriptions/plans'),
-  getCurrent: ()      => request('/subscriptions/current'),
-  purchase:   (body)  => request('/subscriptions/purchase', { method: 'POST', body: JSON.stringify(body) }),
+  getCurrent: () => request('/subscriptions/driver'),
+  purchase:   (planId) => request('/subscriptions/driver/purchase', {
+    method: 'POST',
+    body:   JSON.stringify({ planId }),
+  }),
 };
 
 // ── Trusted Driver requests ───────────────────────────────────────────────
@@ -181,6 +240,7 @@ const driverApi = {
   auth,
   orders,
   driver,
+  bank,
   earnings,
   subscription,
   trustedDrivers,
