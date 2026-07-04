@@ -17,7 +17,7 @@ import {
 
 const { width } = Dimensions.get('window');
 
-export default function SplashScreen({ onFinish }) {
+export default function SplashScreen({ navigation, onFinish }) {
   // Animation values
   const logoOpacity    = useRef(new Animated.Value(0)).current;
   const logoScale      = useRef(new Animated.Value(0.8)).current;
@@ -68,7 +68,16 @@ export default function SplashScreen({ onFinish }) {
         toValue: 0, duration: 400, useNativeDriver: true,
       }),
     ]).start(() => {
-      if (onFinish) onFinish();
+      // D7 FIX: App.js registers this screen with no `onFinish` prop — React
+      // Navigation only ever injects `navigation`/`route`, so the callback
+      // was always undefined and the animation finished into a dead end with
+      // no way to reach Login. Navigate directly instead; `onFinish` is kept
+      // as an optional override for any future caller that does pass it.
+      if (onFinish) {
+        onFinish();
+      } else if (navigation) {
+        navigation.replace('Login');
+      }
     });
   }, []);
 
