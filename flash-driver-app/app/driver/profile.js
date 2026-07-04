@@ -34,7 +34,7 @@ export default function DriverProfileScreen() {
 
   const loadDocs = async () => {
     try {
-      const data = await driverApi.profile.getMe();
+      const data = await driverApi.driver.getProfile();
       setDocuments(data.documents || []);
     } catch (_e) {}
   };
@@ -42,7 +42,7 @@ export default function DriverProfileScreen() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await driverApi.profile.update(form);
+      await driverApi.driver.updateProfile(form);
       await refreshProfile();
       Alert.alert('Saved', 'Profile updated successfully.');
     } catch (err) {

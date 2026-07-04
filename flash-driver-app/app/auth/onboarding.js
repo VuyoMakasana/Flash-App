@@ -56,7 +56,7 @@ export default function OnboardingScreen() {
 
   const loadDocumentStatus = async () => {
     try {
-      const data = await driverApi.profile.getMe();
+      const data = await driverApi.driver.getProfile();
       setUploadedDocs(data.documents?.map(d => d.document_type) || []);
     } catch (_e) {
       // Use local state if API fails
@@ -77,12 +77,14 @@ export default function OnboardingScreen() {
       const file = result.assets[0];
       setUploading(docType);
 
-      await driverApi.profile.uploadDocument(
-        docType,
-        file.uri,
-        file.name,
-        file.mimeType || 'application/pdf'
-      );
+      const formData = new FormData();
+      formData.append('document_type', docType);
+      formData.append('document', {
+        uri:  file.uri,
+        name: file.name,
+        type: file.mimeType || 'application/pdf',
+      });
+      await driverApi.driver.uploadDocument(formData);
 
       setUploadedDocs(prev => [...prev.filter(d => d !== docType), docType]);
 

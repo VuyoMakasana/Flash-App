@@ -15,7 +15,7 @@ export default function DriverEarningsScreen() {
 
   const loadEarnings = async () => {
     try {
-      const result = await driverApi.earnings.get();
+      const result = await driverApi.earnings.getSummary();
       setData(result);
     } catch (e) {
       console.warn('Earnings load failed', e);
