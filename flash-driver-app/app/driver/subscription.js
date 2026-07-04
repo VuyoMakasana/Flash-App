@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator,
+  Alert, ActivityIndicator, Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -63,7 +63,7 @@ export default function SubscriptionScreen() {
 
   const loadSubscription = async () => {
     try {
-      const data = await driverApi.subscription.get();
+      const data = await driverApi.subscription.getCurrent();
       setSubscription(data.subscription);
     } catch (e) {
       console.warn(e.message);
@@ -76,7 +76,7 @@ export default function SubscriptionScreen() {
     const plan = PLANS.find(p => p.id === planId);
     Alert.alert(
       `Buy ${plan.label} Plan`,
-      `${plan.price} will be charged to your card on file.\n\n${plan.features.join('\n')}`,
+      `${plan.price} will be charged via Paystack.\n\n${plan.features.join('\n')}`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -85,10 +85,21 @@ export default function SubscriptionScreen() {
             setPurchasing(planId);
             try {
               const data = await driverApi.subscription.purchase(planId);
-              setSubscription(data.subscription);
-              Alert.alert('Plan Activated!', data.message, [
-                { text: 'Start Driving', onPress: () => router.back() },
-              ]);
+              if (data.authorizationUrl) {
+                const supported = await Linking.canOpenURL(data.authorizationUrl);
+                if (!supported) {
+                  Alert.alert('Error', 'Could not open the payment page.');
+                  return;
+                }
+                await Linking.openURL(data.authorizationUrl);
+                Alert.alert(
+                  'Complete Your Payment',
+                  'Finish the payment in your browser, then come back here — your plan activates automatically once payment is confirmed.',
+                  [{ text: 'OK', onPress: () => loadSubscription() }],
+                );
+              } else {
+                Alert.alert('Payment Failed', data.message || 'Could not start payment.');
+              }
             } catch (e) {
               Alert.alert('Payment Failed', e.message);
             } finally {
