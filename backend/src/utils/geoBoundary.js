@@ -44,8 +44,21 @@ function isWithinNelsonMandelaBay(lat, lng) {
 const OUTSIDE_SERVICE_AREA_MESSAGE =
   'Flash currently only delivers within Nelson Mandela Bay (Gqeberha). This location is outside our service area.';
 
+// TODO(user): replace with Flash's real store/warehouse pickup coordinate.
+// There is no "malls"/store-location table anywhere in this codebase — every
+// order is currently treated as picking up from this one fixed location
+// rather than trusting client-supplied pickup coordinates for something that
+// never changes. Placeholder is the Gqeberha city-center coordinate used
+// elsewhere in this file's own worked examples — almost certainly NOT
+// Flash's actual pickup address.
+const FLASH_STORE_LOCATION = {
+  lat: -33.958,
+  lng: 25.600,
+};
+
 module.exports = {
   NMB_BOUNDS,
   isWithinNelsonMandelaBay,
   OUTSIDE_SERVICE_AREA_MESSAGE,
+  FLASH_STORE_LOCATION,
 };

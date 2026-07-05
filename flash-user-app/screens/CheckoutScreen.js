@@ -4,6 +4,7 @@ import {
   Image, ScrollView, Alert, ActivityIndicator, TextInput,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
@@ -107,6 +108,26 @@ export default function CheckoutScreen() {
 
     setLoading(true);
     try {
+      // Flash only delivers within Nelson Mandela Bay — the backend rejects
+      // orders outside the service area, but it needs a real dropoff
+      // coordinate to check against, not the typed address text alone
+      // (there's no address-to-coordinate geocoding in this app). Uses the
+      // customer's current device position as that coordinate, so this
+      // assumes delivery to roughly where the customer is right now rather
+      // than validating the specific typed address.
+      const { status: existingStatus } = await Location.getForegroundPermissionsAsync();
+      let permStatus = existingStatus;
+      if (permStatus !== 'granted') {
+        const req = await Location.requestForegroundPermissionsAsync();
+        permStatus = req.status;
+      }
+      if (permStatus !== 'granted') {
+        Alert.alert('Location needed', 'Please allow location access to confirm your delivery is within our service area.');
+        setLoading(false);
+        return;
+      }
+      const position = await Location.getCurrentPositionAsync({});
+
       await updateProfile({
         name: name.trim(),
         phone: phone.trim(),
@@ -121,6 +142,8 @@ export default function CheckoutScreen() {
         deliveryFee,
         total,
         dropoffAddress: address.trim(),
+        dropoffLat: position.coords.latitude,
+        dropoffLng: position.coords.longitude,
         requestedDriverId: deliveryMode === 'pick' ? selectedDriverId : null,
       });
       // Clear checkout draft after successful order — no longer needed

@@ -19,6 +19,7 @@ const {
   notifyOrderStatusChange,
 } = require('../services/orderStateMachineService');
 const RefundService = require('../services/refundService');
+const { isWithinNelsonMandelaBay, OUTSIDE_SERVICE_AREA_MESSAGE, FLASH_STORE_LOCATION } = require('../utils/geoBoundary');
 
 // Errors thrown by validateExternalItemPrice() and inventory stock checks
 // start with one of these prefixes. Treat them as client errors (400) rather
@@ -48,14 +49,26 @@ class OrderController {
       dropoff_mall_id,
       pickup_address,
       dropoff_address,
-      pickup_lat,
-      pickup_lng,
       dropoff_lat,
       dropoff_lng,
     } = req.body;
 
     if (!items?.length) {
       return res.status(400).json({ error: 'Order must have items' });
+    }
+
+    // Flash only operates within Nelson Mandela Bay — the Play Store can
+    // restrict which countries install the app, but not which cities, so
+    // this has to be enforced here. Pickup is always Flash's one fixed
+    // store location (FLASH_STORE_LOCATION), not client-supplied — there is
+    // no multi-vendor "stores" concept in this codebase, so trusting a
+    // client-sent pickup coordinate for something that never changes would
+    // just be an unnecessary way for a bad client to bypass this check.
+    // Dropoff (the customer's actual delivery point) must be freshly
+    // supplied and inside the boundary; missing coordinates are rejected
+    // rather than silently allowed through unchecked.
+    if (!isWithinNelsonMandelaBay(dropoff_lat, dropoff_lng)) {
+      return res.status(400).json({ error: OUTSIDE_SERVICE_AREA_MESSAGE });
     }
 
     // Coalesce — preferred_driver_id (admin/backend) > requested_driver_id (user app)
@@ -74,8 +87,8 @@ class OrderController {
         dropoff_mall_id,
         pickup_address,
         dropoff_address,
-        pickup_lat,
-        pickup_lng,
+        pickup_lat: FLASH_STORE_LOCATION.lat,
+        pickup_lng: FLASH_STORE_LOCATION.lng,
         dropoff_lat,
         dropoff_lng,
       });
