@@ -9,6 +9,8 @@ const { adminLimiter } = require('../middleware/rateLimiter');
 // POST /api/admin/login — 5 attempts per 15 min to prevent brute-force
 router.post('/login', adminLimiter, AdminController.login);
 
+router.post('/logout', authenticate, requireRole('admin'), AdminController.logout);
+
 router.get(
   '/drivers',
   authenticate,

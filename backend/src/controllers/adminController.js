@@ -1,6 +1,8 @@
 const Admin = require("../models/Admin");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { v4: uuidv4 } = require("uuid");
+const pool = require("../config/database");
 const { getRequired, isProd, isDev } = require("../config/env");
 
 class AdminController {
@@ -68,8 +70,12 @@ class AdminController {
         });
       }
 
+      // H7 FIX: admin tokens previously carried no `jti`, so middleware/auth.js's
+      // revocation check (`if (decoded.jti) { ... }`) silently skipped them —
+      // a leaked admin token stayed valid for its full 8h life with no way to
+      // kill it early, and there was no admin logout endpoint at all.
       const token = jwt.sign(
-        { id: "admin", role: "admin" },
+        { id: "admin", role: "admin", jti: uuidv4() },
         jwtSecret,
         { expiresIn: "8h" },
       );
@@ -78,6 +84,27 @@ class AdminController {
       console.error("[Admin Auth] Login error:", err.message);
       res.status(500).json({ error: "Login failed" });
     }
+  }
+
+  // H7 FIX: revokes the admin's current token immediately via the same
+  // revoked_tokens table + jti mechanism used for user/driver logout
+  // (see AuthController.logout), instead of leaving it valid until it expires.
+  static async logout(req, res) {
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      try {
+        const token = authHeader.replace("Bearer ", "");
+        const decoded = jwt.decode(token);
+        if (decoded?.jti) {
+          const expiresAt = new Date(decoded.exp * 1000);
+          await pool.query(
+            `INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+            [decoded.jti, expiresAt],
+          );
+        }
+      } catch (_) {}
+    }
+    return res.json({ success: true });
   }
 
   static async getDrivers(req, res) {
