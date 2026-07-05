@@ -63,8 +63,13 @@ module.exports = () => ({
         'expo-build-properties',
         {
           android: {
-            compileSdkVersion: 35,
-            targetSdkVersion: 35,
+            // Bumped from 35 -> 36: the EAS Android build failed at
+            // :app:checkDebugAarMetadata because androidx.browser:1.9.0 and
+            // androidx.core:1.17.0/core-ktx:1.17.0 (transitive deps pulled
+            // in after upgrading expo-build-properties to the SDK 56
+            // recommended patch version) require compileSdk >= 36.
+            compileSdkVersion: 36,
+            targetSdkVersion: 36,
           },
         },
       ],
