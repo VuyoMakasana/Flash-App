@@ -183,18 +183,37 @@ class PayoutService {
     try {
       await client.query("BEGIN");
 
-      await client.query(
+      const deductResult = await client.query(
         `UPDATE driver_wallets
          SET wallet_balance = wallet_balance - $2, updated_at = NOW()
          WHERE driver_id = $1 AND wallet_balance >= $2`,
         [driverId, amount],
       );
 
-      await client.query(
-        `INSERT INTO driver_wallet_ledger (driver_id, amount, entry_type, note)
-         VALUES ($1, $2, 'payout_debit', $3)`,
-        [driverId, amount, `payout_ref_${payoutRequestId}`],
-      );
+      // H5 FIX: the Paystack transfer has already succeeded by the time this
+      // runs — the driver has been paid regardless. If the balance guard
+      // above matched 0 rows (wallet_balance had already dropped below the
+      // payout amount before this ran), the wallet was NOT decremented, and
+      // silently continuing as if it had would let this same amount be paid
+      // out again later. Flag it loudly for manual reconciliation instead —
+      // the payout itself still completed successfully, so the request/
+      // transaction status below is accurate either way.
+      if (deductResult.rowCount === 0) {
+        console.error(
+          `[CRITICAL][Payout] Wallet deduction skipped for driverId=${driverId} amount=${amount} payoutRequestId=${payoutRequestId} — wallet_balance was already below the payout amount. Paystack transfer succeeded regardless. Manual wallet correction required.`,
+        );
+        await client.query(
+          `INSERT INTO driver_wallet_ledger (driver_id, amount, entry_type, note)
+           VALUES ($1, $2, 'payout_debit_reconcile_required', $3)`,
+          [driverId, amount, `payout_ref_${payoutRequestId}_WALLET_NOT_DEDUCTED`],
+        );
+      } else {
+        await client.query(
+          `INSERT INTO driver_wallet_ledger (driver_id, amount, entry_type, note)
+           VALUES ($1, $2, 'payout_debit', $3)`,
+          [driverId, amount, `payout_ref_${payoutRequestId}`],
+        );
+      }
 
       await client.query(
         `UPDATE driver_payout_requests
