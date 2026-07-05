@@ -96,7 +96,6 @@ export default function DriverDashboard() {
     wallet: { wallet_balance: '0.00', pending_balance: '0.00' },
   });
   const [subscription, setSubscription]   = useState(null);
-  const [fleetAlerts, setFleetAlerts]     = useState([]);
   const [trustRequests, setTrustRequests] = useState([]);
   const [loading, setLoading]             = useState(true);
   const [refreshing, setRefreshing]       = useState(false);
@@ -139,11 +138,6 @@ export default function DriverDashboard() {
     socket.on('new_order_available', () => {
       Vibration.vibrate([0, 200, 100, 200]);
       fetchAvailableOrders();
-    });
-
-    socket.on('fleet_alert', (alert) => {
-      setFleetAlerts(prev => [alert, ...prev].slice(0, 3));
-      Vibration.vibrate(300);
     });
 
     socket.on('trust_request', (req) => {
@@ -555,24 +549,6 @@ export default function DriverDashboard() {
               </View>
             )}
           </View>
-        </View>
-      )}
-
-      {/* ── FLEET ALERTS ── */}
-      {fleetAlerts.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>⚡ Demand Alerts</Text>
-          {fleetAlerts.map((alert, i) => (
-            <TouchableOpacity
-              key={i}
-              style={styles.alertCard}
-              onPress={() => setFleetAlerts(prev => prev.filter((_, idx) => idx !== i))}
-            >
-              <Ionicons name="trending-up-outline" size={16} color="#f59e0b" />
-              <Text style={styles.alertText} numberOfLines={2}>{alert.message}</Text>
-              <Ionicons name="close" size={14} color="#6b7280" />
-            </TouchableOpacity>
-          ))}
         </View>
       )}
 

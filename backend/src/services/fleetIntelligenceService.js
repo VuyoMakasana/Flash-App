@@ -1,6 +1,12 @@
 const pool = require("../config/database");
 const { assignDriver } = require("./orderStateMachineService");
 
+// Flash Fleet demand-clustering is an internal ops/admin analytics tool —
+// it must never be visible to drivers or trigger a driver-facing
+// notification. Cluster + nearby-driver data is reported to the 'admin'
+// room only, as informational context for an ops decision (e.g. manually
+// messaging drivers, running a promotion), never pushed to a driver
+// directly.
 async function runFleetIntelligence(io) {
   try {
     const clusters = await pool.query(`
@@ -44,21 +50,23 @@ async function runFleetIntelligence(io) {
         [cluster.center_lat, cluster.center_lng],
       );
 
-      for (const driver of nearbyDrivers.rows) {
-        if (io) {
-          io.to(`driver:${driver.id}`).emit("fleet_alert", {
-            type: "reposition",
-            category: cluster.category,
-            city: cluster.city,
-            center: {
-              lat: parseFloat(cluster.center_lat),
-              lng: parseFloat(cluster.center_lng),
-            },
-            userCount: cluster.user_count,
-            distanceKm: parseFloat(driver.distance_km).toFixed(1),
-            message: `${cluster.user_count} users browsing ${cluster.category} nearby — position yourself in ${cluster.city || "this area"} for incoming orders.`,
-          });
-        }
+      if (io && nearbyDrivers.rows.length) {
+        io.to("admin").emit("fleet_alert", {
+          type: "reposition",
+          category: cluster.category,
+          city: cluster.city,
+          center: {
+            lat: parseFloat(cluster.center_lat),
+            lng: parseFloat(cluster.center_lng),
+          },
+          userCount: cluster.user_count,
+          nearbyDrivers: nearbyDrivers.rows.map((d) => ({
+            id: d.id,
+            name: d.name,
+            distanceKm: parseFloat(d.distance_km).toFixed(1),
+          })),
+          message: `${cluster.user_count} users browsing ${cluster.category} near ${cluster.city || "this area"} — ${nearbyDrivers.rows.length} driver(s) nearby.`,
+        });
       }
     }
 

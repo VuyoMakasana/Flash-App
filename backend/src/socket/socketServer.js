@@ -100,6 +100,12 @@ module.exports = function setupSocket(io) {
 
   io.on('connection', (socket) => {
     socket.join(`${socket.userRole}:${socket.userId}`);
+    // Bare 'admin' broadcast room — every io.to('admin').emit(...) call site
+    // (driver_location, driver_status_change, fleet_alert_acked,
+    // driver_application_ready, and fleet_alert below) targets this room, but
+    // nothing ever joined it before now: only the per-id `admin:${userId}`
+    // room existed, so every admin broadcast was reaching zero sockets.
+    if (socket.userRole === 'admin') socket.join('admin');
 
     // HIGH-9 FIX: Periodically re-verify the JWT so a token that has expired
     // since connection time is detected and the socket is cleanly terminated.

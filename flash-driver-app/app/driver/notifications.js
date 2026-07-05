@@ -18,7 +18,6 @@ const ICON_MAP = {
   new_order:      { name: 'bag-outline',          color: '#f59e0b' },
   trust_request:  { name: 'person-add-outline',   color: '#10b981' },
   earnings:       { name: 'cash-outline',          color: '#10b981' },
-  fleet_alert:    { name: 'trending-up-outline',  color: '#f59e0b' },
   system:         { name: 'information-circle-outline', color: '#3b82f6' },
 };
 
