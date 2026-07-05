@@ -4,8 +4,15 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-console.log('DATABASE_URL loaded:');
-console.log(process.env.DATABASE_URL);
+// Previously logged the full DATABASE_URL, including its embedded password,
+// to stdout on every migration run (local, CI, or a deploy step) — anyone
+// with access to those logs could read the live database password.
+if (!process.env.DATABASE_URL) {
+  console.error('DATABASE_URL is not set');
+} else {
+  const redacted = process.env.DATABASE_URL.replace(/:\/\/[^@]+@/, '://***:***@');
+  console.log('DATABASE_URL loaded:', redacted);
+}
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -247,25 +254,35 @@ async function migrate() {
       updated_at TIMESTAMP DEFAULT NOW()
     )`);
 
-    // Idempotent unique constraint on provider_transaction_id
-    await client.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM pg_constraint
-          WHERE conname = 'payments_provider_transaction_id_key'
-        ) THEN
-          DELETE FROM payments p
-          USING payments p2
-          WHERE p.provider_transaction_id IS NOT NULL
-            AND p.provider_transaction_id = p2.provider_transaction_id
-            AND p.ctid > p2.ctid;
-          ALTER TABLE payments
-            ADD CONSTRAINT payments_provider_transaction_id_key
-            UNIQUE (provider_transaction_id);
-        END IF;
-      END $$;
+    // Idempotent unique constraint on provider_transaction_id. Previously ran
+    // as a single DO $$ block whose DELETE was silent — no record anywhere of
+    // which rows (or how many) were removed from a financial-transactions
+    // table. Split into separate statements so the deleted rows can be
+    // logged before the constraint is added.
+    const constraintExists = await client.query(`
+      SELECT 1 FROM pg_constraint WHERE conname = 'payments_provider_transaction_id_key'
     `);
+    if (!constraintExists.rows.length) {
+      const deleted = await client.query(`
+        DELETE FROM payments p
+        USING payments p2
+        WHERE p.provider_transaction_id IS NOT NULL
+          AND p.provider_transaction_id = p2.provider_transaction_id
+          AND p.ctid > p2.ctid
+        RETURNING p.id, p.provider_transaction_id
+      `);
+      if (deleted.rows.length) {
+        console.warn(
+          `[Migration] Removed ${deleted.rows.length} duplicate payments row(s) before adding unique constraint on provider_transaction_id:`,
+          deleted.rows.map((r) => ({ id: r.id, provider_transaction_id: r.provider_transaction_id })),
+        );
+      }
+      await client.query(`
+        ALTER TABLE payments
+          ADD CONSTRAINT payments_provider_transaction_id_key
+          UNIQUE (provider_transaction_id)
+      `);
+    }
 
     await client.query(`CREATE TABLE IF NOT EXISTS webhook_events (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -669,6 +686,11 @@ async function migrate() {
       // queries always include.
       `CREATE INDEX IF NOT EXISTS idx_flash_inventory_active_created ON flash_inventory(is_active, created_at DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_flash_inventory_active_category_created ON flash_inventory(is_active, category, created_at DESC)`,
+      // Trends.getCityTrends/getCategoryTrends and Fleet.getClusters all
+      // filter primarily on `created_at > NOW() - INTERVAL '...'` — the
+      // existing browsing_events indexes lead with lat/lng or category, so
+      // none of them actually match this shape. This one does.
+      `CREATE INDEX IF NOT EXISTS idx_browsing_events_created_at ON browsing_events(created_at DESC)`,
     ];
 
     for (const idx of indexes) {
