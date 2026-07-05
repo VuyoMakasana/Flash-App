@@ -169,8 +169,11 @@ export const FlashProvider = ({ children }) => {
   }, [user]);
 
   const logout = useCallback(async () => {
-    // Clear tokens from SecureStore
-    await clearTokens();
+    // api.auth.logout() revokes the refresh token server-side (POST
+    // /auth/logout) before clearing local tokens — previously this only
+    // cleared SecureStore locally, leaving the refresh_tokens row live
+    // server-side until it expired naturally or the periodic purge job ran.
+    await api.auth.logout();
     // Clear non-sensitive AsyncStorage data
     await AsyncStorage.multiRemove([AS_KEYS.user]).catch(() => {});
     if (user?.id) await AsyncStorage.removeItem(cartKey(user.id)).catch(() => {});
