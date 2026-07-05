@@ -23,6 +23,7 @@
 import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 
@@ -63,8 +64,18 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   const { latitude: lat, longitude: lng } = data.locations[0].coords;
 
   try {
+    // The auth token lives in SecureStore (services/api.js's saveTokens),
+    // not AsyncStorage — this task used to read it from AsyncStorage under
+    // the same key name, which never matched anything after the token
+    // storage was migrated to SecureStore, so `token` was always null here
+    // and every background ping silently returned before ever POSTing.
+    // SecureStore's native module calls work fine from a TaskManager
+    // background callback (this task runs as a foreground service on
+    // Android and a location-mode background context on iOS, both of which
+    // keep the JS/native bridge alive) — only the active-order id, which is
+    // written for exactly this purpose, stays in AsyncStorage.
     const [token, orderId] = await Promise.all([
-      AsyncStorage.getItem(TOKEN_KEY),
+      SecureStore.getItemAsync(TOKEN_KEY),
       AsyncStorage.getItem(ACTIVE_ORDER_KEY),
     ]);
 

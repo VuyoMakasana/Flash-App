@@ -5,8 +5,11 @@
  *   stored in expo-secure-store instead of AsyncStorage.
  *
  *   Non-sensitive data (driver profile snapshot, active order ID for the
- *   background task) remains in AsyncStorage — the background task cannot
- *   access SecureStore and doesn't need encrypted data there.
+ *   background task) remains in AsyncStorage for simplicity. The background
+ *   task (tasks/backgroundLocationTask.js) DOES read the token from
+ *   SecureStore directly — a prior version of this comment claimed it
+ *   couldn't, which left the task reading a key that only ever existed in
+ *   AsyncStorage, silently disabling every background location ping.
  */
 
 import React, {
