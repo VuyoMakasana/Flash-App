@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet, ScrollView, Alert, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
@@ -107,7 +107,11 @@ export default function ProfileScreen() {
           { icon: 'receipt-outline',         label: 'Order History',   onPress: () => navigation.navigate('Orders') },
             // ADDED: Privacy Policy link — POPIA legally requires this to be accessible in-app
           { icon: 'shield-checkmark-outline', label: 'Privacy Policy',  onPress: () => navigation.navigate('PrivacyPolicy') },
-          { icon: 'help-circle-outline',      label: 'Help & Support',  onPress: () => {} },
+          // H8 FIX: "Settings" was previously unreachable from anywhere in the
+          // app — it's the only screen with a "Delete Account" entry point.
+          { icon: 'settings-outline',         label: 'Settings',        onPress: () => navigation.navigate('Settings') },
+          // Previously a real no-op (onPress: () => {}) — tapping did nothing at all.
+          { icon: 'help-circle-outline',      label: 'Help & Support',  onPress: () => Linking.openURL('mailto:support@flash.co.za') },
         ].map(item => (
           <Pressable key={item.label} style={styles.menuRow} onPress={item.onPress}>
             <Ionicons name={item.icon} size={20} color="#374151" />

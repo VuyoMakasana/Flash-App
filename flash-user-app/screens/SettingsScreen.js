@@ -80,6 +80,14 @@ export default function SettingsScreen() {
       {/* Notifications */}
       <Text style={styles.sectionLabel}>NOTIFICATIONS</Text>
       <View style={styles.card}>
+        <Row
+          icon="notifications-outline"
+          label="Notification History"
+          onPress={() => navigation.navigate('Notifications')}
+        >
+          <Ionicons name="chevron-forward" size={16} color="#6b7280" />
+        </Row>
+        <View style={styles.divider} />
         <Row icon="bag-outline" label="Order status updates">
           <Switch
             value={pushOrders}
@@ -113,7 +121,7 @@ export default function SettingsScreen() {
         <Row
           icon="location-outline"
           label="Saved Addresses"
-          onPress={() => navigation.navigate('AddressScreen')}
+          onPress={() => navigation.navigate('Address')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>

@@ -39,6 +39,11 @@ import StoreCreditsScreen       from './screens/StoreCreditsScreen';
 // NEW: Password reset screens
 import ForgotPasswordScreen     from './screens/ForgotPasswordScreen';
 import ResetPasswordScreen      from './screens/ResetPasswordScreen';
+// H8 FIX: these three screens existed but were never registered anywhere —
+// Settings is the only screen with a "Delete Account" entry point.
+import SettingsScreen           from './screens/SettingsScreen';
+import AddressScreen            from './screens/AddressScreen';
+import NotificationsScreen      from './screens/NotificationsScreen';
 
 const Tab   = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -105,6 +110,13 @@ function ProfileStack() {
       <Stack.Screen name="TrustedDrivers" component={TrustedDriversScreen} options={{ title: 'Trusted Drivers' }} />
       <Stack.Screen name="StoreCredits"   component={StoreCreditsScreen}   options={{ title: 'Store Credits', ...headerStyles }} />
       <Stack.Screen name="PrivacyPolicy"  component={PrivacyPolicyScreen}  options={{ title: 'Privacy Policy', ...headerStyles }} />
+      {/* H8 FIX: Settings (with the only Delete Account entry point),
+          Address, and Notifications were all fully built but never
+          registered anywhere in the app. Each renders its own header
+          (headerShown: false), matching how AuthStack's screens work. */}
+      <Stack.Screen name="Settings"       component={SettingsScreen}       options={{ headerShown: false }} />
+      <Stack.Screen name="Address"        component={AddressScreen}        options={{ headerShown: false }} />
+      <Stack.Screen name="Notifications"  component={NotificationsScreen}  options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }
