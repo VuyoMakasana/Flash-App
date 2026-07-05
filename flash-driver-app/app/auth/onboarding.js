@@ -141,21 +141,24 @@ export default function OnboardingScreen() {
         </View>
       </View>
 
-      {/* Status banner */}
+      {/* Status banner — 'suspended' previously matched the outer condition
+          (rendering an amber box) but had no matching text below, so a
+          suspended driver saw an icon with no message at all. */}
       {driver?.status && driver.status !== 'pending_documents' && (
         <View style={[styles.statusBanner, {
-          backgroundColor: driver.status === 'approved' ? '#dcfce7' : '#fef3c7'
+          backgroundColor: driver.status === 'approved' ? '#dcfce7' : driver.status === 'suspended' ? '#fee2e2' : '#fef3c7'
         }]}>
           <Ionicons
-            name={driver.status === 'approved' ? 'checkmark-circle' : 'time-outline'}
+            name={driver.status === 'approved' ? 'checkmark-circle' : driver.status === 'suspended' ? 'ban-outline' : 'time-outline'}
             size={18}
-            color={driver.status === 'approved' ? '#16a34a' : '#d97706'}
+            color={driver.status === 'approved' ? '#16a34a' : driver.status === 'suspended' ? '#dc2626' : '#d97706'}
           />
-          <Text style={[styles.statusText, { color: driver.status === 'approved' ? '#15803d' : '#92400e' }]}>
+          <Text style={[styles.statusText, { color: driver.status === 'approved' ? '#15803d' : driver.status === 'suspended' ? '#991b1b' : '#92400e' }]}>
             {driver.status === 'approved' && 'Account approved! You can now accept deliveries.'}
             {driver.status === 'documents_submitted' && 'Documents submitted. Under review (1-2 business days).'}
             {driver.status === 'under_review' && 'Your application is being reviewed by our team.'}
             {driver.status === 'rejected' && 'Application not approved. Contact support@flash.co.za'}
+            {driver.status === 'suspended' && 'Account suspended. Contact support@flash.co.za for assistance.'}
           </Text>
         </View>
       )}

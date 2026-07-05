@@ -11,6 +11,9 @@ const STATUS_INFO = {
   under_review: { label: 'Under Review', color: '#8b5cf6', bg: '#f5f3ff' },
   approved: { label: 'Approved ', color: '#16a34a', bg: '#dcfce7' },
   rejected: { label: 'Rejected', color: '#dc2626', bg: '#fee2e2' },
+  // Previously missing — a suspended driver's badge fell back to
+  // STATUS_INFO.pending_documents, actively telling them the wrong thing.
+  suspended: { label: 'Suspended', color: '#dc2626', bg: '#fee2e2' },
 };
 
 export default function DriverProfileScreen() {
