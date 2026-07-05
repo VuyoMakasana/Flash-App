@@ -118,7 +118,7 @@ export default function TrustedDriversScreen({ navigation }) {
           <Ionicons name="people-outline" size={48} color="#d1d5db" />
           <Text style={s.emptyTitle}>No trusted drivers yet</Text>
           <Text style={s.emptyText}>
-            After a great delivery, tap the driver's profile to send a trust request.
+            Drivers you've trusted after a great delivery will show up here.
           </Text>
         </View>
       }
