@@ -32,11 +32,11 @@ const SECTIONS = [
   },
   {
     title: '6. Your Rights Under POPIA',
-    body: 'You have the right to: access your personal data; correct inaccurate data; request deletion of your data; object to how your data is used. To exercise these rights, contact us at privacy@flashdelivery.co.za.',
+    body: 'You have the right to: access your personal data; correct inaccurate data; object to how your data is used; and delete your account. When you delete your account, we anonymize your personal identifying information — your name, email, phone number, and saved addresses are permanently removed or replaced, and you will no longer be able to log in. Records tied to completed orders and payments (including historical delivery addresses on those orders) are retained as required for financial and legal recordkeeping, with your account no longer linked to your identity. To exercise these rights, contact us at privacy@flashdelivery.co.za.',
   },
   {
     title: '7. Data Retention',
-    body: 'We keep your account data for as long as your account is active. Order records are kept for 7 years for accounting and legal purposes. You may request account deletion at any time.',
+    body: 'We keep your account data for as long as your account is active. Order, payment, and return records are retained after account deletion for as long as required for accounting, tax, and legal purposes, in line with South African recordkeeping requirements — these records are not deleted, but are no longer linked to your name or contact details once your account is deleted. You may request account deletion at any time from Settings.',
   },
   {
     title: '8. Security',
