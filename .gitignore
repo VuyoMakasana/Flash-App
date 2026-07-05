@@ -5,6 +5,9 @@
 backend/.env
 flash-user-app/.env
 flash-driver-app/.env
+# Root .env — read automatically by `docker compose` for Postgres/Redis
+# credentials (see .env.example at repo root). Distinct from backend/.env.
+/.env
 
 # ── Node modules ─────────────────────────────────────────────────────────
 node_modules/
