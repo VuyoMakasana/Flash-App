@@ -1,11 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator, Linking,
+  Alert, ActivityIndicator, Linking, AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import driverApi from '../../services/api';
+
+// How long to keep polling the backend after the driver returns to the app
+// before giving up and showing a manual "Check Again" state.
+const CONFIRM_POLL_INTERVAL_MS = 3000;
+const CONFIRM_POLL_MAX_ATTEMPTS = 5;
 
 const PLANS = [
   {
@@ -56,6 +61,18 @@ export default function SubscriptionScreen() {
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState(null);
+  // Which plan we're waiting on backend confirmation for, after the driver
+  // returns from the Paystack checkout browser. Distinct from `purchasing`,
+  // which only covers the initial purchase-request call.
+  const [confirmingPlanId, setConfirmingPlanId] = useState(null);
+
+  // Tracks whether we're currently expecting a foreground return to trigger
+  // a confirmation check — set right before opening the checkout URL, so the
+  // AppState listener (registered once, for the screen's lifetime) knows
+  // whether a background->active transition is actually a "returning from
+  // Paystack" event or just an unrelated app switch.
+  const pendingPlanIdRef = useRef(null);
+  const appStateRef = useRef(AppState.currentState);
 
   useEffect(() => {
     loadSubscription();
@@ -65,12 +82,62 @@ export default function SubscriptionScreen() {
     try {
       const data = await driverApi.subscription.getCurrent();
       setSubscription(data.subscription);
+      return data.subscription;
     } catch (e) {
       console.warn(e.message);
+      return null;
     } finally {
       setLoading(false);
     }
   };
+
+  // Re-checks the real subscription status from the backend rather than
+  // assuming success just because the browser closed and the app regained
+  // focus. Polls a few times (Paystack's webhook can take a few seconds to
+  // land) before settling into a persistent "still confirming" state with a
+  // manual retry — never a false "Plan Activated!", never a false failure.
+  const confirmPurchase = useCallback(async (planId, attempt = 1) => {
+    setConfirmingPlanId(planId);
+    try {
+      const data = await driverApi.subscription.getCurrent();
+      const active = data.subscription;
+      if (active && active.plan_type === planId) {
+        setSubscription(active);
+        setConfirmingPlanId(null);
+        pendingPlanIdRef.current = null;
+        Alert.alert('Plan Activated!', `Your ${planId} plan is now active.`, [
+          { text: 'Start Driving', onPress: () => router.back() },
+        ]);
+        return;
+      }
+    } catch (e) {
+      console.warn('[Subscription] confirmation check failed:', e.message);
+    }
+
+    if (attempt < CONFIRM_POLL_MAX_ATTEMPTS) {
+      setTimeout(() => confirmPurchase(planId, attempt + 1), CONFIRM_POLL_INTERVAL_MS);
+    }
+    // else: leave confirmingPlanId set — the UI shows a persistent
+    // "still confirming" card with a manual "Check Again" button instead of
+    // silently giving up or claiming failure the payment may not have had.
+  }, [router]);
+
+  // Fires when the app returns to foreground after the driver was sent to
+  // the system browser for Paystack checkout — this is the actual signal
+  // we act on, not the Linking.openURL() call itself completing (which only
+  // means the OS handed off to the browser, not that payment happened).
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      const cameToForeground =
+        appStateRef.current.match(/inactive|background/) && nextState === 'active';
+      appStateRef.current = nextState;
+
+      if (cameToForeground && pendingPlanIdRef.current) {
+        confirmPurchase(pendingPlanIdRef.current);
+      }
+    });
+    return () => sub.remove();
+  }, [confirmPurchase]);
 
   const handlePurchase = async (planId) => {
     const plan = PLANS.find(p => p.id === planId);
@@ -91,12 +158,8 @@ export default function SubscriptionScreen() {
                   Alert.alert('Error', 'Could not open the payment page.');
                   return;
                 }
+                pendingPlanIdRef.current = planId;
                 await Linking.openURL(data.authorizationUrl);
-                Alert.alert(
-                  'Complete Your Payment',
-                  'Finish the payment in your browser, then come back here — your plan activates automatically once payment is confirmed.',
-                  [{ text: 'OK', onPress: () => loadSubscription() }],
-                );
               } else {
                 Alert.alert('Payment Failed', data.message || 'Could not start payment.');
               }
@@ -154,6 +217,27 @@ export default function SubscriptionScreen() {
         </View>
       )}
 
+      {/* Payment confirmation in progress — shown after returning from the
+          Paystack browser while we poll the backend for the real status,
+          rather than assuming success just because the browser closed. */}
+      {confirmingPlanId && (
+        <View style={styles.confirmingCard}>
+          <ActivityIndicator color="#f59e0b" size="small" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.confirmingTitle}>Confirming your payment…</Text>
+            <Text style={styles.confirmingDetail}>
+              This can take a few seconds after you finish paying in the browser.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.confirmingRetryBtn}
+            onPress={() => confirmPurchase(confirmingPlanId)}
+          >
+            <Text style={styles.confirmingRetryText}>Check Again</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Plan cards */}
       {PLANS.map(plan => {
         const isActive = subscription?.plan_type === plan.id;
@@ -198,7 +282,7 @@ export default function SubscriptionScreen() {
               <TouchableOpacity
                 style={[styles.planBtn, { backgroundColor: plan.color }]}
                 onPress={() => handlePurchase(plan.id)}
-                disabled={!!purchasing}
+                disabled={!!purchasing || !!confirmingPlanId}
               >
                 {isPurchasing
                   ? <ActivityIndicator color="#fff" size="small" />
@@ -228,6 +312,11 @@ const styles = StyleSheet.create({
   activePlanCard: { marginHorizontal: 16, marginBottom: 16, backgroundColor: '#0d2818', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderColor: '#10b981', borderWidth: 1 },
   activePlanTitle: { color: '#10b981', fontWeight: '700', fontSize: 14 },
   activePlanDetail: { color: '#6b7280', fontSize: 12, marginTop: 3 },
+  confirmingCard: { marginHorizontal: 16, marginBottom: 16, backgroundColor: '#2a1f0d', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderColor: '#f59e0b', borderWidth: 1 },
+  confirmingTitle: { color: '#f59e0b', fontWeight: '700', fontSize: 14 },
+  confirmingDetail: { color: '#9a8459', fontSize: 12, marginTop: 3 },
+  confirmingRetryBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: '#f59e0b' },
+  confirmingRetryText: { color: '#1a1200', fontWeight: '700', fontSize: 12 },
   planCard: { marginHorizontal: 16, marginBottom: 14, backgroundColor: '#1a1a1a', borderRadius: 20, padding: 20, borderWidth: 1, borderColor: '#2a2a2a' },
   planCardActive: { borderColor: '#f59e0b' },
   planCardPopular: { borderColor: '#f59e0b' },
