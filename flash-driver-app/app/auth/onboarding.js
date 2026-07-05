@@ -75,6 +75,16 @@ export default function OnboardingScreen() {
       if (result.canceled || !result.assets?.length) return;
 
       const file = result.assets[0];
+
+      // Backend's multer limit is 10MB (see driverRoutes.js) — checking here
+      // avoids a driver waiting through a full upload attempt on mobile data
+      // just to have the server reject it at the end.
+      const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+      if (file.size && file.size > MAX_FILE_SIZE_BYTES) {
+        Alert.alert('File Too Large', 'Please choose a file under 10MB.');
+        return;
+      }
+
       setUploading(docType);
 
       const formData = new FormData();
