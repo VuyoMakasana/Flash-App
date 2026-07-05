@@ -20,7 +20,8 @@ class Admin extends BaseModel {
       "SELECT * FROM driver_documents WHERE driver_id=$1",
       [driverId],
     );
-    return { driver: driver.rows[0], documents: docs.rows };
+    const { password_hash, ...safeDriver } = driver.rows[0];
+    return { driver: safeDriver, documents: docs.rows };
   }
 
   static async updateDriverStatus(driverId, status) {
