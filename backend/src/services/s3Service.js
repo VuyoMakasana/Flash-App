@@ -14,9 +14,14 @@ cloudinary.config({
 class S3Service {
   // Upload a file buffer to Cloudinary
   async uploadFile(file, folder = 'flash-documents') {
+    // H15 FIX: previously warned and returned {url: null}, which callers
+    // (Driver.uploadDocument) stored directly as driver_documents.file_url —
+    // a driver's KYC upload would appear to succeed while silently storing
+    // nothing, discoverable only by an admin manually opening the document
+    // later. Throwing surfaces the failure immediately to the driver so they
+    // can retry instead of believing their documents are on file.
     if (!process.env.CLOUDINARY_CLOUD_NAME) {
-      console.warn('[Cloudinary] Not configured — skipping upload');
-      return { url: null, key: null };
+      throw new Error('Document storage is not configured. Please contact support.');
     }
 
     return new Promise((resolve, reject) => {
