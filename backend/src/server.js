@@ -37,6 +37,7 @@ const {
   orderLimiter,
 } = require("./middleware/rateLimiter");
 const { corsMiddleware } = require("./middleware/cors");
+const { redisClient } = require("./middleware/cache");
 const setupSocket = require("./socket/socketServer");
 const { reconcilePendingPayments } = require("./services/paymentReconciliationJob");
 
@@ -137,14 +138,44 @@ function createApp() {
   app.use("/api/messages", messagesRoutes);
   app.use("/api/trusted-drivers", trustedDriverRoutes);
 
-// Health check
-  app.get("/health", (req, res) =>
-    res.json({
-      status: "ok",
+// Health check — previously always returned status: "ok" unconditionally,
+// with no actual check of either dependency. That made it useless for real
+// incident response: it would report healthy even with the DB or Redis down.
+  app.get("/health", async (req, res) => {
+    const checks = { database: "unknown", redis: "unknown" };
+    let healthy = true;
+
+    try {
+      await pool.query("SELECT 1");
+      checks.database = "ok";
+    } catch (err) {
+      checks.database = "error";
+      healthy = false;
+    }
+
+    if (!redisClient) {
+      checks.redis = "not_configured";
+    } else {
+      try {
+        await redisClient.ping();
+        checks.redis = "ok";
+      } catch (err) {
+        // Redis backs caching and distributed rate limiting, both of which
+        // already fall back gracefully (cache.js skips itself; rateLimiter.js
+        // falls back to an in-memory store) — its outage degrades
+        // performance but doesn't take the API down, so it doesn't flip
+        // overall health to unhealthy the way a DB failure does.
+        checks.redis = "error";
+      }
+    }
+
+    res.status(healthy ? 200 : 503).json({
+      status: healthy ? "ok" : "unhealthy",
       version: "3.0.0",
       timestamp: new Date().toISOString(),
-    }),
-  );
+      checks,
+    });
+  });
 
   // Operating hours status — used by both apps to show open/closed banner
   app.get("/api/status/hours", (req, res) => {
