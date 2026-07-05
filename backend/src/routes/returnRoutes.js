@@ -1,12 +1,14 @@
 const express = require("express");
 const router = express.Router();
 const { authenticate, requireRole, requireApprovedDriver } = require("../middleware/auth");
+const { validateId } = require("../middleware/validation");
 const ReturnController = require("../controllers/returnController");
 
 router.post(
   "/:orderId",
   authenticate,
   requireRole("user"),
+  validateId,
   ReturnController.requestReturn,
 );
 // requireApprovedDriver was missing here — every other driver-claims-a-job
@@ -20,6 +22,7 @@ router.post(
   authenticate,
   requireRole("driver"),
   requireApprovedDriver,
+  validateId,
   ReturnController.pickupReturn,
 );
 router.get(
@@ -38,6 +41,7 @@ router.post(
   "/:returnId/approve",
   authenticate,
   requireRole("admin"),
+  validateId,
   ReturnController.approveReturn,
 );
 

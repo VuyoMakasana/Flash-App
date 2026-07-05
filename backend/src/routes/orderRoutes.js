@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { authenticate, requireRole } = require("../middleware/auth");
+const { validateId } = require("../middleware/validation");
 const OrderController = require("../controllers/orderController");
 
 router.post(
@@ -15,29 +16,33 @@ router.get(
   requireRole("user"),
   OrderController.getUserOrders,
 );
-router.get("/:orderId", authenticate, OrderController.getOrder);
+router.get("/:orderId", authenticate, validateId, OrderController.getOrder);
 router.put(
   "/:orderId/status",
   authenticate,
   requireRole("driver"),
+  validateId,
   OrderController.updateOrderStatus,
 );
 router.post(
   "/:orderId/return",
   authenticate,
   requireRole("user"),
+  validateId,
   OrderController.requestReturn,
 );
 router.post(
   "/:orderId/select-driver",
   authenticate,
   requireRole("user"),
+  validateId,
   OrderController.selectDriver,
 );
 router.post(
   "/:orderId/cancel",
   authenticate,
   requireRole("user"),
+  validateId,
   OrderController.cancelOrder,
 );
 

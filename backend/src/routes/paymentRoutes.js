@@ -10,6 +10,7 @@
 const express           = require('express');
 const router            = express.Router();
 const { authenticate, requireRole } = require('../middleware/auth');
+const { validateId } = require('../middleware/validation');
 const PaymentController = require('../controllers/paymentController');
 const { otpLimiter, paymentLimiter } = require('../middleware/rateLimiter');
 
@@ -34,6 +35,7 @@ router.get(
   '/status/:orderId',
   authenticate,
   requireRole('user'),
+  validateId,
   PaymentController.getPaymentStatus,
 );
 
@@ -48,6 +50,7 @@ router.delete(
   '/cards/:cardId',
   authenticate,
   requireRole('user'),
+  validateId,
   PaymentController.removeCard,
 );
 
@@ -55,6 +58,7 @@ router.patch(
   '/cards/:cardId/default',
   authenticate,
   requireRole('user'),
+  validateId,
   PaymentController.setDefaultCard,
 );
 

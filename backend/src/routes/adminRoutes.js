@@ -3,6 +3,7 @@
 const express    = require('express');
 const router     = express.Router();
 const { authenticate, requireRole } = require('../middleware/auth');
+const { validateId } = require('../middleware/validation');
 const AdminController = require('../controllers/adminController');
 const { adminLimiter } = require('../middleware/rateLimiter');
 
@@ -22,6 +23,7 @@ router.get(
   '/drivers/:driverId',
   authenticate,
   requireRole('admin'),
+  validateId,
   AdminController.getDriverById,
 );
 
@@ -29,6 +31,7 @@ router.put(
   '/drivers/:driverId/status',
   authenticate,
   requireRole('admin'),
+  validateId,
   AdminController.updateDriverStatus,
 );
 

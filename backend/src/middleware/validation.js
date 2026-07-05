@@ -18,17 +18,24 @@ const validate = (validations) => {
   };
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Route params that end in "Id" but are backed by a free-text VARCHAR
+// column rather than a UUID primary key (e.g. sizingRoutes' :storeId) —
+// skip UUID validation for these so legitimate values aren't rejected.
+const NON_UUID_ID_PARAMS = new Set(["storeId"]);
+
+// Validates every :xxxId / :id route param present on the request, not a
+// fixed list — previously this only checked req.params.id/userId/driverId/
+// orderId, so mounting it on a route with e.g. :requestId, :postId,
+// :productId, :returnId, or :cardId silently validated nothing at all.
 const validateId = (req, res, next) => {
-  const id =
-    req.params.id ||
-    req.params.userId ||
-    req.params.driverId ||
-    req.params.orderId;
-  if (
-    id &&
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-  ) {
-    return res.status(400).json({ error: "Invalid ID format" });
+  for (const [key, value] of Object.entries(req.params)) {
+    const isIdParam = key === "id" || /Id$/.test(key);
+    if (!isIdParam || NON_UUID_ID_PARAMS.has(key)) continue;
+    if (value && !UUID_RE.test(value)) {
+      return res.status(400).json({ error: `Invalid ${key} format` });
+    }
   }
   next();
 };

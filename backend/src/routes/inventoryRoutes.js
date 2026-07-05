@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { authenticate, requireRole } = require("../middleware/auth");
+const { validateId } = require("../middleware/validation");
 const { cache } = require("../middleware/cache");
 const InventoryController = require("../controllers/inventoryController");
 
@@ -10,7 +11,7 @@ const InventoryController = require("../controllers/inventoryController");
 // (stock/price changes show up quickly) against load; admin mutations below
 // also explicitly invalidate it so a change is never masked by a stale hit.
 router.get("/", cache(60), InventoryController.getProducts);
-router.get("/:productId", cache(60), InventoryController.getProduct);
+router.get("/:productId", validateId, cache(60), InventoryController.getProduct);
 router.post(
   "/",
   authenticate,
@@ -21,12 +22,14 @@ router.patch(
   "/:productId/stock",
   authenticate,
   requireRole("admin"),
+  validateId,
   InventoryController.updateStock,
 );
 router.delete(
   "/:productId",
   authenticate,
   requireRole("admin"),
+  validateId,
   InventoryController.deleteProduct,
 );
 

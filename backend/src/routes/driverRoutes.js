@@ -7,6 +7,7 @@ const {
   requireApprovedDriver,
 } = require("../middleware/auth");
 const { locationLimiter } = require("../middleware/rateLimiter");
+const { validateId } = require("../middleware/validation");
 const DriverController = require("../controllers/driverController");
 
 const upload = multer({
@@ -67,6 +68,7 @@ router.post(
   authenticate,
   requireRole("driver"),
   requireApprovedDriver,
+  validateId,
   DriverController.acceptOrder,
 );
 router.post(
@@ -74,6 +76,7 @@ router.post(
   authenticate,
   requireRole("driver"),
   requireApprovedDriver,
+  validateId,
   DriverController.cancelAssignedOrder,
 );
 router.get(
