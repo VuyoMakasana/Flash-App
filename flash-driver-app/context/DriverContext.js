@@ -144,8 +144,11 @@ export const DriverProvider = ({ children }) => {
   const logout = useCallback(async () => {
     await stopBackgroundLocation();
     await AsyncStorage.removeItem(AS_KEYS.activeOrder);
-    // Clear tokens from SecureStore
-    await clearTokens();
+    // driverApi.auth.logout() revokes the refresh token server-side (POST
+    // /auth/logout) before clearing local tokens — previously this called
+    // clearTokens() directly, leaving the refresh_tokens row live
+    // server-side until it expired naturally or the periodic purge job ran.
+    await driverApi.auth.logout();
     // Clear non-sensitive data
     await AsyncStorage.removeItem(AS_KEYS.driver).catch(() => {});
 
