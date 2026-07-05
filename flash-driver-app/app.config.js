@@ -71,13 +71,25 @@ module.exports = () => ({
       'expo-apple-authentication',
       'expo-task-manager',
       'expo-secure-store',
+      // Config plugins required by expo-splash-screen@~56.0.12 and
+      // expo-web-browser@~56.0.5 (both upgraded from long-stale major
+      // versions incompatible with the current expo-modules-core) — the
+      // Expo CLI couldn't auto-add these to a dynamic app.config.js.
+      'expo-splash-screen',
+      'expo-web-browser',
       '@react-native-google-signin/google-signin',
       [
         'expo-build-properties',
         {
           android: {
-            compileSdkVersion: 35,
-            targetSdkVersion: 35,
+            // Bumped from 35 -> 36: the sibling user app's EAS Android build
+            // failed at :app:checkDebugAarMetadata because androidx.browser:1.9.0
+            // and androidx.core:1.17.0/core-ktx:1.17.0 (transitive deps pulled
+            // in after upgrading expo-build-properties to the SDK 56
+            // recommended patch version) require compileSdk >= 36. Applied here
+            // proactively since this app shares the same dependency tree.
+            compileSdkVersion: 36,
+            targetSdkVersion: 36,
           },
           ios: {},
         },
