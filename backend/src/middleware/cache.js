@@ -15,7 +15,14 @@ const cache = (duration = 300) => {
       return next();
     }
 
-    const key = `cache:${req.originalUrl || req.url}`;
+    // Was never wired up anywhere before now, but its cache key was only
+    // req.originalUrl — had this ever been applied to an authenticated,
+    // per-user route (e.g. /users/me), two different users hitting the same
+    // path would have been served each other's cached response. Segregating
+    // by req.userId (present only on authenticated requests, after the
+    // `authenticate` middleware runs) makes this safe to use on any route,
+    // not just the public ones it's wired onto today.
+    const key = `cache:${req.userId ? `user:${req.userId}:` : ""}${req.originalUrl || req.url}`;
 
     try {
       const cachedData = await redisClient.get(key);
