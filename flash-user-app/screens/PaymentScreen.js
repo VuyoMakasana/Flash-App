@@ -16,13 +16,21 @@ const PAYMENT_METHODS = [
 export default function PaymentScreen() {
   const navigation = useNavigation();
   const route      = useRoute();
-  const { orderId, total, requestedDriverId } = route.params || {};
+  const { orderId, total: estimatedTotal, requestedDriverId } = route.params || {};
 
   const [selected, setSelected] = useState('card');
   const [loading,  setLoading]  = useState(false);
   const [savedCards, setSavedCards] = useState([]);
   const [selectedCardId, setSelectedCardId] = useState(null);
   const [useNewCard, setUseNewCard] = useState(false);
+  // The checkout screen's total is a client-side estimate (fleet mode
+  // defaults to R90 same-mall and only learns the real R180 cross-mall fee
+  // after the order is created) — what Paystack actually charges is
+  // order.total from the server. Fetching the confirmed order here so the
+  // amount shown is guaranteed to match the amount charged, not an estimate
+  // that could turn out wrong.
+  const [confirmedOrder, setConfirmedOrder] = useState(null);
+  const total = confirmedOrder ? parseFloat(confirmedOrder.total) : estimatedTotal;
 
   useEffect(() => {
     const loadCards = async () => {
@@ -37,8 +45,21 @@ export default function PaymentScreen() {
       }
     };
 
+    const loadOrder = async () => {
+      if (!orderId) return;
+      try {
+        const data = await api.orders.getOrder(orderId);
+        if (data?.order) setConfirmedOrder(data.order);
+      } catch (_) {
+        // Falls back to the estimated total passed via navigation — payment
+        // itself is still charged server-side against the real order.total
+        // regardless of what this screen manages to display.
+      }
+    };
+
     loadCards();
-  }, []);
+    loadOrder();
+  }, [orderId]);
 
   const goToOrderStatus = async (oid) => {
     try {
@@ -146,6 +167,26 @@ export default function PaymentScreen() {
         <Text style={s.amountLabel}>Order Total</Text>
         <Text style={s.amount}>R{parseFloat(total || 0).toFixed(2)}</Text>
         <Text style={s.orderId}>Order #{orderId?.slice(-8)?.toUpperCase()}</Text>
+
+        {/* Itemized breakdown — sourced from the server-confirmed order once
+            loaded, not the checkout screen's earlier estimate, so nothing
+            shown here can differ from what actually gets charged. */}
+        {confirmedOrder && (
+          <View style={s.breakdown}>
+            <View style={s.breakdownRow}>
+              <Text style={s.breakdownLabel}>Subtotal</Text>
+              <Text style={s.breakdownValue}>R{parseFloat(confirmedOrder.subtotal || 0).toFixed(2)}</Text>
+            </View>
+            <View style={s.breakdownRow}>
+              <Text style={s.breakdownLabel}>Delivery fee</Text>
+              <Text style={s.breakdownValue}>R{parseFloat(confirmedOrder.delivery_fee || 0).toFixed(2)}</Text>
+            </View>
+            <View style={[s.breakdownRow, s.breakdownTotalRow]}>
+              <Text style={s.breakdownTotalLabel}>Total</Text>
+              <Text style={s.breakdownTotalValue}>R{parseFloat(confirmedOrder.total || 0).toFixed(2)}</Text>
+            </View>
+          </View>
+        )}
       </View>
 
       <Text style={s.sectionTitle}>Select Payment Method</Text>
@@ -264,6 +305,13 @@ const s = StyleSheet.create({
   amountLabel:      { color: '#9ca3af', fontWeight: '600' },
   amount:           { color: '#fff', fontSize: 36, fontWeight: '900' },
   orderId:          { color: '#6b7280', fontSize: 12, marginTop: 4 },
+  breakdown:        { width: '100%', marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: '#27272a', gap: 8 },
+  breakdownRow:     { flexDirection: 'row', justifyContent: 'space-between' },
+  breakdownLabel:   { color: '#9ca3af', fontSize: 13 },
+  breakdownValue:   { color: '#d1d5db', fontSize: 13, fontWeight: '600' },
+  breakdownTotalRow:{ marginTop: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#27272a' },
+  breakdownTotalLabel: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  breakdownTotalValue: { color: '#fff', fontSize: 14, fontWeight: '800' },
   sectionTitle:     { fontSize: 18, fontWeight: '800', color: '#111827', marginTop: 4 },
   methodCard:       { backgroundColor: '#fff', borderRadius: 16, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1.5, borderColor: '#e5e7eb', shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, elevation: 2 },
   methodActive:     { backgroundColor: '#0a0a0a', borderColor: '#0a0a0a' },
