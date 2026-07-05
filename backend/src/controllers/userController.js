@@ -64,6 +64,22 @@ class UserController {
         res.status(500).json({ error: "Failed to register push token" });
       }
     }
+
+  // H8 FIX: account deletion had no backend endpoint at all — the client
+  // stub (services/api.js) called DELETE /users/account against a route
+  // that never existed.
+  static async deleteAccount(req, res) {
+    try {
+      await User.deleteAccount(req.userId);
+      res.json({ success: true });
+    } catch (err) {
+      if (err.message === "User not found") {
+        return res.status(404).json({ error: "User not found" });
+      }
+      console.error("[User] deleteAccount error:", err.message);
+      res.status(500).json({ error: "Failed to delete account" });
+    }
+  }
 }
 
 module.exports = UserController;

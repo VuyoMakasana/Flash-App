@@ -24,4 +24,12 @@ router.post(
   UserController.registerPushToken,
 );
 
+// H8 FIX: previously no backend route existed for this at all.
+router.delete(
+  "/account",
+  authenticate,
+  requireRole("user"),
+  UserController.deleteAccount,
+);
+
 module.exports = router;

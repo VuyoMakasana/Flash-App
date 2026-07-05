@@ -1,5 +1,6 @@
 const BaseModel = require("./BaseModel");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 
 class User extends BaseModel {
   static tableName = "users";
@@ -69,6 +70,40 @@ class User extends BaseModel {
       terms_accepted: true,
       terms_accepted_at: new Date(),
     });
+  }
+
+  // H8 FIX: account deletion — anonymizes PII rather than a hard DELETE.
+  // A hard delete would cascade (ON DELETE CASCADE) through orders,
+  // payment_methods, messages, etc., destroying financial/transactional
+  // records that may be needed for accounting, disputes, or tax purposes —
+  // "delete my account" should remove personal data, not the business's
+  // own transaction history. Scrubs name/email/phone/address/social-login
+  // ids/push token, sets an unusable random password hash, and revokes
+  // every refresh token so no existing session can keep acting as this
+  // user (their short-lived access token still expires within 15 minutes
+  // regardless).
+  static async deleteAccount(userId) {
+    const anonymizedEmail = `deleted-${userId}@flash.invalid`;
+    const password_hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
+
+    const result = await this.query(
+      `UPDATE users
+       SET name = 'Deleted User', email = $2, password_hash = $3,
+           phone = NULL, address = NULL, apple_id = NULL, google_id = NULL,
+           push_token = NULL, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id`,
+      [userId, anonymizedEmail, password_hash],
+    );
+
+    if (!result.rows.length) {
+      throw new Error("User not found");
+    }
+
+    await this.query(
+      `UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`,
+      [userId],
+    );
   }
 
   static async getOrders(userId, page = 1, limit = 20) {
