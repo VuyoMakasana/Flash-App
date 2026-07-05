@@ -27,8 +27,13 @@ export default function SignUpScreen({ navigation }) {
 
     setLoading(true);
     try {
+      // H9 FIX: no longer navigate to Terms manually — App.js now renders
+      // the Terms screen as the only route whenever a user is authenticated
+      // but hasn't accepted terms, so this happens automatically and
+      // reliably as soon as register() resolves, rather than racing against
+      // the auth-stack-to-tabs swap that isAuthenticated alone used to
+      // trigger immediately.
       await register(name.trim(), email.trim().toLowerCase(), password, phone.trim() || null);
-      navigation.navigate('Terms');
     } catch (err) {
       Alert.alert('Sign Up Failed', err.message || 'Could not create account.');
     } finally {

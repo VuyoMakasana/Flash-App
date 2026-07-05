@@ -3,8 +3,8 @@ import { View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator } from
 import { Ionicons } from '@expo/vector-icons';
 import { useFlash } from '../context/FlashContext';
 
-export default function TermsAndConditionsScreen({ navigation }) {
-  const { acceptTermsAndAuthenticate } = useFlash();
+export default function TermsAndConditionsScreen() {
+  const { acceptTermsAndAuthenticate, logout } = useFlash();
   const [loading, setLoading] = useState(false);
 
   const handleAccept = async () => {
@@ -52,7 +52,12 @@ export default function TermsAndConditionsScreen({ navigation }) {
               </>
           }
         </Pressable>
-        <Pressable onPress={() => navigation.goBack()}>
+        {/* H9 FIX: this screen is now the only route rendered while a user is
+            authenticated but hasn't accepted terms (see App.js) — there is
+            no previous screen to go back to, and using the app without
+            accepting isn't possible, so declining logs the user out rather
+            than silently no-op'ing on goBack(). */}
+        <Pressable onPress={() => logout()}>
           <Text style={styles.decline}>Decline</Text>
         </Pressable>
       </View>

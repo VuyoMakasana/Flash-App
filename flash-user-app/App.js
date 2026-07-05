@@ -60,6 +60,9 @@ function ShopStack() {
       <Stack.Screen name="OrderStatus" component={OrderStatusScreen} options={{ title: 'Order Status' }} />
       <Stack.Screen name="Tracking"    component={TrackingScreen}    options={{ title: 'Track Order' }} />
       <Stack.Screen name="Chat"        component={ChatScreen}        options={{ title: 'Message Driver' }} />
+      {/* PaymentScreen's "Manage" saved-cards link navigates here — SavedCards
+          otherwise only exists in ProfileStack, a sibling tab it can't reach. */}
+      <Stack.Screen name="SavedCards"  component={SavedCardsScreen}  options={{ title: 'Saved Cards' }} />
     </Stack.Navigator>
   );
 }
@@ -88,6 +91,15 @@ function ProfileStack() {
     <Stack.Navigator screenOptions={headerStyles}>
       <Stack.Screen name="Profile"        component={ProfileScreen}        options={{ title: 'Profile' }} />
       <Stack.Screen name="Orders"         component={OrdersScreen}         options={{ title: 'Orders' }} />
+      {/* OrderStatus/Tracking/Chat are also registered in ShopStack and
+          OrdersStack — OrdersScreen (reused here as Profile > Order History)
+          navigates to all three, and React Navigation only resolves a route
+          name against the current stack's own ancestor chain, not sibling
+          tabs. Without these, tapping an order card or "Track Live" from
+          Profile > Order History silently did nothing. */}
+      <Stack.Screen name="OrderStatus"    component={OrderStatusScreen}    options={{ title: 'Order Status' }} />
+      <Stack.Screen name="Tracking"       component={TrackingScreen}       options={{ title: 'Track Order' }} />
+      <Stack.Screen name="Chat"           component={ChatScreen}           options={{ title: 'Message Driver' }} />
       <Stack.Screen name="SavedCards"     component={SavedCardsScreen}     options={{ title: 'Saved Cards' }} />
       <Stack.Screen name="Sizing"         component={SizingScreen}         options={{ title: 'Size Profile' }} />
       <Stack.Screen name="TrustedDrivers" component={TrustedDriversScreen} options={{ title: 'Trusted Drivers' }} />
@@ -99,17 +111,17 @@ function ProfileStack() {
 
 // AuthStack now includes ForgotPassword and ResetPassword screens.
 // headerShown: false on the stack so each screen controls its own header appearance.
+// H9 FIX: 'Terms' no longer lives here — it's rendered as its own top-level
+// gate in AppNavigator below (see needsTerms), since navigating to it
+// manually from SignUpScreen raced against isAuthenticated flipping true
+// and swapping this whole stack out before the user had a real chance to
+// see it.
 function AuthStack() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Splash"   component={SplashScreen} />
       <Stack.Screen name="Login"    component={LoginScreen} />
       <Stack.Screen name="SignUp"   component={SignUpScreen} />
-      <Stack.Screen
-        name="Terms"
-        component={TermsAndConditionsScreen}
-        options={{ headerShown: true, title: 'Terms & Conditions', ...headerStyles }}
-      />
       {/* Password reset — accessible from Login screen */}
       <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
       <Stack.Screen name="ResetPassword"  component={ResetPasswordScreen} />
@@ -117,8 +129,24 @@ function AuthStack() {
   );
 }
 
+// H9 FIX: rendered instead of the authenticated tabs whenever a logged-in
+// user hasn't accepted terms — the only route in this stack, with no way
+// out except Accept (or Decline, which logs out via TermsAndConditionsScreen).
+function TermsGateStack() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen
+        name="Terms"
+        component={TermsAndConditionsScreen}
+        options={{ headerShown: true, title: 'Terms & Conditions', ...headerStyles }}
+      />
+    </Stack.Navigator>
+  );
+}
+
 function AppNavigator() {
-  const { isAuthenticated, loading, handleSessionExpired } = useFlash();
+  const { isAuthenticated, loading, handleSessionExpired, user } = useFlash();
+  const needsTerms = isAuthenticated && !user?.terms_accepted;
 
   React.useEffect(() => {
     const originalHandler = ErrorUtils.getGlobalHandler();
@@ -142,7 +170,9 @@ function AppNavigator() {
 
   return (
     <NavigationContainer>
-      {isAuthenticated ? (
+      {needsTerms ? (
+        <TermsGateStack />
+      ) : isAuthenticated ? (
         <Tab.Navigator
           screenOptions={({ route }) => ({
             headerShown: false,
