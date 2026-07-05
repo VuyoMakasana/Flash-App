@@ -37,11 +37,25 @@ jest.mock("../../src/services/orderStateMachineService", () => ({
   updateOrderStatus: jest.fn(),
   assignDriver: jest.fn(),
   normalizeState: jest.fn((s) => s),
+  emitOrderUpdate: jest.fn(),
+  notifyOrderStatusChange: jest.fn(async () => {}),
 }));
 
 jest.mock("../../src/services/cashOtpService", () => ({
   generateOtp: jest.fn(),
   verifyOtp: jest.fn(),
+}));
+
+// recordCashCommission/checkCommissionBlock each run several of their own
+// client.query calls (commission-debt insert, wallet upsert, a FOR UPDATE
+// select, and a conditional auto-deduct branch) — mocking at this service
+// boundary avoids needing to replicate that entire internal query sequence
+// just to test confirmCashReceived's own transaction, matching how this file
+// already mocks cashOtpService/fleetIntelligenceService at their boundaries
+// rather than the raw queries underneath them.
+jest.mock("../../src/services/driverCommissionService", () => ({
+  recordCashCommission: jest.fn(),
+  checkCommissionBlock: jest.fn().mockResolvedValue({ blocked: false }),
 }));
 
 jest.mock("../../src/services/fleetIntelligenceService", () => ({
@@ -83,23 +97,25 @@ describe("Production state machine API integration", () => {
     jest.clearAllMocks();
   });
 
+  const ORDER_1_ID = "11111111-1111-1111-1111-111111111111";
+
   test("driver lifecycle update endpoint enforces state machine service", async () => {
     Order.getByIdWithDetails.mockResolvedValue({
-      id: "order-1",
+      id: ORDER_1_ID,
       driver_id: "driver-1",
       status: "driver_assigned",
     });
     updateOrderStatus.mockResolvedValue({ status: "picked_up" });
 
     const res = await request(app)
-      .put("/api/orders/order-1/status")
+      .put(`/api/orders/${ORDER_1_ID}/status`)
       .set("x-user-id", "driver-1")
       .set("x-user-role", "driver")
       .send({ status: "picked_up" });
 
     expect(res.statusCode).toBe(200);
     expect(updateOrderStatus).toHaveBeenCalledWith(
-      "order-1",
+      ORDER_1_ID,
       "picked_up",
       expect.objectContaining({ actorId: "driver-1", actorRole: "driver" }),
     );
@@ -107,21 +123,40 @@ describe("Production state machine API integration", () => {
   });
 
   test("cash OTP send + confirm completes order only after OTP verification", async () => {
-    db.query
-      .mockResolvedValueOnce({
-        rows: [
-          {
+    // sendCashOtp reads the order via the top-level db.query(...).
+    db.query.mockResolvedValueOnce({
+      rows: [
+        {
+          id: "order-cash-1",
+          user_id: "user-1",
+          driver_id: "driver-1",
+          payment_method: "cash",
+          payment_status: "pending_cash",
+          status: "delivered",
+        },
+      ],
+    });
+
+    // confirmCashReceived runs inside its own transaction via db.connect(),
+    // not the top-level db.query — BEGIN / SELECT ... FOR UPDATE / UPDATE /
+    // COMMIT all go through this client instead.
+    db.connect.mockResolvedValueOnce({
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [] }) // BEGIN
+        .mockResolvedValueOnce({
+          rows: [{
             id: "order-cash-1",
-            user_id: "user-1",
             driver_id: "driver-1",
+            user_id: "user-1",
             payment_method: "cash",
             payment_status: "pending_cash",
             status: "delivered",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({ rows: [{ id: "order-cash-1", driver_id: "driver-1", payment_method: "cash", payment_status: "pending_cash", status: "delivered" }] })
-      .mockResolvedValueOnce({ rows: [] });
+          }],
+        }) // SELECT ... FOR UPDATE
+        .mockResolvedValueOnce({ rows: [] }) // UPDATE orders SET payment_status='paid'
+        .mockResolvedValueOnce({ rows: [] }), // COMMIT
+      release: jest.fn(),
+    });
 
     cashOtpService.generateOtp.mockResolvedValue({
       otp: "123456",
@@ -154,12 +189,14 @@ describe("Production state machine API integration", () => {
     );
   });
 
+  const ORDER_2_ID = "22222222-2222-2222-2222-222222222222";
+
   test("customer cancellation after assignment keeps delivery fee mode", async () => {
     db.query
       .mockResolvedValueOnce({
         rows: [
           {
-            id: "order-2",
+            id: ORDER_2_ID,
             user_id: "user-1",
             driver_id: "driver-2",
             status: "driver_assigned",
@@ -172,14 +209,20 @@ describe("Production state machine API integration", () => {
           },
         ],
       })
+      // Late-cancellation penalty insert + cancellation_penalty update — added
+      // to cancelOrder since this test was originally written (25% of the
+      // R90 delivery fee = R22.50 for a driver_assigned/card/paid order).
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] });
+      // order_cancellations insert
+      .mockResolvedValueOnce({ rows: [] })
+      // Final SELECT cancellation_penalty, read back for the response body
+      .mockResolvedValueOnce({ rows: [{ cancellation_penalty: "22.50" }] });
 
-    updateOrderStatus.mockResolvedValue({ status: "cancelled" });
+    updateOrderStatus.mockResolvedValue({ status: "cancelled", user_id: "user-1" });
 
     const res = await request(app)
-      .post("/api/orders/order-2/cancel")
+      .post(`/api/orders/${ORDER_2_ID}/cancel`)
       .set("x-user-id", "user-1")
       .set("x-user-role", "user")
       .send({ reason: "Need to cancel" });
@@ -187,11 +230,14 @@ describe("Production state machine API integration", () => {
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.refundMode).toBe("store_refund_keep_delivery");
+    expect(res.body.cancellationPenalty).toBe(22.5);
   });
+
+  const RETURN_1_ID = "33333333-3333-3333-3333-333333333333";
 
   test("admin return approval creates return order payload", async () => {
     Return.approveReturn.mockResolvedValue({
-      returnId: "ret-1",
+      returnId: RETURN_1_ID,
       status: "approved",
       returnOrder: {
         id: "order-ret-1",
@@ -201,13 +247,13 @@ describe("Production state machine API integration", () => {
     });
 
     const res = await request(app)
-      .post("/api/returns/ret-1/approve")
+      .post(`/api/returns/${RETURN_1_ID}/approve`)
       .set("x-user-id", "admin-1")
       .set("x-user-role", "admin")
       .send({});
 
     expect(res.statusCode).toBe(200);
-    expect(Return.approveReturn).toHaveBeenCalledWith("ret-1", "admin-1");
+    expect(Return.approveReturn).toHaveBeenCalledWith(RETURN_1_ID, "admin-1");
     expect(res.body.success).toBe(true);
     expect(res.body.returnOrder.status).toBe("waiting_for_driver");
   });
