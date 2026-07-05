@@ -18,6 +18,7 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import * as Notifications from 'expo-notifications';
+import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import driverApi, { saveTokens, clearTokens } from '../services/api';
 import {
@@ -180,20 +181,36 @@ export const DriverProvider = ({ children }) => {
 
   // ── Online toggle ─────────────────────────────────────────────────────────
   const setOnline = useCallback(async (online) => {
-    try {
-      await driverApi.driver.setOnline(online);
-      setIsOnlineState(online);
-      setDriver(prev => (prev ? { ...prev, is_online: online } : prev));
+    let lat, lng;
 
-      if (online) {
-        startBackgroundLocation().catch((err) => {
-          console.warn('[DriverContext] BG location start failed:', err.message);
-        });
-      } else {
-        await stopBackgroundLocation();
+    // Flash only operates within Nelson Mandela Bay — the backend rejects
+    // going online from outside the service area, but it needs a fresh
+    // device position to check against, not a possibly-stale/absent one.
+    if (online) {
+      const { status: existingStatus } = await Location.getForegroundPermissionsAsync();
+      let finalStatus = existingStatus;
+      if (finalStatus !== 'granted') {
+        const req = await Location.requestForegroundPermissionsAsync();
+        finalStatus = req.status;
       }
-    } catch (e) {
-      throw e;
+      if (finalStatus !== 'granted') {
+        throw new Error('Location permission is required to go online.');
+      }
+      const position = await Location.getCurrentPositionAsync({});
+      lat = position.coords.latitude;
+      lng = position.coords.longitude;
+    }
+
+    await driverApi.driver.setOnline(online, lat, lng);
+    setIsOnlineState(online);
+    setDriver(prev => (prev ? { ...prev, is_online: online } : prev));
+
+    if (online) {
+      startBackgroundLocation().catch((err) => {
+        console.warn('[DriverContext] BG location start failed:', err.message);
+      });
+    } else {
+      await stopBackgroundLocation();
     }
   }, []);
 

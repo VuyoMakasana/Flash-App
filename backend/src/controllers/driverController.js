@@ -3,6 +3,7 @@
 const Driver = require('../models/Driver');
 const Order = require('../models/Order');
 const { checkDriverSubscriptionAllowed } = require('../services/subscriptionService');
+const { isWithinNelsonMandelaBay, OUTSIDE_SERVICE_AREA_MESSAGE } = require('../utils/geoBoundary');
 const DriverWallet = require('../models/DriverWallet');
 const db = require('../config/database');
 const {
@@ -113,7 +114,7 @@ class DriverController {
   // deliveries are blocked from going online until they clear the debt.
   // ─────────────────────────────────────────────────────────────────────────
   static async setOnlineStatus(req, res) {
-    const { online } = req.body;
+    const { online, lat, lng } = req.body;
 
     if (typeof online === 'undefined') {
       return res.status(400).json({ error: 'online field is required' });
@@ -130,6 +131,15 @@ class DriverController {
             debtAmount: block.debtAmount,
             unpaidDeliveries: block.unpaidDeliveries,
           });
+        }
+
+        // Flash only operates within Nelson Mandela Bay — checked here
+        // (rather than only at registration) so a driver can't go online
+        // from outside the service area on any given day, not just at
+        // signup. Requires the driver app to send its current device
+        // position along with the go-online request.
+        if (!isWithinNelsonMandelaBay(lat, lng)) {
+          return res.status(403).json({ error: OUTSIDE_SERVICE_AREA_MESSAGE });
         }
       }
 

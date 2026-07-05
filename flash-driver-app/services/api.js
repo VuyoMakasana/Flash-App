@@ -180,7 +180,7 @@ const driver = {
     method: 'POST',
     body:   JSON.stringify({ lat, lng, orderId }),
   }),
-  setOnline:      (online) => request('/drivers/online', { method: 'POST', body: JSON.stringify({ online }) }),
+  setOnline:      (online, lat, lng) => request('/drivers/online', { method: 'POST', body: JSON.stringify({ online, lat, lng }) }),
   savePushToken:  (pushToken) => request('/drivers/push-token', {
     method: 'POST',
     body:   JSON.stringify({ push_token: pushToken }),
