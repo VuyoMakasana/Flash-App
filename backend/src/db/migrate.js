@@ -661,6 +661,14 @@ async function migrate() {
       `CREATE INDEX IF NOT EXISTS idx_orders_scheduled ON orders(scheduled_for) WHERE scheduled_for IS NOT NULL`,
       `CREATE INDEX IF NOT EXISTS idx_email_tokens_token ON email_tokens(token)`,
       `CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON email_tokens(user_id, type)`,
+      // Inventory.getProducts() is the highest-traffic read in the app (every
+      // product-listing page load) and had no supporting index at all beyond
+      // the primary key — every call was a full sequential scan + sort.
+      // Two indexes because the query has two shapes: with a category filter
+      // and without. Leading is_active on both matches the WHERE clause both
+      // queries always include.
+      `CREATE INDEX IF NOT EXISTS idx_flash_inventory_active_created ON flash_inventory(is_active, created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_flash_inventory_active_category_created ON flash_inventory(is_active, category, created_at DESC)`,
     ];
 
     for (const idx of indexes) {
