@@ -14,6 +14,7 @@ const pool    = require('../config/database');
 const { getOptional, isProd } = require('../config/env');
 const Payment = require('../models/Payment');
 const Subscription = require('../models/Subscription');
+const RefundService = require('../services/refundService');
 const { autoAssignNearestDriver } = require('../services/fleetIntelligenceService');
 const { updateOrderStatus }       = require('../services/orderStateMachineService');
 const { notifyDriversNewOrder }   = require('../services/notificationService');
@@ -89,6 +90,10 @@ class WebhookController {
         await WebhookController.handleTransferSuccess(event);
       } else if (event.event === 'transfer.failed' || event.event === 'transfer.reversed') {
         await WebhookController.handleTransferFailed(event);
+      } else if (event.event === 'refund.processed') {
+        await WebhookController.handleRefundProcessed(event, io);
+      } else if (event.event === 'refund.failed') {
+        await WebhookController.handleRefundFailed(event, io);
       }
 
       return res.sendStatus(200);
@@ -433,6 +438,67 @@ class WebhookController {
     if (!reference) return;
     await PayoutService.handleFailedPayout(reference);
     console.log(`[Webhook] Transfer failed/reversed ref=${reference}`);
+  }
+
+  // Paystack's `data.transaction` field has been observed in two different
+  // shapes across their own endpoints (confirmed live, test mode): an object
+  // with an `id` on the refund-creation response, but a bare number on the
+  // fetch-by-id response. Since an actual inbound webhook can't be captured
+  // in this environment (no public URL to receive one), this normalizes both
+  // possible shapes rather than assuming either.
+  static extractRefundIds(data) {
+    const refundId = data?.id != null ? String(data.id) : null;
+    let transactionId = null;
+    if (data?.transaction != null) {
+      transactionId = typeof data.transaction === 'object'
+        ? (data.transaction.id != null ? String(data.transaction.id) : null)
+        : String(data.transaction);
+    }
+    return { refundId, transactionId };
+  }
+
+  static async handleRefundProcessed(event, io) {
+    const { refundId, transactionId } = WebhookController.extractRefundIds(event.data);
+    if (!refundId && !transactionId) return;
+
+    const result = await RefundService.finalizeRefund(refundId, transactionId, 'completed', event, event);
+    if (!result || result.alreadyFinalized) return;
+
+    console.log(`[Webhook] Refund confirmed processed orderId=${result.orderId} refundId=${refundId}`);
+
+    if (io) {
+      const orderRow = await pool.query('SELECT user_id FROM orders WHERE id = $1', [result.orderId]);
+      if (orderRow.rows.length) {
+        io.to(`user:${orderRow.rows[0].user_id}`).emit('order_update', {
+          orderId: result.orderId,
+          refundStatus: 'completed',
+          message: 'Your refund has been processed.',
+        });
+      }
+      io.to(`order:${result.orderId}`).emit('order_update', { orderId: result.orderId, refundStatus: 'completed' });
+    }
+  }
+
+  static async handleRefundFailed(event, io) {
+    const { refundId, transactionId } = WebhookController.extractRefundIds(event.data);
+    if (!refundId && !transactionId) return;
+
+    const result = await RefundService.finalizeRefund(refundId, transactionId, 'failed', event, event);
+    if (!result || result.alreadyFinalized) return;
+
+    // A failed refund on a cancelled order means the customer's money did
+    // not actually come back — this needs a human, not a silent retry, so
+    // it's logged loudly and pushed to the admin room rather than just the
+    // customer.
+    console.error(`[Webhook] REFUND FAILED orderId=${result.orderId} refundId=${refundId} — needs manual attention`);
+
+    if (io) {
+      io.to('admin').emit('fleet_alert', {
+        type: 'refund_failed',
+        orderId: result.orderId,
+        message: 'A customer refund failed on Paystack\'s side and needs manual review.',
+      });
+    }
   }
 }
 

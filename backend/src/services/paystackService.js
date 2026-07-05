@@ -279,6 +279,14 @@ class PaystackService {
     return await this.request("POST", "/refund", body);
   }
 
+  // Polling fallback for refund.processed/refund.failed webhooks — mirrors
+  // verifyPayment()'s role for charge.success (webhook-primary, poll as a
+  // safety net in case a webhook is missed). refundId is the Paystack refund
+  // id returned by refundTransaction() (stored as payment_refunds.refund_reference).
+  async fetchRefund(refundId) {
+    return await this.request("GET", `/refund/${encodeURIComponent(refundId)}`);
+  }
+
   // FIX 7: Creates a Paystack transfer recipient for a driver — required before any bank transfer can be initiated
   async createTransferRecipient({ name, accountNumber, bankCode, description = "" }) {
     return await this.request("POST", "/transferrecipient", {

@@ -40,7 +40,11 @@ const {
 const { corsMiddleware } = require("./middleware/cors");
 const { redisClient } = require("./middleware/cache");
 const setupSocket = require("./socket/socketServer");
-const { reconcilePendingPayments } = require("./services/paymentReconciliationJob");
+const {
+  reconcilePendingPayments,
+  reconcileStuckRefunds,
+  reconcileMissingRefunds,
+} = require("./services/paymentReconciliationJob");
 
 // Import routes
 const authRoutes = require("./routes/authRoutes");
@@ -254,6 +258,16 @@ let _io = io;
     } catch (e) {
       console.warn("[Cron] payment reconciliation error:", e.message);
     }
+    try {
+      await reconcileStuckRefunds();
+    } catch (e) {
+      console.warn("[Cron] stuck refund reconciliation error:", e.message);
+    }
+    try {
+      await reconcileMissingRefunds(io);
+    } catch (e) {
+      console.warn("[Cron] missing refund reconciliation error:", e.message);
+    }
   });
 
 /*cron.schedule('0 3 * * *', async () => {
@@ -348,17 +362,44 @@ cron.schedule('30 1 * * *', async () => {
 
       for (const order of stuckOrders.rows) {
         try {
-          // Re-queue through the state machine FIRST: this takes a row lock and
-          // re-validates the order is still driver_assigned/driver_arrived_store,
-          // so a driver's in-flight status update (e.g. just tapped "Picked Up")
-          // can't be clobbered by this cron. If the order has already moved on,
-          // this throws and we skip it entirely below — no penalty, no wallet
-          // change — because the driver did not actually go unavailable.
-          await requeueOrderForDriverSearch(order.id, {
-            actorId: 'system',
-            actorRole: 'system',
-            io: ioInstance,
-          });
+          // Requeue and the driver's pending-wallet reversal now share one
+          // transaction (same externalClient pattern as
+          // orderController.cancelOrder / driverController.cancelAssignedOrder)
+          // — previously these were two separate transactions, so a crash
+          // between them could reverse the driver's pending payout while the
+          // order stayed assigned to a driver who just timed out, or requeue
+          // the order while leaving pending_balance permanently uncorrected.
+          const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
+          const client = await pool.connect();
+          try {
+            await client.query('BEGIN');
+
+            // Re-queue through the state machine FIRST: this takes a row lock
+            // and re-validates the order is still driver_assigned/driver_arrived_store,
+            // so a driver's in-flight status update (e.g. just tapped "Picked Up")
+            // can't be clobbered by this cron. If the order has already moved
+            // on, this throws and the whole transaction rolls back below — no
+            // penalty, no wallet change — because the driver did not actually
+            // go unavailable.
+            await requeueOrderForDriverSearch(
+              order.id,
+              { actorId: 'system', actorRole: 'system' },
+              client,
+            );
+
+            if (payout > 0) {
+              await DriverWallet.reversePending(
+                client, order.driver_id, payout, order.id, 'driver_timeout_reassigned',
+              );
+            }
+
+            await client.query('COMMIT');
+          } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+          } finally {
+            client.release();
+          }
 
           // Penalise the driver — increment cancel count
           await pool.query(
@@ -378,19 +419,9 @@ cron.schedule('30 1 * * *', async () => {
             console.warn(`[Cron] Driver ${order.driver_id} auto-suspended after 5 cancellations`);
           }
 
-          // Reverse the driver's pending wallet credit for this assignment — otherwise
-          // pending_balance is left permanently uncorrected on every stuck-order timeout.
-          // Mirrors driverController.cancelAssignedOrder's voluntary-cancel path.
-          const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
-          if (payout > 0) {
-            await DriverWallet.transaction(async (client) => {
-              await DriverWallet.reversePending(
-                client, order.driver_id, payout, order.id, 'driver_timeout_reassigned',
-              );
-            });
-          }
-
-          // Notify user with a friendlier message than the generic order_update
+          // Notify user with a friendlier message than the generic order_update.
+          // Side effects here only fire after the transaction above has
+          // committed (its own COMMIT/ROLLBACK already resolved above).
           if (ioInstance) {
             ioInstance.to(`user:${order.user_id}`).emit('order_update', {
               orderId: order.id,
