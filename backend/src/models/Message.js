@@ -22,9 +22,18 @@ class Message extends BaseModel {
       throw new Error("Access denied");
     }
 
+    // Defensive cap — a single order's chat is naturally short-lived (tied
+    // to one same-day delivery), so this is not expected to bind in normal
+    // use, but an unbounded SELECT here had no floor against a pathological
+    // volume of messages on one order. Returns the most recent 200,
+    // re-sorted back to chronological order for display.
     const msgs = await this.query(
-      `SELECT id, sender_id, sender_role, content, read_at, created_at
-       FROM messages WHERE order_id=$1 ORDER BY created_at ASC`,
+      `SELECT id, sender_id, sender_role, content, read_at, created_at FROM (
+         SELECT id, sender_id, sender_role, content, read_at, created_at
+         FROM messages WHERE order_id=$1
+         ORDER BY created_at DESC
+         LIMIT 200
+       ) recent ORDER BY created_at ASC`,
       [orderId],
     );
 
