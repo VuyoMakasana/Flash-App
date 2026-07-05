@@ -5,8 +5,29 @@ const OTP_LENGTH = 6;
 const OTP_TTL_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
 
+// H13 FIX: previously fell back to JWT_SECRET (coupling two independent
+// security domains — rotating JWT_SECRET after a compromise would silently
+// change cash-OTP verification too) or, worse, a hardcoded string literal
+// visible to anyone who reads this file, which would let them forge valid
+// cash-collection OTPs. Mirrors paymentCrypto.js's PAYMENT_METHOD_ENCRYPTION_KEY
+// pattern: required independently in production, dev-only fallback with a
+// loud warning.
 function otpSecret() {
-  return process.env.CASH_OTP_SECRET || process.env.JWT_SECRET || "flash-cash-otp-secret";
+  const secret = process.env.CASH_OTP_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "CASH_OTP_SECRET environment variable is required in production. " +
+        "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"",
+      );
+    }
+    console.warn(
+      "[cashOtpService] CASH_OTP_SECRET not set — using insecure dev fallback. " +
+      "Set this variable before going to production.",
+    );
+    return "flash-cash-otp-dev-only-fallback";
+  }
+  return secret;
 }
 
 function createOtpCode() {
