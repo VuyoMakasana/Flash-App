@@ -490,8 +490,14 @@ export default function DriverDashboard() {
               </TouchableOpacity>
             )}
 
-            {/* Status advance button */}
-            {NEXT_STATUS[activeOrder.status] && activeOrder.status !== 'delivered' && (
+            {/* Status advance button — hidden at 'delivered' only for cash
+                orders, where the OTP block below takes over that step. A
+                blanket `!== 'delivered'` here previously hid this button for
+                EVERY order once delivered, including non-cash ones, which
+                have no other way to reach 'completed' — a dead end for the
+                majority of orders. */}
+            {NEXT_STATUS[activeOrder.status] &&
+              !(activeOrder.is_cash_delivery && activeOrder.status === 'delivered') && (
               <TouchableOpacity style={styles.actionBtn} onPress={handleStatusUpdate}>
                 <Text style={styles.actionBtnText}>{NEXT_LABEL[activeOrder.status]}</Text>
               </TouchableOpacity>
