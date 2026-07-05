@@ -91,7 +91,7 @@ export default function FeedScreen({ navigation }) {
       `R${parseFloat(product.price || 0).toFixed(2)}\n\nAdd to cart?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'View Product', onPress: () => navigation.navigate('Home') },
+        { text: 'View Product', onPress: () => navigation.navigate('Shop', { screen: 'Home' }) },
       ]
     );
   };

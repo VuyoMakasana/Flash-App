@@ -153,6 +153,9 @@ const auth = {
 
   acceptTerms: () => request('/auth/user/accept-terms', { method: 'POST' }),
 
+  resendVerification: (email) =>
+    request('/auth/user/resend-verification', { method: 'POST', body: JSON.stringify({ email }) }),
+
   forgotPassword: (email) =>
     request('/auth/user/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
 

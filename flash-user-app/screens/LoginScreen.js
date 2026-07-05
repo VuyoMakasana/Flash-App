@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFlash } from '../context/FlashContext';
+import api from '../services/api';
 import { GoogleSignin, GoogleSigninButton, statusCodes } from '@react-native-google-signin/google-signin';
 
 // expo-apple-authentication: only available on iOS 13+
@@ -52,11 +53,24 @@ export default function LoginScreen({ navigation }) {
     } catch (err) {
       const msg = err.message || 'Login failed';
       if (msg.includes('EMAIL_NOT_VERIFIED') || msg.includes('verify your email')) {
+        // No "ResendVerification" screen exists in this app — resend the
+        // email directly from here instead of navigating to a route that
+        // was never registered anywhere, which silently did nothing.
         Alert.alert(
           'Email Not Verified',
           'Please check your inbox and verify your email address before logging in.',
           [
-            { text: 'Resend Email', onPress: () => navigation.navigate('ResendVerification', { email: email.trim().toLowerCase() }) },
+            {
+              text: 'Resend Email',
+              onPress: async () => {
+                try {
+                  await api.auth.resendVerification(email.trim().toLowerCase());
+                  Alert.alert('Email Sent', 'Check your inbox for a new verification link.');
+                } catch (resendErr) {
+                  Alert.alert('Error', resendErr.message || 'Could not resend verification email.');
+                }
+              },
+            },
             { text: 'OK', style: 'cancel' },
           ]
         );
