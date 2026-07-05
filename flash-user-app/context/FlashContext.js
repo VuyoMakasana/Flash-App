@@ -174,16 +174,20 @@ export const FlashProvider = ({ children }) => {
     // cleared SecureStore locally, leaving the refresh_tokens row live
     // server-side until it expired naturally or the periodic purge job ran.
     await api.auth.logout();
-    // Clear non-sensitive AsyncStorage data
+    // Clear non-sensitive AsyncStorage data. The cart is intentionally left
+    // in place — it's already namespaced per user id (cartKey(user.id)), so
+    // there's no leak risk in keeping it, and deleting it here previously
+    // meant a user with items in their cart who tapped Logout (a plain "Are
+    // you sure?" alert with no mention of the cart) lost it permanently,
+    // with nothing waiting for them on their next login.
     await AsyncStorage.multiRemove([AS_KEYS.user]).catch(() => {});
-    if (user?.id) await AsyncStorage.removeItem(cartKey(user.id)).catch(() => {});
     await AsyncStorage.removeItem('FLASH_CHECKOUT_DRAFT').catch(() => {});
 
     setToken(null);
     setUser(null);
     setOrders([]);
     setCart([]);
-  }, [user?.id]);
+  }, []);
 
   const handleSessionExpired = useCallback(async () => {
     await clearTokens();

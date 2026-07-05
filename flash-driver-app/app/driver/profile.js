@@ -129,10 +129,15 @@ export default function DriverProfileScreen() {
       <View style={styles.card}>
         <View style={styles.cardHeaderRow}>
           <Text style={styles.cardTitle}>Documents</Text>
-          <Pressable onPress={() => router.push('/auth/onboarding')}>
-            <Text style={styles.manageLink}>Manage →</Text>
-          </Pressable>
         </View>
+        {/* "Manage →" (pushed to /auth/onboarding) removed — _layout.js's
+            auth guard immediately bounces any approved driver straight back
+            to /driver/dashboard on entering an /auth/* route, and only
+            approved drivers can ever reach this screen in the first place.
+            The link was unusable for 100% of the population that could see
+            it. Document status is still shown below; re-upload/replacement
+            for an already-approved driver is a real feature gap, not
+            something this link ever actually provided. */}
         {documents.length === 0
           ? <Text style={styles.noDocsText}>No documents uploaded yet</Text>
           : documents.map(doc => (

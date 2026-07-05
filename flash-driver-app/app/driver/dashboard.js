@@ -132,7 +132,11 @@ export default function DriverDashboard() {
     });
 
     socket.on('join_driver_pool_denied', ({ reason }) => {
-      Alert.alert('Account Pending', reason);
+      // Title was hardcoded to "Account Pending" regardless of the actual
+      // reason — a suspended or rejected driver denied pool access saw a
+      // mismatched header talking about pending status.
+      const title = /suspend/i.test(reason) ? 'Account Suspended' : 'Account Pending';
+      Alert.alert(title, reason);
     });
 
     socket.on('new_order_available', () => {
@@ -246,7 +250,13 @@ export default function DriverDashboard() {
       setAvailableOrders(prev => prev.filter(o => o.id !== orderId));
       Alert.alert('Order Accepted!', `Collect from:\n${data.order.pickup_address}`);
     } catch (e) {
+      // Another driver likely took this order first (backend returns a 409
+      // for that race). The card previously stayed in the list with no
+      // refresh, so a driver could tap Accept on an already-taken order
+      // repeatedly and get the same accurate-but-unhelpful error each time.
+      setAvailableOrders(prev => prev.filter(o => o.id !== orderId));
       Alert.alert('Failed', e.message);
+      fetchAvailableOrders();
     }
   };
 
