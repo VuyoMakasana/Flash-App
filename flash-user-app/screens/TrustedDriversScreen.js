@@ -62,14 +62,22 @@ export default function TrustedDriversScreen({ navigation }) {
       </View>
 
       <View style={{ flex: 1 }}>
-        <Text style={s.name}>{d.name}</Text>
+        <View style={s.nameRow}>
+          <Text style={s.name}>{d.name}</Text>
+          {d.driver_verification_status === 'approved' && (
+            <View style={s.verifiedBadge}>
+              <Ionicons name="checkmark-circle" size={12} color="#10b981" />
+              <Text style={s.verifiedBadgeText}>Verified</Text>
+            </View>
+          )}
+        </View>
         <View style={s.metaRow}>
           <Ionicons name="star" size={12} color="#f59e0b" />
           <Text style={s.meta}>{parseFloat(d.rating).toFixed(1)}</Text>
           <Text style={s.metaSep}>·</Text>
           <Text style={s.meta}>{d.total_deliveries} trips</Text>
           <Text style={s.metaSep}>·</Text>
-          <Text style={s.meta}>{d.vehicle_type}</Text>
+          <Text style={s.meta}>{d.vehicle_type}{d.vehicle_plate ? ` (${d.vehicle_plate})` : ''}</Text>
         </View>
 
         {/* Status */}
@@ -137,7 +145,10 @@ const s = StyleSheet.create({
   avatar:     { width: 52, height: 52, borderRadius: 16, backgroundColor: '#e5e7eb' },
   avatarFallback: { width: 52, height: 52, borderRadius: 16, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
   onlineDot:  { position: 'absolute', bottom: 2, right: 2, width: 12, height: 12, borderRadius: 6, borderWidth: 2, borderColor: '#fff' },
+  nameRow:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
   name:     { fontWeight: '800', color: '#111827', fontSize: 15 },
+  verifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#ecfdf5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
+  verifiedBadgeText: { color: '#10b981', fontSize: 10, fontWeight: '700' },
   metaRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
   meta:     { color: '#6b7280', fontSize: 12 },
   metaSep:  { color: '#d1d5db', fontSize: 12 },

@@ -179,6 +179,7 @@ const orders = {
   cancel:      (id)             => request(`/orders/${id}/cancel`, { method: 'POST' }),
   return:      (id, body)       => request(`/orders/${id}/return`, { method: 'POST', body: JSON.stringify(body) }),
   selectDriver:(id, driverId)   => request(`/orders/${id}/select-driver`, { method: 'POST', body: JSON.stringify({ driverId }) }),
+  rateDriver:  (id, rating, comment) => request(`/orders/${id}/rate-driver`, { method: 'POST', body: JSON.stringify({ rating, comment }) }),
 };
 
 // ── Payments ──────────────────────────────────────────────────────────────

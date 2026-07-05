@@ -323,7 +323,7 @@ class Driver extends BaseModel {
     if (!lat || !lng) {
       const result = await this.query(
         `
-        SELECT id, name, rating, total_deliveries, vehicle_type,
+        SELECT id, name, rating, total_deliveries, vehicle_type, vehicle_plate,
                profile_photo_url, is_online,
                NULL as distance_km,
                EXISTS(
@@ -341,7 +341,7 @@ class Driver extends BaseModel {
     }
 
     const sql = `
-      SELECT d.id, d.name, d.rating, d.total_deliveries, d.vehicle_type,
+      SELECT d.id, d.name, d.rating, d.total_deliveries, d.vehicle_type, d.vehicle_plate,
              d.profile_photo_url, d.is_online,
              ROUND((6371 * acos(
                cos(radians($1)) * cos(radians(d.current_lat)) *

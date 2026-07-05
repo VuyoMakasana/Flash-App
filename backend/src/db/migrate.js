@@ -741,6 +741,17 @@ async function migrate() {
     throw err;
   } finally {
     client9.release();
+  }
+
+  // ── v10 ────────────────────────────────────────────────────────────────────
+  const client10 = await pool.connect();
+  try {
+    await migrateV10(client10);
+  } catch (err) {
+    console.error('Migration v10 failed:', err.message);
+    throw err;
+  } finally {
+    client10.release();
     await pool.end();
   }
 
@@ -802,4 +813,38 @@ async function migrateV9(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9 };
+async function migrateV10(client) {
+  await client.query('BEGIN');
+  try {
+    // Item 4 (Phase 4 audit): drivers.rating had no submission flow at all —
+    // it was a static DEFAULT 5.00 column nothing ever wrote to. This table
+    // stores one rating per completed order; the driver's aggregate rating
+    // is recomputed from these rows (see Rating.js) rather than being a
+    // manually-set field.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS driver_ratings (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id   UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        driver_id  UUID NOT NULL REFERENCES drivers(id) ON DELETE CASCADE,
+        rating     SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+        comment    TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (order_id)
+      )
+    `);
+
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_driver_ratings_driver_id ON driver_ratings(driver_id)`
+    );
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v10 completed: driver_ratings table');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v10 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10 };

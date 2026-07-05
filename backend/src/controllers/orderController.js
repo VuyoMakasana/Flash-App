@@ -9,6 +9,7 @@
 //   to 400 so the user app can surface a meaningful error message.
 
 const Order = require('../models/Order');
+const Rating = require('../models/Rating');
 const db = require('../config/database');
 const DriverWallet = require('../models/DriverWallet');
 const {
@@ -324,7 +325,8 @@ class OrderController {
       }
 
       const driverResult = await Order.query(
-        `SELECT id, name, phone, vehicle_type, rating, is_online, status,
+        `SELECT id, name, phone, vehicle_type, vehicle_plate, rating,
+                total_deliveries, profile_photo_url, is_online, status,
                 EXISTS(
                   SELECT 1 FROM orders o2
                   WHERE o2.driver_id = drivers.id
@@ -361,6 +363,9 @@ class OrderController {
             name:         driver.name,
             phone:        driver.phone,
             vehicle_type: driver.vehicle_type,
+            vehicle_plate: driver.vehicle_plate,
+            total_deliveries: driver.total_deliveries,
+            profile_photo_url: driver.profile_photo_url,
             rating:       driver.rating,
           },
         });
@@ -372,6 +377,9 @@ class OrderController {
             name:         driver.name,
             phone:        driver.phone,
             vehicle_type: driver.vehicle_type,
+            vehicle_plate: driver.vehicle_plate,
+            total_deliveries: driver.total_deliveries,
+            profile_photo_url: driver.profile_photo_url,
             rating:       driver.rating,
           },
           timestamp: new Date().toISOString(),
@@ -387,12 +395,39 @@ class OrderController {
           name:         driver.name,
           phone:        driver.phone,
           vehicle_type: driver.vehicle_type,
+          vehicle_plate: driver.vehicle_plate,
+          total_deliveries: driver.total_deliveries,
+          profile_photo_url: driver.profile_photo_url,
           rating:       driver.rating,
         },
       });
     } catch (err) {
       console.error('[Order] Driver selection error:', err.message);
       return res.status(400).json({ error: err.message || 'Failed to assign selected driver' });
+    }
+  }
+
+  static async rateDriver(req, res) {
+    const { orderId } = req.params;
+    const { rating, comment } = req.body;
+
+    try {
+      const orderResult = await db.query(
+        `SELECT driver_id FROM orders WHERE id = $1 AND user_id = $2`,
+        [orderId, req.userId],
+      );
+      if (!orderResult.rows.length) {
+        return res.status(404).json({ error: 'Order not found' });
+      }
+      const driverId = orderResult.rows[0].driver_id;
+      if (!driverId) {
+        return res.status(400).json({ error: 'This order has no assigned driver to rate' });
+      }
+
+      const result = await Rating.submitRating(orderId, req.userId, driverId, rating, comment);
+      return res.status(201).json({ success: true, ...result });
+    } catch (err) {
+      return res.status(400).json({ error: err.message || 'Failed to submit rating' });
     }
   }
 }

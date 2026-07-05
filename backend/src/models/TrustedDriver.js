@@ -18,7 +18,8 @@ class TrustedDriver extends BaseModel {
     const result = await this.query(
       `SELECT td.id, td.status, td.created_at,
               d.id as driver_id, d.name, d.rating, d.total_deliveries,
-              d.vehicle_type, d.profile_photo_url, d.is_online,
+              d.vehicle_type, d.vehicle_plate, d.profile_photo_url, d.is_online,
+              d.status as driver_verification_status,
               EXISTS(
                 SELECT 1 FROM orders o
                 WHERE o.driver_id = d.id

@@ -94,10 +94,12 @@ export default function TrackingScreen() {
           setDriver({
             name: data.order.driver_name,
             vehicle: data.order.driver_vehicle,
+            plate: data.order.driver_plate,
             phone: data.order.driver_phone,
             rating: data.order.driver_rating,
             photo: data.order.driver_photo,
             total_deliveries: data.order.driver_total_deliveries || 0,
+            verified: data.order.driver_verification_status === 'approved',
           });
         }
         if (data.order.driver_lat && data.order.driver_lng) {
@@ -176,10 +178,12 @@ export default function TrackingScreen() {
                 setDriver({
                   name:    data.order.driver_name,
                   vehicle: data.order.driver_vehicle,
+                  plate:   data.order.driver_plate,
                   phone:   data.order.driver_phone,
                   rating:  data.order.driver_rating,
                   photo:   data.order.driver_photo,
                   total_deliveries: data.order.driver_total_deliveries || 0,
+                  verified: data.order.driver_verification_status === 'approved',
                 });
               }
             }
@@ -297,9 +301,17 @@ export default function TrackingScreen() {
               </View>
             )}
             <View style={{ flex: 1 }}>
-              <Text style={styles.driverName}>{driver.name}</Text>
+              <View style={styles.driverNameRow}>
+                <Text style={styles.driverName}>{driver.name}</Text>
+                {driver.verified && (
+                  <View style={styles.verifiedBadge}>
+                    <Ionicons name="checkmark-circle" size={13} color="#10b981" />
+                    <Text style={styles.verifiedBadgeText}>Verified</Text>
+                  </View>
+                )}
+              </View>
               <Text style={styles.driverMeta}>
-                {driver.vehicle}  •  {parseFloat(driver.rating || 5).toFixed(1)}★  •  {driver.total_deliveries || 0} trips
+                {driver.vehicle}{driver.plate ? ` (${driver.plate})` : ''}  •  {parseFloat(driver.rating || 5).toFixed(1)}★  •  {driver.total_deliveries || 0} trips
               </Text>
             </View>
             {/* ── Part 2: Call button (masked dialler) ─────────────────── */}
@@ -402,8 +414,11 @@ const styles = StyleSheet.create({
   driverAvatarImg: {
     width: 46, height: 46, borderRadius: 14, backgroundColor: '#e5e7eb',
   },
+  driverNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   driverName:    { fontWeight: '800', color: '#111827' },
   driverMeta:    { color: '#6b7280', fontSize: 12, marginTop: 2 },
+  verifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#ecfdf5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
+  verifiedBadgeText: { color: '#10b981', fontSize: 10, fontWeight: '700' },
   iconActionBtn: {
     width: 40, height: 40, borderRadius: 12,
     backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center',

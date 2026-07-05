@@ -295,11 +295,16 @@ export default function CheckoutScreen() {
                       </View>
                     )}
 
-                    <Text style={[styles.driverName, active && styles.driverNameActive]} numberOfLines={1}>
-                      {d.name}
-                    </Text>
+                    <View style={styles.driverNameRow}>
+                      <Text style={[styles.driverName, active && styles.driverNameActive]} numberOfLines={1}>
+                        {d.name}
+                      </Text>
+                      {/* Every driver in this list is already approved (see
+                          Driver.getNearby's WHERE status = 'approved') */}
+                      <Ionicons name="checkmark-circle" size={12} color={active ? '#a7f3d0' : '#10b981'} />
+                    </View>
                     <Text style={[styles.driverMeta, active && styles.driverMetaActive]}>
-                      {d.vehicle_type}  •  {d.distance_km ? `${d.distance_km} km` : 'nearby'}
+                      {d.vehicle_type}{d.vehicle_plate ? ` (${d.vehicle_plate})` : ''}  •  {d.distance_km ? `${d.distance_km} km` : 'nearby'}
                     </Text>
 
                     {/* Rating + deliveries */}
@@ -425,6 +430,7 @@ const styles = StyleSheet.create({
   driverBusy:       { opacity: 0.7 },
   driverImg:        { width: 48, height: 48, borderRadius: 12, backgroundColor: '#e5e7eb', marginBottom: 4 },
   driverImgPlaceholder: { alignItems: 'center', justifyContent: 'center' },
+  driverNameRow:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
   driverName:       { fontWeight: '800', color: '#111827', fontSize: 13 },
   driverNameActive: { color: '#fff' },
   driverMeta:       { color: '#6b7280', fontSize: 11 },

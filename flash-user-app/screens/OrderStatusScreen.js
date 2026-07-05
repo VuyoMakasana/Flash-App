@@ -40,6 +40,9 @@ export default function OrderStatusScreen() {
   const [order,     setOrder]     = useState(routeOrder || null);
   const [loading,   setLoading]   = useState(!routeOrder && !!orderId);
   const [returning, setReturning] = useState(false);
+  const [ratingValue, setRatingValue]         = useState(0);
+  const [submittingRating, setSubmittingRating] = useState(false);
+  const [ratingSubmitted, setRatingSubmitted]   = useState(false);
 
   // If we were only passed an orderId (e.g. from PaymentScreen fallback), fetch the full order
   useEffect(() => {
@@ -107,6 +110,23 @@ export default function OrderStatusScreen() {
         },
       },
     ]);
+  };
+
+  const handleSubmitRating = async () => {
+    if (!ratingValue) {
+      Alert.alert('Pick a rating', 'Tap a star to rate your driver.');
+      return;
+    }
+    setSubmittingRating(true);
+    try {
+      await api.orders.rateDriver(order.id, ratingValue);
+      setRatingSubmitted(true);
+    } catch (e) {
+      if (e.message === 'SESSION_EXPIRED') return;
+      Alert.alert('Error', e.message || 'Could not submit rating.');
+    } finally {
+      setSubmittingRating(false);
+    }
   };
 
   if (loading) {
@@ -227,6 +247,36 @@ export default function OrderStatusScreen() {
         ))}
       </View>
 
+      {/* Rate your driver — only shown once, right after delivery completes */}
+      {order.status === 'completed' && order.driver_id && !order.has_rating && !ratingSubmitted && (
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Rate your driver</Text>
+          <View style={styles.starRow}>
+            {[1, 2, 3, 4, 5].map((star) => (
+              <Pressable key={star} onPress={() => setRatingValue(star)} hitSlop={8}>
+                <Ionicons
+                  name={star <= ratingValue ? 'star' : 'star-outline'}
+                  size={32}
+                  color="#f59e0b"
+                />
+              </Pressable>
+            ))}
+          </View>
+          <Pressable style={styles.submitRatingBtn} onPress={handleSubmitRating} disabled={submittingRating}>
+            {submittingRating
+              ? <ActivityIndicator color="#fff" size="small" />
+              : <Text style={styles.submitRatingText}>Submit Rating</Text>
+            }
+          </Pressable>
+        </View>
+      )}
+      {order.status === 'completed' && (order.has_rating || ratingSubmitted) && (
+        <View style={styles.ratingThanksBanner}>
+          <Ionicons name="checkmark-circle" size={16} color="#10b981" />
+          <Text style={styles.ratingThanksText}>Thanks for rating your driver!</Text>
+        </View>
+      )}
+
       {/* Return */}
       {order.status === 'completed' && !order.return_requested && (
         <Pressable style={styles.returnBtn} onPress={handleReturn} disabled={returning}>
@@ -291,6 +341,11 @@ const styles = StyleSheet.create({
   itemPrice: { fontWeight: '800', color: '#0a0a0a' },
   returnBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: '#ef4444', paddingVertical: 14, borderRadius: 14 },
   returnText: { color: '#ef4444', fontWeight: '700' },
+  starRow: { flexDirection: 'row', gap: 8, justifyContent: 'center' },
+  submitRatingBtn: { backgroundColor: '#0a0a0a', borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  submitRatingText: { color: '#fff', fontWeight: '700' },
+  ratingThanksBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#ecfdf5', borderRadius: 12, padding: 14 },
+  ratingThanksText: { color: '#10b981', fontWeight: '600', fontSize: 13 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     refundBanner: { flexDirection: 'row', gap: 10, backgroundColor: '#0d2818', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#10b981' },
     refundTitle: { color: '#10b981', fontWeight: '700', marginBottom: 4 },

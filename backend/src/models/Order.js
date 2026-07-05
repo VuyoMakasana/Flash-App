@@ -234,9 +234,12 @@ class Order extends BaseModel {
     const sql = `
       SELECT o.*,
              d.name as driver_name, d.phone as driver_phone,
-             d.vehicle_type as driver_vehicle, d.profile_photo_url as driver_photo,
+             d.vehicle_type as driver_vehicle, d.vehicle_plate as driver_plate,
+             d.profile_photo_url as driver_photo,
              d.rating as driver_rating, d.total_deliveries as driver_total_deliveries,
+             d.status as driver_verification_status,
              d.current_lat as driver_lat, d.current_lng as driver_lng,
+             EXISTS(SELECT 1 FROM driver_ratings dr WHERE dr.order_id = o.id) as has_rating,
              json_agg(json_build_object(
                'id', oi.id, 'product_name', oi.product_name, 'size', oi.size,
                'quantity', oi.quantity, 'total_price', oi.total_price

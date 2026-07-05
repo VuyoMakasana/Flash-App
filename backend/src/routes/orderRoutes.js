@@ -45,5 +45,12 @@ router.post(
   validateId,
   OrderController.cancelOrder,
 );
+router.post(
+  "/:orderId/rate-driver",
+  authenticate,
+  requireRole("user"),
+  validateId,
+  OrderController.rateDriver,
+);
 
 module.exports = router;
