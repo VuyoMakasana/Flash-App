@@ -36,10 +36,16 @@ class Return extends BaseModel {
 
   static async pickupReturn(returnId, driverId, io) {
     return await this.transaction(async (client) => {
+      // H3 FIX: was missing FOR UPDATE, unlike approveReturn's identical
+      // pattern below — two concurrent calls (e.g. a retried request from a
+      // flaky driver connection) could both pass this check before either
+      // committed, both proceeding to insert a store_credits row and
+      // double-issue store credit for one return.
       const returnResult = await client.query(
         `SELECT rr.*, o.subtotal, o.user_id FROM return_requests rr
          JOIN orders o ON o.id = rr.order_id
-         WHERE rr.id=$1 AND rr.status='requested'`,
+         WHERE rr.id=$1 AND rr.status='requested'
+         FOR UPDATE OF rr`,
         [returnId],
       );
 

@@ -134,13 +134,18 @@ class TrustedDriver extends BaseModel {
     const driverRecord = driver.rows[0];
     if (driverRecord.push_token) {
       try {
-        const { sendPushNotification } = require('../services/pushNotificationService');
-        await sendPushNotification(
-          driverRecord.push_token,
-          'New Trust Request',
-          'A customer wants to add you as a trusted driver',
-          { type: 'trust_request', requestId: row.id },
-        );
+        // H4 FIX: pushNotificationService.js only ever exported
+        // sendDriverPushNotification — this destructure always resolved to
+        // undefined, so every call here threw and was silently swallowed
+        // below. notificationService.js is the correctly-wired service used
+        // everywhere else in the codebase.
+        const { sendPushNotification } = require('../services/notificationService');
+        await sendPushNotification({
+          tokens: driverRecord.push_token,
+          title: 'New Trust Request',
+          body: 'A customer wants to add you as a trusted driver',
+          data: { type: 'trust_request', requestId: row.id },
+        });
       } catch (pushErr) {
         console.warn('[TrustedDriver] Push notification failed:', pushErr.message);
       }
