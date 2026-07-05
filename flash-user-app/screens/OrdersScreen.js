@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -19,11 +19,23 @@ const STATUS_COLOR = {
 
 export default function OrdersScreen() {
   const navigation = useNavigation();
-  const { orders, fetchOrders, loading } = useFlash();
+  const { orders, fetchOrders } = useFlash();
+  // FlashContext's `loading` flag only covers initial app hydration (reading
+  // stored tokens on launch) — by the time this screen mounts, that's
+  // already false, so using it here let the empty state flash briefly
+  // before fetchOrders()'s response actually arrived. This tracks the
+  // fetch itself instead.
+  const [ordersLoading, setOrdersLoading] = useState(true);
 
-  useEffect(() => { fetchOrders(); }, []);
+  useEffect(() => {
+    (async () => {
+      setOrdersLoading(true);
+      await fetchOrders();
+      setOrdersLoading(false);
+    })();
+  }, []);
 
-  if (loading) {
+  if (ordersLoading) {
     return <View style={styles.center}><ActivityIndicator size="large" color="#0a0a0a" /></View>;
   }
 
