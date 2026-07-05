@@ -6,6 +6,7 @@ class TrustedDriverController {
       const trustedDrivers = await TrustedDriver.getTrustedDrivers(req.userId);
       res.json({ trustedDrivers });
     } catch (err) {
+      console.error("[TrustedDriver] getTrustedDrivers error:", err.message);
       res.status(500).json({ error: "Failed to fetch trusted drivers" });
     }
   }
@@ -15,6 +16,7 @@ class TrustedDriverController {
       const pending = await TrustedDriver.getPendingRequests(req.userId);
       res.json({ pending });
     } catch (err) {
+      console.error("[TrustedDriver] getPendingRequests error:", err.message);
       res.status(500).json({ error: "Failed to fetch pending requests" });
     }
   }
@@ -34,6 +36,7 @@ class TrustedDriverController {
       if (err.message === "Driver not found") {
         return res.status(404).json({ error: "Driver not found" });
       }
+      console.error("[TrustedDriver] sendTrustRequest error:", err.message);
       res.status(500).json({ error: "Failed to send trust request" });
     }
   }
@@ -44,6 +47,7 @@ class TrustedDriverController {
       await TrustedDriver.removeTrustedDriver(req.userId, driverId);
       res.json({ success: true });
     } catch (err) {
+      console.error("[TrustedDriver] removeTrustedDriver error:", err.message);
       res.status(500).json({ error: "Failed to remove trusted driver" });
     }
   }
@@ -53,6 +57,7 @@ class TrustedDriverController {
       const requests = await TrustedDriver.getDriverRequests(req.userId);
       res.json({ requests });
     } catch (err) {
+      console.error("[TrustedDriver] getDriverRequests error:", err.message);
       res.status(500).json({ error: "Failed to fetch requests" });
     }
   }
@@ -80,6 +85,7 @@ class TrustedDriverController {
       if (err.message === "Request not found") {
         return res.status(404).json({ error: "Request not found" });
       }
+      console.error("[TrustedDriver] respondToRequest error:", err.message);
       res.status(500).json({ error: "Failed to respond to request" });
     }
   }
@@ -90,6 +96,7 @@ class TrustedDriverController {
       await TrustedDriver.removeSelf(req.userId, userId);
       res.json({ success: true });
     } catch (err) {
+      console.error("[TrustedDriver] removeSelf error:", err.message);
       res.status(500).json({ error: "Failed to remove self" });
     }
   }
@@ -106,6 +113,7 @@ class TrustedDriverController {
       }
       res.json({ driver });
     } catch (err) {
+      console.error("[TrustedDriver] checkDriverStatus error:", err.message);
       res.status(500).json({ error: "Failed to check driver status" });
     }
   }

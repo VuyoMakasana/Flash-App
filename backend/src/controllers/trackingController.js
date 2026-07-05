@@ -14,6 +14,7 @@ class TrackingController {
       }
       res.json(location);
     } catch (err) {
+      console.error("[Tracking] getOrderLocation error:", err.message);
       res.status(500).json({ error: "Failed to fetch location" });
     }
   }

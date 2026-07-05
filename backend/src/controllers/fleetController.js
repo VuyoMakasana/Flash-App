@@ -9,6 +9,7 @@ class FleetController {
       const clusters = await Fleet.getClusters();
       res.json({ clusters });
     } catch (err) {
+      console.error("[Fleet] getClusters error:", err.message);
       res.status(500).json({ error: "Failed to fetch clusters" });
     }
   }

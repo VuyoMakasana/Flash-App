@@ -6,6 +6,7 @@ class TrendsController {
       const trends = await Trends.getCityTrends();
       res.json({ trends });
     } catch (err) {
+      console.error("[Trends] getCityTrends error:", err.message);
       res.status(500).json({ error: "Failed to fetch city trends" });
     }
   }
@@ -16,6 +17,7 @@ class TrendsController {
       const trends = await Trends.getCategoryTrends(days);
       res.json({ trends, period_days: parseInt(days) });
     } catch (err) {
+      console.error("[Trends] getCategoryTrends error:", err.message);
       res.status(500).json({ error: "Failed to fetch category trends" });
     }
   }
@@ -25,6 +27,7 @@ class TrendsController {
       const trends = await Trends.getPriceTrends();
       res.json({ trends });
     } catch (err) {
+      console.error("[Trends] getPriceTrends error:", err.message);
       res.status(500).json({ error: "Failed to fetch price trends" });
     }
   }
@@ -35,6 +38,7 @@ class TrendsController {
       const products = await Trends.getTopProducts(days, limit);
       res.json({ products, period_days: parseInt(days) });
     } catch (err) {
+      console.error("[Trends] getTopProducts error:", err.message);
       res.status(500).json({ error: "Failed to fetch top products" });
     }
   }
@@ -52,6 +56,7 @@ class TrendsController {
       });
       res.json({ success: true });
     } catch (err) {
+      console.error("[Trends] recordBrowsingEvent error:", err.message);
       res.status(500).json({ error: "Failed to record browse event" });
     }
   }

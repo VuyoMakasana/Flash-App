@@ -8,6 +8,7 @@ class InventoryController {
       const products = await Inventory.getProducts(category, page, limit);
       res.json({ products, storeId: FLASH_STORE_ID });
     } catch (err) {
+      console.error("[Inventory] getProducts error:", err.message);
       res.status(500).json({ error: "Failed to fetch inventory" });
     }
   }
@@ -21,6 +22,7 @@ class InventoryController {
       }
       res.json({ product, storeId: FLASH_STORE_ID });
     } catch (err) {
+      console.error("[Inventory] getProduct error:", err.message);
       res.status(500).json({ error: "Failed to fetch product" });
     }
   }
@@ -55,6 +57,7 @@ class InventoryController {
       });
       res.status(201).json({ product });
     } catch (err) {
+      console.error("[Inventory] addProduct error:", err.message);
       res.status(500).json({ error: "Failed to add product" });
     }
   }
@@ -69,6 +72,7 @@ class InventoryController {
       }
       res.json({ product });
     } catch (err) {
+      console.error("[Inventory] updateStock error:", err.message);
       res.status(500).json({ error: "Failed to update stock" });
     }
   }
@@ -79,6 +83,7 @@ class InventoryController {
       await Inventory.deleteProduct(productId);
       res.json({ success: true });
     } catch (err) {
+      console.error("[Inventory] deleteProduct error:", err.message);
       res.status(500).json({ error: "Failed to remove product" });
     }
   }

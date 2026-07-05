@@ -7,6 +7,7 @@ class FeedController {
       const result = await Feed.getFeed(req.userId, page, limit);
       res.json(result);
     } catch (err) {
+      console.error("[Feed] getFeed error:", err.message);
       res.status(500).json({ error: "Failed to fetch feed" });
     }
   }
@@ -26,6 +27,7 @@ class FeedController {
       );
       res.status(201).json({ post });
     } catch (err) {
+      console.error("[Feed] createPost error:", err.message);
       res.status(500).json({ error: "Failed to create post" });
     }
   }
@@ -36,6 +38,7 @@ class FeedController {
       const liked = await Feed.toggleLike(postId, req.userId);
       res.json({ liked });
     } catch (err) {
+      console.error("[Feed] likePost error:", err.message);
       res.status(500).json({ error: "Failed to like post" });
     }
   }
@@ -46,6 +49,7 @@ class FeedController {
       const comments = await Feed.getComments(postId);
       res.json({ comments });
     } catch (err) {
+      console.error("[Feed] getComments error:", err.message);
       res.status(500).json({ error: "Failed to fetch comments" });
     }
   }
@@ -61,6 +65,7 @@ class FeedController {
       const comment = await Feed.addComment(postId, req.userId, content.trim());
       res.status(201).json({ comment });
     } catch (err) {
+      console.error("[Feed] addComment error:", err.message);
       res.status(500).json({ error: "Failed to add comment" });
     }
   }
@@ -74,6 +79,7 @@ class FeedController {
       }
       res.json({ success: true });
     } catch (err) {
+      console.error("[Feed] deletePost error:", err.message);
       res.status(500).json({ error: "Failed to delete post" });
     }
   }

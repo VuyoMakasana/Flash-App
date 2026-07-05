@@ -12,6 +12,7 @@ class UserController {
       const { password_hash, ...safeUser } = user;
       res.json({ user: safeUser });
     } catch (err) {
+      console.error("[User] getProfile error:", err.message);
       res.status(500).json({ error: "Failed to fetch profile" });
     }
   }
@@ -31,6 +32,7 @@ class UserController {
       if (err.message === "Email already in use") {
         return res.status(409).json({ error: "Email already in use" });
       }
+      console.error("[User] updateProfile error:", err.message);
       res.status(500).json({ error: "Failed to update profile" });
     }
   }
@@ -43,6 +45,7 @@ class UserController {
       const orders = await User.getOrders(req.userId, page, limit);
       res.json({ orders, page, limit, hasMore: orders.length === limit });
     } catch (err) {
+      console.error("[User] getOrders error:", err.message);
       res.status(500).json({ error: "Failed to fetch orders" });
     }
   }
@@ -57,6 +60,7 @@ class UserController {
         await saveUserPushToken(req.userId, push_token);
         res.json({ success: true });
       } catch (err) {
+        console.error("[User] registerPushToken error:", err.message);
         res.status(500).json({ error: "Failed to register push token" });
       }
     }

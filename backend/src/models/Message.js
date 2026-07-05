@@ -83,7 +83,28 @@ class Message extends BaseModel {
     return newMsg;
   }
 
-  static async getUnreadCount(orderId, userRole) {
+  // Previously took no userId, so any authenticated user or driver could
+  // query the unread count for any order — unlike getMessages/sendMessage,
+  // which both verify the caller is actually party to the order.
+  static async getUnreadCount(orderId, userId, userRole) {
+    const order = await this.query(
+      "SELECT user_id, driver_id FROM orders WHERE id=$1",
+      [orderId],
+    );
+
+    if (!order.rows.length) {
+      throw new Error("Order not found");
+    }
+
+    const o = order.rows[0];
+    const allowed =
+      (userRole === "user" && o.user_id === userId) ||
+      (userRole === "driver" && o.driver_id === userId);
+
+    if (!allowed) {
+      throw new Error("Access denied");
+    }
+
     const result = await this.query(
       `SELECT COUNT(*) as count FROM messages
        WHERE order_id=$1 AND sender_role != $2 AND read_at IS NULL`,

@@ -6,6 +6,7 @@ class BoostController {
       const boosts = await Boost.getActiveBoosts();
       res.json({ boosts });
     } catch (err) {
+      console.error("[Boost] getActiveBoosts error:", err.message);
       res.status(500).json({ error: "Failed to fetch boosts" });
     }
   }
@@ -15,6 +16,7 @@ class BoostController {
       const promotions = await Boost.getPromotions();
       res.json({ promotions });
     } catch (err) {
+      console.error("[Boost] getPromotions error:", err.message);
       res.status(500).json({ error: "Failed to fetch promotions" });
     }
   }
@@ -28,6 +30,7 @@ class BoostController {
       if (err.message === "Invalid boost type") {
         return res.status(400).json({ error: err.message });
       }
+      console.error("[Boost] purchaseBoost error:", err.message);
       res.status(500).json({ error: "Failed to create boost" });
     }
   }
@@ -49,6 +52,7 @@ class BoostController {
       );
       res.status(201).json({ promotion });
     } catch (err) {
+      console.error("[Boost] createPromotion error:", err.message);
       res.status(500).json({ error: "Failed to create promotion" });
     }
   }
