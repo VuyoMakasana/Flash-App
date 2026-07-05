@@ -49,6 +49,15 @@ jobs:
         working-directory: backend
         run: npm ci
 
+      # H12 FIX: no dependency-vulnerability scanning existed anywhere in CI.
+      # Non-blocking for now (continue-on-error) since the existing dependency
+      # tree already has known findings that need a deliberate upgrade pass,
+      # not a sudden CI break — flip this to blocking once that cleanup lands.
+      - name: Audit backend dependencies
+        working-directory: backend
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
       - name: Run database migrations
         working-directory: backend
         run: node src/db/migrate.js
@@ -88,11 +97,21 @@ jobs:
           npm ci --ignore-scripts
           echo "User app dependencies OK"
 
+      - name: Audit user app dependencies
+        working-directory: flash-user-app
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
       - name: Check driver app dependencies
         working-directory: flash-driver-app
         run: |
           npm ci --ignore-scripts
           echo "Driver app dependencies OK"
+
+      - name: Audit driver app dependencies
+        working-directory: flash-driver-app
+        run: npm audit --audit-level=high
+        continue-on-error: true
 
   secrets-scan:
     name: Secrets Scan
