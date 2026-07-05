@@ -371,20 +371,20 @@ All variables go in `backend/.env`. The `.env.example` file has all of these wit
 | `DB_POOL_MAX` | Optional | Max DB connections. Default: **50**. Raise further on high-traffic paid plans |
 | `SENTRY_DSN` | Optional | Sentry error reporting DSN — set before going live. Free tier at [sentry.io](https://sentry.io) |
 | `JWT_SECRET` | Yes | Signs auth tokens. Change before deploying |
-| `JWT_EXPIRES_IN` | Optional | How long tokens last. Default: 30d |
+| `JWT_EXPIRES_IN` | Not read | Access-token lifetime is hardcoded to 15 minutes in `src/utils/helpers.js` (`ACCESS_TOKEN_EXPIRY`) — this variable is not wired up. Sessions stay signed in via the refresh-token flow (`refresh_tokens`/`revoked_tokens` tables), not a long-lived access token. |
+| `PAYMENT_METHOD_ENCRYPTION_KEY` | Yes | Independent of JWT_SECRET — see backend/.env.example |
+| `CASH_OTP_SECRET` | Yes | Independent of JWT_SECRET — verifies cash-on-delivery OTPs |
 | `PAYSTACK_SECRET_KEY` | Yes (for payments) | From dashboard.paystack.com |
 | `PAYSTACK_PUBLIC_KEY` | Yes (for payments) | From dashboard.paystack.com |
 | `APP_URL` | For payments | Your backend URL. Used in Paystack callback redirects |
 | `REDIS_URL` | Optional | Set to `redis://...` to enable multi-instance Socket.io scaling via Redis adapter. Set to `disabled` to explicitly skip. |
-| `AWS_ACCESS_KEY_ID` | For doc uploads | AWS credentials for S3 driver document storage |
-| `AWS_SECRET_ACCESS_KEY` | For doc uploads | AWS credentials for S3 driver document storage |
-| `AWS_REGION` | For doc uploads | Default: af-south-1 (Cape Town) |
-| `AWS_S3_BUCKET` | For doc uploads | Name of your S3 bucket |
+| `CLOUDINARY_CLOUD_NAME` | For doc uploads | Driver KYC document storage — replaced AWS S3, no paid account needed |
+| `CLOUDINARY_API_KEY` | For doc uploads | From cloudinary.com dashboard |
+| `CLOUDINARY_API_SECRET` | For doc uploads | From cloudinary.com dashboard |
 | `GOOGLE_MAPS_API_KEY` | For maps | Backend distance calculations |
 | `ADMIN_EMAIL` | Yes | Admin login email |
 | `ADMIN_PASSWORD` | Dev only | Plain text fallback. Use ADMIN_PASSWORD_HASH in production |
 | `ADMIN_PASSWORD_HASH` | Production | bcrypt hash. Generate with: `node -e "require('bcryptjs').hash('pass',12).then(console.log)"` |
-| `PAYFLEX_API_KEY` | Optional | For Payflex BNPL. Contact payflex.co.za for credentials |
 
 ---
 

@@ -125,10 +125,12 @@ Copy `backend/.env.example` to `backend/.env` and fill in all required variables
 | `ADMIN_EMAIL` | ✓ | Admin portal login email | Your choice |
 | `ADMIN_PASSWORD_HASH` | ✓ | Bcrypt hash of admin password | Generate: `node -e "require('bcryptjs').hash('yourPassword',12).then(console.log)"` |
 | `APP_URL` | ✓ | Production server URL for callbacks | Your production domain (https://...) |
-| `PAYFLEX_WEBHOOK_SECRET` | ✓ | Payflex webhook secret | Payflex dashboard → Integrations → Webhook Settings |
+| `PAYMENT_METHOD_ENCRYPTION_KEY` | ✓ | Encrypts saved card data — must be independent of JWT_SECRET | Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `CASH_OTP_SECRET` | ✓ | Verifies cash-on-delivery collection codes — must be independent of JWT_SECRET | Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `CLOUDINARY_CLOUD_NAME` | ✓ | Driver KYC document storage (replaced AWS S3 — no paid account needed) | cloudinary.com → Dashboard |
+| `CLOUDINARY_API_KEY` | ✓ | Cloudinary API key | cloudinary.com → Dashboard |
+| `CLOUDINARY_API_SECRET` | ✓ | Cloudinary API secret | cloudinary.com → Dashboard |
 | `GOOGLE_MAPS_API_KEY` | Optional | Backend maps API key | console.cloud.google.com → APIs & Services |
-| `AWS_ACCESS_KEY_ID` | Optional | AWS IAM access key for S3 uploads | AWS IAM Console |
-| `AWS_SECRET_ACCESS_KEY` | Optional | AWS IAM secret key for S3 uploads | AWS IAM Console |
 | `REDIS_URL` | Optional | Redis connection (for scaling Socket.io and multi-instance) | Upstash.com or Redis Cloud — set to `disabled` to skip |
 | `SENTRY_DSN` | Optional | Sentry error reporting DSN | sentry.io → New Project → Node.js → DSN |
 | `DB_POOL_MAX` | Optional | Max PostgreSQL connections per process. Default: 50 | Raise if you see pool timeout errors |
@@ -188,7 +190,8 @@ The migration script automatically adds these on first run:
 Before deploying, set these in `backend/.env`:
 - `JWT_SECRET` — strong 64-character random string (not the placeholder)
 - `PAYSTACK_SECRET_KEY` — real live Paystack secret key (sk_live_...)
-- `PAYFLEX_WEBHOOK_SECRET` — real Payflex webhook secret from dashboard
+- `PAYMENT_METHOD_ENCRYPTION_KEY` / `CASH_OTP_SECRET` — each independent of JWT_SECRET, see table above
+- `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` — driver document storage
 - `ADMIN_PASSWORD_HASH` — bcrypt hash of your admin password
 - `APP_URL` — production server URL for payment callbacks (https://...)
 - `EXPO_PUBLIC_API_BASE_URL` — production server URL for both Expo apps
