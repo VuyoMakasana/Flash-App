@@ -538,6 +538,9 @@ class AuthController {
           documents_submitted: 'Documents under review.',
           under_review:        'Application being reviewed.',
           rejected:            'Application not approved. Contact support.',
+          // Previously missing — fell through to the generic "Account not
+          // approved" message, indistinguishable from a brand-new applicant.
+          suspended:           'Account suspended. Contact support@flash.co.za.',
         };
         return res.status(403).json({ error: msgs[driver.status] || 'Account not approved', status: driver.status });
       }

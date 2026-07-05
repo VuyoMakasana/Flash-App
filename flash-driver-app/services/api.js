@@ -88,7 +88,14 @@ async function request(path, options = {}) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(err.error || 'Request failed');
+    const thrown = new Error(err.error || 'Request failed');
+    // Some endpoints (e.g. driver login) return a structured `status` field
+    // alongside the message (driver.status: pending_documents/suspended/etc).
+    // Attach it so callers can branch on the real value instead of fragile
+    // substring-matching the free-text message, which silently breaks the
+    // moment the message copy changes.
+    if (err.status) thrown.status = err.status;
+    throw thrown;
   }
 
   const text = await res.text();

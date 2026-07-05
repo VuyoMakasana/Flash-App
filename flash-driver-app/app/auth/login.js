@@ -53,14 +53,22 @@ export default function DriverLoginScreen() {
       router.replace('/driver/dashboard');
     } catch (err) {
       const msg = err.message || 'Login failed';
-      if (msg.includes('documents')) {
+      // Prefer the structured status the backend already returns
+      // (driver.status: pending_documents/under_review/suspended/rejected)
+      // over substring-matching the free-text message, which silently
+      // breaks the moment the message copy changes and had no branch for
+      // 'suspended' at all despite this exact Alert existing for it.
+      const status = err.status;
+      if (status === 'pending_documents' || status === 'documents_submitted' || msg.includes('documents')) {
         Alert.alert('Documents Required', 'Upload your verification documents to continue.',
           [{ text: 'Upload Now', onPress: () => router.push('/auth/onboarding') }, { text: 'Cancel', style: 'cancel' }]
         );
-      } else if (msg.includes('review') || msg.includes('pending')) {
+      } else if (status === 'under_review' || msg.includes('review') || msg.includes('pending')) {
         Alert.alert('Under Review', 'Your application is being reviewed. We will notify you when approved.');
-      } else if (msg.includes('suspended')) {
+      } else if (status === 'suspended' || msg.includes('suspended')) {
         Alert.alert('Account Suspended', 'Your account has been suspended. Contact support@flash.co.za');
+      } else if (status === 'rejected') {
+        Alert.alert('Application Not Approved', msg);
       } else {
         Alert.alert('Login Failed', msg);
       }
