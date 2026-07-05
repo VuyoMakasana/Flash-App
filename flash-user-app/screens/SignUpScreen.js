@@ -20,8 +20,8 @@ export default function SignUpScreen({ navigation }) {
       Alert.alert('Missing Fields', 'Name, email, and password are required.');
       return;
     }
-    if (password.length < 6) {
-      Alert.alert('Weak Password', 'Password must be at least 6 characters.');
+    if (password.length < 10) {
+      Alert.alert('Weak Password', 'Password must be at least 10 characters.');
       return;
     }
 
@@ -90,7 +90,7 @@ export default function SignUpScreen({ navigation }) {
               <Ionicons name="lock-closed-outline" size={18} color="#9ca3af" style={styles.inputIcon} />
               <TextInput
                 style={[styles.input, { flex: 1 }]}
-                placeholder="Min. 6 characters"
+                placeholder="Min. 10 characters"
                 placeholderTextColor="#9ca3af"
                 value={password}
                 onChangeText={setPassword}

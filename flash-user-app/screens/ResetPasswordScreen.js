@@ -22,8 +22,8 @@ export default function ResetPasswordScreen({ navigation, route }) {
       Alert.alert('Missing Token', 'Paste the reset token from your email.');
       return;
     }
-    if (newPassword.length < 6) {
-      Alert.alert('Weak Password', 'Password must be at least 6 characters.');
+    if (newPassword.length < 10) {
+      Alert.alert('Weak Password', 'Password must be at least 10 characters.');
       return;
     }
     if (newPassword !== confirm) {
@@ -90,7 +90,7 @@ export default function ResetPasswordScreen({ navigation, route }) {
               <Ionicons name="lock-closed-outline" size={18} color="#9ca3af" style={styles.icon} />
               <TextInput
                 style={[styles.input, { flex: 1 }]}
-                placeholder="At least 6 characters"
+                placeholder="At least 10 characters"
                 placeholderTextColor="#9ca3af"
                 value={newPassword}
                 onChangeText={setNewPassword}

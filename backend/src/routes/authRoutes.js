@@ -14,7 +14,7 @@ router.use(authLimiter);
 
 // ── User Registration & Login ──────────────────────────────────────────────
 router.post('/user/register',
-  [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 6 })],
+  [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 10 })],
   AuthController.registerUser
 );
 router.post('/user/login',
@@ -45,13 +45,13 @@ router.post('/user/forgot-password',
   AuthController.forgotPassword
 );
 router.post('/user/reset-password',
-  [body('token').notEmpty(), body('newPassword').isLength({ min: 6 })],
+  [body('token').notEmpty(), body('newPassword').isLength({ min: 10 })],
   AuthController.resetPassword
 );
 
 // ── Driver Registration & Login ────────────────────────────────────────────
 router.post('/driver/register',
-  [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 6 }), body('phone').notEmpty()],
+  [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 10 }), body('phone').notEmpty()],
   AuthController.registerDriver
 );
 router.post('/driver/login',

@@ -27,8 +27,8 @@ export default function DriverRegisterScreen() {
       Alert.alert('Missing Fields', 'Please fill in all required fields.');
       return;
     }
-    if (password.length < 6) {
-      Alert.alert('Weak Password', 'Password must be at least 6 characters.');
+    if (password.length < 10) {
+      Alert.alert('Weak Password', 'Password must be at least 10 characters.');
       return;
     }
 
@@ -103,7 +103,7 @@ export default function DriverRegisterScreen() {
               <Ionicons name="lock-closed-outline" size={16} color="#9ca3af" style={styles.icon} />
               <TextInput
                 style={[styles.input, { flex: 1 }]}
-                placeholder="Min. 6 characters"
+                placeholder="Min. 10 characters"
                 placeholderTextColor="#9ca3af"
                 value={form.password}
                 onChangeText={v => update('password', v)}
