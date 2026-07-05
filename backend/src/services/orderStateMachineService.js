@@ -69,19 +69,52 @@ function logTransition(orderId, fromState, toState, actorRole, actorId) {
   );
 }
 
+// Socket.IO side-effect shared by updateOrderStatus and requeueOrderForDriverSearch.
+// Split out so callers that join an existing transaction (externalClient) can
+// defer this until after their own COMMIT succeeds, instead of it firing
+// inside a transaction that might still roll back.
+function emitOrderUpdate(io, orderId, userId, status) {
+  if (!io) return;
+  io.to(`order:${orderId}`).emit('order_update', {
+    orderId,
+    status,
+    timestamp: new Date().toISOString(),
+  });
+  if (userId) {
+    io.to(`user:${userId}`).emit('order_update', { orderId, status });
+  }
+}
+
+// Push notification side-effect for updateOrderStatus, split out for the same
+// reason as emitOrderUpdate above.
+async function notifyOrderStatusChange(updatedOrder, targetState) {
+  if (!updatedOrder.user_id) return;
+  const { notifyUserOrderUpdate } = require('./notificationService');
+  await notifyUserOrderUpdate(updatedOrder.user_id, updatedOrder.id, targetState).catch(() => {});
+}
+
+// When context.externalClient is passed, this function joins the caller's
+// existing transaction instead of opening its own — the caller owns
+// BEGIN/COMMIT/ROLLBACK and is responsible for calling emitOrderUpdate /
+// notifyOrderStatusChange itself once its own transaction actually commits.
+// This is what lets e.g. a wallet reversal and the resulting order-status
+// change share one atomic transaction (see orderController.cancelOrder).
 async function updateOrderStatus(orderId, nextState, context = {}) {
   const io        = context.io;
   const actorId   = context.actorId   || null;
   const actorRole = context.actorRole || 'system';
+  const externalClient = context.externalClient || null;
   const targetState = normalizeState(nextState);
 
   if (!ORDER_STATES.includes(targetState)) {
     throw new Error(`Invalid order state: ${targetState}`);
   }
 
-  const client = await pool.connect();
+  const client = externalClient || await pool.connect();
   try {
-    await client.query('BEGIN');
+    if (!externalClient) {
+      await client.query('BEGIN');
+    }
 
     const orderResult = await client.query(
       `SELECT * FROM orders WHERE id = $1 FOR UPDATE`,
@@ -95,7 +128,9 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
 
     if (currentState === targetState) {
       logTransition(orderId, currentState, targetState, actorRole, actorId);
-      await client.query('COMMIT');
+      if (!externalClient) {
+        await client.query('COMMIT');
+      }
       return order;
     }
 
@@ -158,37 +193,30 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
       ],
     );
 
-    await client.query('COMMIT');
+    if (!externalClient) {
+      await client.query('COMMIT');
+    }
 
     const updatedOrder = updatedResult.rows[0];
 
-    // Socket.IO real-time update
-    if (io) {
-      io.to(`order:${orderId}`).emit('order_update', {
-        orderId,
-        status:    updatedOrder.status,
-        timestamp: new Date().toISOString(),
-      });
-      if (updatedOrder.user_id) {
-        io.to(`user:${updatedOrder.user_id}`).emit('order_update', {
-          orderId,
-          status: updatedOrder.status,
-        });
-      }
-    }
-
-    // HIGH-12 FIX: Push notification for backgrounded user app
-    if (updatedOrder.user_id) {
-      const { notifyUserOrderUpdate } = require('./notificationService');
-      await notifyUserOrderUpdate(updatedOrder.user_id, orderId, targetState).catch(() => {});
+    // When joining a caller's transaction, side effects are the caller's
+    // responsibility — they must only fire after the caller's own COMMIT
+    // succeeds (see emitOrderUpdate / notifyOrderStatusChange above).
+    if (!externalClient) {
+      emitOrderUpdate(io, orderId, updatedOrder.user_id, updatedOrder.status);
+      await notifyOrderStatusChange(updatedOrder, targetState);
     }
 
     return updatedOrder;
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (!externalClient) {
+      await client.query('ROLLBACK');
+    }
     throw err;
   } finally {
-    client.release();
+    if (!externalClient) {
+      client.release();
+    }
   }
 }
 
@@ -346,18 +374,11 @@ async function requeueOrderForDriverSearch(orderId, context = {}, externalClient
     }
 
     const updatedOrder = updatedResult.rows[0];
-    if (io) {
-      io.to(`order:${orderId}`).emit('order_update', {
-        orderId,
-        status:    updatedOrder.status,
-        timestamp: new Date().toISOString(),
-      });
-      if (updatedOrder.user_id) {
-        io.to(`user:${updatedOrder.user_id}`).emit('order_update', {
-          orderId,
-          status: updatedOrder.status,
-        });
-      }
+
+    // Same rule as updateOrderStatus: when joining a caller's transaction,
+    // the caller emits after its own COMMIT succeeds, not us.
+    if (!externalClient) {
+      emitOrderUpdate(io, orderId, updatedOrder.user_id, updatedOrder.status);
     }
 
     return updatedOrder;
@@ -381,4 +402,6 @@ module.exports = {
   updateOrderStatus,
   assignDriver,
   requeueOrderForDriverSearch,
+  emitOrderUpdate,
+  notifyOrderStatusChange,
 };

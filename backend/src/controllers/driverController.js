@@ -9,6 +9,7 @@ const {
   assignDriver,
   normalizeState,
   requeueOrderForDriverSearch,
+  emitOrderUpdate,
 } = require('../services/orderStateMachineService');
 const { autoAssignNearestDriver } = require('../services/fleetIntelligenceService');
 const PayoutService = require('../services/payoutService');
@@ -253,7 +254,19 @@ class DriverController {
 
       const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
 
-      await DriverWallet.transaction(async (client) => {
+      // Wallet reversal, cancel-count/penalty bookkeeping, and the
+      // order-status requeue to 'waiting_for_driver' now share a single
+      // transaction. Previously these were two separate transactions
+      // (DriverWallet.transaction(...), then a second independent
+      // BEGIN/COMMIT inside requeueOrderForDriverSearch) — a crash between
+      // them could reverse the driver's pending payout and record the
+      // penalty while the order stayed assigned to a driver who just
+      // cancelled, or vice versa.
+      const client = await db.connect();
+      let requeuedOrder;
+      try {
+        await client.query('BEGIN');
+
         await client.query(
           `UPDATE drivers SET cancel_count = COALESCE(cancel_count, 0) + 1, updated_at = NOW()
            WHERE id = $1`,
@@ -271,13 +284,23 @@ class DriverController {
            VALUES ($1, $2, $3, $4)`,
           [req.userId, orderId, 20, 'driver_cancelled_before_pickup'],
         );
-      });
 
-      await requeueOrderForDriverSearch(orderId, {
-        actorId: req.userId,
-        actorRole: 'driver',
-        io,
-      });
+        requeuedOrder = await requeueOrderForDriverSearch(
+          orderId,
+          { actorId: req.userId, actorRole: 'driver' },
+          client,
+        );
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      // Side effects only fire after the transaction above has committed.
+      emitOrderUpdate(io, orderId, requeuedOrder.user_id, requeuedOrder.status);
 
       if (io) {
         io.to('driver_pool').emit('new_order_available', { orderId, reassigned: true });

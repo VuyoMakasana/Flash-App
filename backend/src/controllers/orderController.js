@@ -15,6 +15,8 @@ const {
   updateOrderStatus,
   assignDriver,
   normalizeState,
+  emitOrderUpdate,
+  notifyOrderStatusChange,
 } = require('../services/orderStateMachineService');
 const RefundService = require('../services/refundService');
 
@@ -194,20 +196,42 @@ class OrderController {
         refundMode = 'store_refund_no_delivery_refund';
       }
 
-      if (order.driver_id && ['assigned', 'held'].includes(order.delivery_payment_status || '') && !order.driver_paid) {
-        await DriverWallet.transaction(async (client) => {
+      // Wallet reversal (if any) and the order-status transition to
+      // 'cancelled' now share a single transaction. Previously these were
+      // two separate transactions (DriverWallet.transaction(...), then a
+      // second independent BEGIN/COMMIT inside updateOrderStatus) — a crash
+      // between them could reverse the driver's pending payout while the
+      // order stayed in its prior in-flight status, or vice versa.
+      const client = await db.connect();
+      let cancelledOrder;
+      try {
+        await client.query('BEGIN');
+
+        if (order.driver_id && ['assigned', 'held'].includes(order.delivery_payment_status || '') && !order.driver_paid) {
           const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
           if (payout > 0) {
             await DriverWallet.reversePending(client, order.driver_id, payout, order.id, 'customer_cancelled');
           }
+        }
+
+        cancelledOrder = await updateOrderStatus(orderId, 'cancelled', {
+          actorId: req.userId,
+          actorRole: 'user',
+          externalClient: client,
         });
+
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
       }
 
-      await updateOrderStatus(orderId, 'cancelled', {
-        actorId: req.userId,
-        actorRole: 'user',
-        io: req.app.get('io'),
-      });
+      // Side effects (socket emit, push notification) only fire after the
+      // transaction above has actually committed.
+      emitOrderUpdate(req.app.get('io'), orderId, cancelledOrder.user_id, cancelledOrder.status);
+      await notifyOrderStatusChange(cancelledOrder, 'cancelled');
 
       await db.query(
         `INSERT INTO order_cancellations (order_id, cancelled_by_id, cancelled_by_role, reason, refund_mode)
@@ -228,7 +252,7 @@ class OrderController {
         );
       }
 
-      const updatedOrder = await db.query(
+      const finalOrder = await db.query(
         `SELECT cancellation_penalty FROM orders WHERE id = $1`,
         [orderId],
       );
@@ -238,7 +262,7 @@ class OrderController {
         refundMode,
         refundStatus:        refund?.status            || null,
         refundReference:     refund?.refund_reference  || null,
-        cancellationPenalty: parseFloat(updatedOrder.rows[0]?.cancellation_penalty || 0),
+        cancellationPenalty: parseFloat(finalOrder.rows[0]?.cancellation_penalty || 0),
       });
     } catch (err) {
       return res.status(400).json({ error: err.message || 'Failed to cancel order' });
