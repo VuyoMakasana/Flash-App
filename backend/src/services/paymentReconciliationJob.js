@@ -2,7 +2,7 @@ const db = require("../config/database");
 const paystackService = require("./paystackService");
 const RefundService = require("./refundService");
 const { updateOrderStatus } = require("./orderStateMachineService");
-const { autoAssignNearestDriver } = require("./fleetIntelligenceService");
+const { autoAssignNearestDriver } = require("./autoMatchService");
 
 async function reconcilePendingPayments(io) {
   const result = await db.query(

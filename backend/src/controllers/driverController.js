@@ -11,7 +11,7 @@ const {
   requeueOrderForDriverSearch,
   emitOrderUpdate,
 } = require('../services/orderStateMachineService');
-const { autoAssignNearestDriver } = require('../services/fleetIntelligenceService');
+const { autoAssignNearestDriver } = require('../services/autoMatchService');
 const PayoutService = require('../services/payoutService');
 const paystackService = require('../services/paystackService');
 const { saveDriverPushToken } = require('../services/notificationService');

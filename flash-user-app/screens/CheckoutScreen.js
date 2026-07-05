@@ -101,7 +101,7 @@ export default function CheckoutScreen() {
       return;
     }
     if (deliveryMode === 'pick' && !selectedDriverId) {
-      Alert.alert('Choose driver', 'Please select a driver or switch to Flash Fleet.');
+      Alert.alert('Choose driver', 'Please select a driver or switch to Any Available Driver.');
       return;
     }
 
@@ -199,17 +199,18 @@ export default function CheckoutScreen() {
               onPress={() => setDeliveryMode(mode)}
             >
               <Text style={[styles.toggleText, deliveryMode === mode && styles.toggleTextActive]}>
-                {mode === 'fleet' ? '⚡ Flash Fleet' : '🚗 Pick a Driver'}
+                {mode === 'fleet' ? '⚡ Any Available Driver' : '🚗 Pick a Driver'}
               </Text>
             </Pressable>
           ))}
         </View>
 
-        {/* ── Fleet mode ───────────────────────────────────────────────── */}
+        {/* ── Auto-match mode (internal delivery_mode value stays 'fleet' —
+             not renamed here; see backend/src/services/autoMatchService.js) ── */}
         {deliveryMode === 'fleet' && (
           <View style={styles.fleetCard}>
             <View>
-              <Text style={styles.fleetTitle}>Flash Fleet</Text>
+              <Text style={styles.fleetTitle}>Any Available Driver</Text>
               <Text style={styles.fleetCopy}>Auto-assigns the nearest available driver.</Text>
             </View>
             <View style={styles.badge}>
@@ -229,7 +230,7 @@ export default function CheckoutScreen() {
           ) : realDrivers.length === 0 ? (
             <View style={styles.noDrivers}>
               <Ionicons name="alert-circle-outline" size={24} color="#9ca3af" />
-              <Text style={styles.noDriversText}>No drivers available right now. Try Flash Fleet.</Text>
+              <Text style={styles.noDriversText}>No drivers available right now. Try Any Available Driver.</Text>
             </View>
           ) : (
             <FlatList

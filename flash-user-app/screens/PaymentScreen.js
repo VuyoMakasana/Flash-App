@@ -56,7 +56,7 @@ export default function PaymentScreen() {
     } catch (err) {
       Alert.alert(
         'Driver selection update',
-        err.message || 'Your payment succeeded, but selected driver could not be assigned. Flash Fleet will pick the next available driver.'
+        err.message || 'Your payment succeeded, but selected driver could not be assigned. We\'ll auto-match you with the next available driver.'
       );
     }
   };

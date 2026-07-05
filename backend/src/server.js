@@ -432,7 +432,7 @@ cron.schedule('30 1 * * *', async () => {
 
           // Attempt auto-reassign for fleet orders
           if (order.delivery_mode === 'fleet') {
-            const { autoAssignNearestDriver } = require('./services/fleetIntelligenceService');
+            const { autoAssignNearestDriver } = require('./services/autoMatchService');
             await autoAssignNearestDriver(order.id, ioInstance).catch(() => null);
           }
 
