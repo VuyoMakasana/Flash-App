@@ -65,6 +65,7 @@ const fleetRoutes = require("./routes/fleetRoutes");
 const inventoryRoutes = require("./routes/inventoryRoutes");
 const messagesRoutes = require("./routes/messageRoutes");
 const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
+const sosRoutes = require("./routes/sosRoutes");
 
 function createApp() {
   const app = express();
@@ -142,6 +143,7 @@ function createApp() {
   app.use("/api/inventory", inventoryRoutes);
   app.use("/api/messages", messagesRoutes);
   app.use("/api/trusted-drivers", trustedDriverRoutes);
+  app.use("/api/sos", sosRoutes);
 
 // Health check — previously always returned status: "ok" unconditionally,
 // with no actual check of either dependency. That made it useless for real

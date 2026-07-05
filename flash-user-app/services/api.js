@@ -267,6 +267,11 @@ const messages = {
   sendMessage: (orderId, content)  => request(`/messages/${orderId}`, { method: 'POST', body: JSON.stringify({ content }) }),
 };
 
+// ── SOS / safety ─────────────────────────────────────────────────────────
+const sos = {
+  trigger: (orderId, lat, lng) => request(`/sos/${orderId}/trigger`, { method: 'POST', body: JSON.stringify({ lat, lng }) }),
+};
+
 export { BASE_URL, getToken, saveTokens, clearTokens };
 
 export default {
@@ -282,4 +287,5 @@ export default {
   sizing,
   returns,
   messages,
+  sos,
 };

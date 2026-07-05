@@ -752,6 +752,17 @@ async function migrate() {
     throw err;
   } finally {
     client10.release();
+  }
+
+  // ── v11 ────────────────────────────────────────────────────────────────────
+  const client11 = await pool.connect();
+  try {
+    await migrateV11(client11);
+  } catch (err) {
+    console.error('Migration v11 failed:', err.message);
+    throw err;
+  } finally {
+    client11.release();
     await pool.end();
   }
 
@@ -847,4 +858,41 @@ async function migrateV10(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10 };
+async function migrateV11(client) {
+  await client.query('BEGIN');
+  try {
+    // Item 5 (Phase 4 audit): one-tap SOS/safety action, available to both
+    // customer and driver during an active delivery. Kept deliberately
+    // simple — one row per trigger, no separate workflow/status machine —
+    // since this needs to work reliably under stress, not be feature-rich.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS sos_alerts (
+        id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_id          UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        triggered_by_role VARCHAR(10) NOT NULL CHECK (triggered_by_role IN ('user','driver')),
+        triggered_by_id   UUID NOT NULL,
+        lat               DOUBLE PRECISION,
+        lng               DOUBLE PRECISION,
+        acknowledged_at   TIMESTAMPTZ,
+        acknowledged_by   UUID,
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_sos_alerts_order_id ON sos_alerts(order_id)`
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_sos_alerts_unacknowledged ON sos_alerts(created_at) WHERE acknowledged_at IS NULL`
+    );
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v11 completed: sos_alerts table');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v11 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11 };

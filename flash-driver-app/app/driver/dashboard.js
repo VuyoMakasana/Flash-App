@@ -18,6 +18,7 @@ import { useDriver } from '../../context/DriverContext';
 import driverApi, { BASE_URL } from '../../services/api';
 import { io } from 'socket.io-client';
 import * as Notifications from 'expo-notifications';
+import * as Location from 'expo-location';
 
 const STATUS_COLORS = {
   waiting_for_driver:  '#f59e0b',
@@ -103,6 +104,8 @@ export default function DriverDashboard() {
   const [otpLoading, setOtpLoading]       = useState(false);
   const [otpRequested, setOtpRequested]   = useState(false);
   const [otpValue, setOtpValue]           = useState('');
+  const [sosSending, setSosSending]       = useState(false);
+  const [sosSent, setSosSent]             = useState(false);
   const socketRef = useRef(null);
 
   const toNumber = (value, fallback = 0) => {
@@ -269,6 +272,7 @@ export default function DriverDashboard() {
       await driverApi.orders.updateStatus(activeOrder.id, nextStatus);
       if (nextStatus === 'completed') {
         await setActiveOrder(null);
+        setSosSent(false);
         await loadAll();
         Alert.alert('Delivery Complete!', 'Great work! Ready for the next one.');
       } else {
@@ -276,6 +280,40 @@ export default function DriverDashboard() {
       }
     } catch (e) {
       Alert.alert('Error', e.message);
+    }
+  };
+
+  // ── SOS / safety button ───────────────────────────────────────────────────
+  // One tap, fires immediately — a safety feature needs to work under
+  // stress, not make someone confirm a dialog first. Location is
+  // best-effort: a missing/denied permission must never block the alert
+  // itself from going through.
+  const handleSOS = async () => {
+    if (!activeOrder || sosSending || sosSent) return;
+    setSosSending(true);
+    let lat, lng;
+    try {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const position = await Location.getCurrentPositionAsync({});
+        lat = position.coords.latitude;
+        lng = position.coords.longitude;
+      }
+    } catch (_) {
+      // Proceed without location rather than block the alert.
+    }
+
+    try {
+      await driverApi.sos.trigger(activeOrder.id, lat, lng);
+      setSosSent(true);
+      Alert.alert('Help is on the way', 'Flash support has been notified with your order and location.');
+    } catch (e) {
+      Alert.alert(
+        'Could not reach support',
+        'If you are in immediate danger, please call emergency services directly. ' + (e.message || ''),
+      );
+    } finally {
+      setSosSending(false);
     }
   };
 
@@ -304,6 +342,7 @@ export default function DriverDashboard() {
       await setActiveOrder(null);
       setOtpRequested(false);
       setOtpValue('');
+      setSosSent(false);
       await loadAll();
       Alert.alert('Payment Confirmed!', 'Cash collected. Delivery complete.');
     } catch (e) {
@@ -453,7 +492,25 @@ export default function DriverDashboard() {
       {/* ── ACTIVE ORDER ── */}
       {activeOrder && (
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Active Delivery</Text>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Active Delivery</Text>
+            {/* One tap, fires immediately — a safety feature needs to work
+                under stress, not be feature-rich. */}
+            <TouchableOpacity
+              style={[styles.sosBtn, sosSent && styles.sosBtnSent]}
+              onPress={handleSOS}
+              disabled={sosSending || sosSent}
+            >
+              {sosSending ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <>
+                  <Ionicons name={sosSent ? 'checkmark-circle' : 'alert-circle'} size={14} color="#fff" />
+                  <Text style={styles.sosBtnText}>{sosSent ? 'Help Notified' : 'SOS'}</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
           <View style={[styles.orderCard, styles.activeOrderCard]}>
             <View style={styles.row}>
               <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[activeOrder.status] || '#374151' }]}>
@@ -723,6 +780,9 @@ const styles = StyleSheet.create({
   section:            { marginHorizontal: 16, marginBottom: 16 },
   sectionHeader:      { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   sectionTitle:       { color: '#fff', fontSize: 16, fontWeight: '700' },
+  sosBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#dc2626', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  sosBtnSent: { backgroundColor: '#16a34a' },
+  sosBtnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   orderCard:          { backgroundColor: '#1a1a1a', borderRadius: 16, padding: 16, marginBottom: 12, gap: 10 },
   activeOrderCard:    { borderColor: '#3b82f6', borderWidth: 1 },
   orderNum:           { color: '#fff', fontWeight: '700', fontSize: 14, flex: 1 },

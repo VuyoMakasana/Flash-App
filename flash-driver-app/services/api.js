@@ -256,6 +256,11 @@ const payments = {
   markCashFailed:  (orderId, reason) => request('/payments/cash/fail', { method: 'POST', body: JSON.stringify({ orderId, reason }) }),
 };
 
+// ── SOS / safety ─────────────────────────────────────────────────────────
+const sos = {
+  trigger: (orderId, lat, lng) => request(`/sos/${orderId}/trigger`, { method: 'POST', body: JSON.stringify({ lat, lng }) }),
+};
+
 const driverApi = {
   auth,
   orders,
@@ -265,6 +270,7 @@ const driverApi = {
   subscription,
   trustedDrivers,
   payments,
+  sos,
 };
 
 export default driverApi;

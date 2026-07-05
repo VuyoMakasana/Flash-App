@@ -1,12 +1,13 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, Pressable, ActivityIndicator,
-  Platform, Linking, Animated, Image,
+  Platform, Linking, Animated, Image, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { io } from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import api, { BASE_URL } from '../services/api';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
@@ -54,6 +55,8 @@ export default function TrackingScreen() {
   const [shownMilestones, setShownMilestones] = useState(new Set());
   // Cash reminder banner
   const [cashReminder, setCashReminder]     = useState(false);
+  const [sosSending, setSosSending]         = useState(false);
+  const [sosSent, setSosSent]               = useState(false);
   const bannerOpacity = useRef(new Animated.Value(0)).current;
 
   const socketRef = useRef(null);
@@ -79,6 +82,41 @@ export default function TrackingScreen() {
   // ── Message button ────────────────────────────────────────────────────────
   const handleMessage = () => {
     navigation.navigate('Chat', { orderId });
+  };
+
+  // ── SOS / safety button ───────────────────────────────────────────────────
+  // One tap, fires immediately — a safety feature needs to work under
+  // stress, not make someone confirm a dialog first. Location is
+  // best-effort: a missing/denied permission must never block the alert
+  // itself from going through, since getting help matters more than having
+  // an exact coordinate attached.
+  const handleSOS = async () => {
+    if (sosSending || sosSent) return;
+    setSosSending(true);
+    let lat, lng;
+    try {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const position = await Location.getCurrentPositionAsync({});
+        lat = position.coords.latitude;
+        lng = position.coords.longitude;
+      }
+    } catch (_) {
+      // Proceed without location rather than block the alert.
+    }
+
+    try {
+      await api.sos.trigger(orderId, lat, lng);
+      setSosSent(true);
+      Alert.alert('Help is on the way', 'Flash support has been notified with your order and location.');
+    } catch (e) {
+      Alert.alert(
+        'Could not reach support',
+        'If you are in immediate danger, please call emergency services directly. ' + (e.message || ''),
+      );
+    } finally {
+      setSosSending(false);
+    }
   };
 
   useEffect(() => {
@@ -259,6 +297,26 @@ export default function TrackingScreen() {
           <Text style={styles.liveText}>{socketConnected ? 'Live' : 'Connecting...'}</Text>
         </View>
 
+        {/* ── SOS button — one tap, fires immediately, always visible during
+             an active delivery. Kept simple on purpose: a safety feature
+             needs to work reliably under stress, not be feature-rich. ── */}
+        {!isCancelled && (
+          <Pressable
+            style={[styles.sosBtn, sosSent && styles.sosBtnSent]}
+            onPress={handleSOS}
+            disabled={sosSending || sosSent}
+          >
+            {sosSending ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <>
+                <Ionicons name={sosSent ? 'checkmark-circle' : 'alert-circle'} size={16} color="#fff" />
+                <Text style={styles.sosBtnText}>{sosSent ? 'Help Notified' : 'SOS'}</Text>
+              </>
+            )}
+          </Pressable>
+        )}
+
         {/* ── Arrival banner (Part 2) ────────────────────────────────────── */}
         {arrivalBanner && (
           <Animated.View style={[styles.arrivalBanner, { opacity: bannerOpacity }]}>
@@ -378,6 +436,14 @@ const styles = StyleSheet.create({
   },
   liveDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' },
   liveText: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  sosBtn: {
+    position: 'absolute', top: 12, left: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20,
+    backgroundColor: '#dc2626',
+  },
+  sosBtnSent: { backgroundColor: '#16a34a' },
+  sosBtnText: { color: '#fff', fontWeight: '800', fontSize: 12 },
   arrivalBanner: {
     position: 'absolute', bottom: 16, left: 16, right: 16,
     backgroundColor: '#1a1a1a', borderRadius: 14,
