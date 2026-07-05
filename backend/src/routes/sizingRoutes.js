@@ -22,6 +22,9 @@ router.get(
   requireRole("user"),
   SizingController.getRecommendation,
 );
-router.post("/mappings/seed", authenticate, SizingController.seedMappings);
+// Writes to the shared, global brand_size_mappings table that every
+// customer's size recommendations depend on — was reachable by any
+// authenticated user or driver with no elevated privilege at all.
+router.post("/mappings/seed", authenticate, requireRole("admin"), SizingController.seedMappings);
 
 module.exports = router;

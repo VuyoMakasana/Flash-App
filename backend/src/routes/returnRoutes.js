@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { authenticate, requireRole } = require("../middleware/auth");
+const { authenticate, requireRole, requireApprovedDriver } = require("../middleware/auth");
 const ReturnController = require("../controllers/returnController");
 
 router.post(
@@ -9,10 +9,17 @@ router.post(
   requireRole("user"),
   ReturnController.requestReturn,
 );
+// requireApprovedDriver was missing here — every other driver-claims-a-job
+// endpoint (accept order, cancel assigned order, view available orders)
+// chains it after requireRole('driver'). Without it, a newly self-registered,
+// unvetted driver account (a JWT is issued immediately at registration,
+// before any document review) could claim any pending return pickup and
+// trigger immediate store-credit issuance to the customer.
 router.post(
   "/:returnId/pickup",
   authenticate,
   requireRole("driver"),
+  requireApprovedDriver,
   ReturnController.pickupReturn,
 );
 router.get(

@@ -1,11 +1,19 @@
 const BaseModel = require("./BaseModel");
 
+// Public-facing reads (getProducts/getProduct) must never return cost_price —
+// it's Flash's internal wholesale/margin data, not something either public
+// endpoint should expose to an unauthenticated caller. Admin-only writes
+// (addProduct/updateStock) still return it via RETURNING * since that's an
+// admin action that legitimately needs to see what it just set.
+const PUBLIC_COLUMNS = `id, product_name, category, brand, price, sizes,
+  stock_by_size, image_url, description, is_active, created_at, updated_at`;
+
 class Inventory extends BaseModel {
   static async getProducts(category, page = 1, limit = 20) {
     const offset = (page - 1) * limit;
     const query = category
-      ? `SELECT * FROM flash_inventory WHERE is_active=true AND category=$3 ORDER BY created_at DESC LIMIT $1 OFFSET $2`
-      : `SELECT * FROM flash_inventory WHERE is_active=true ORDER BY created_at DESC LIMIT $1 OFFSET $2`;
+      ? `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true AND category=$3 ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+      : `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true ORDER BY created_at DESC LIMIT $1 OFFSET $2`;
     const params = category ? [limit, offset, category] : [limit, offset];
     const result = await this.query(query, params);
     return result.rows;
@@ -13,7 +21,7 @@ class Inventory extends BaseModel {
 
   static async getProduct(productId) {
     const result = await this.query(
-      "SELECT * FROM flash_inventory WHERE id=$1 AND is_active=true",
+      `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE id=$1 AND is_active=true`,
       [productId],
     );
     return result.rows[0];
