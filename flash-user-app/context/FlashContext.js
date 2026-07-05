@@ -16,6 +16,7 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import api, { saveTokens, clearTokens } from '../services/api';
 
 const FlashContext = createContext(null);
@@ -240,9 +241,17 @@ export const FlashProvider = ({ children }) => {
       try {
         const { status } = await Notifications.requestPermissionsAsync();
         if (status !== 'granted') return;
-        const tokenData = await Notifications.getExpoPushTokenAsync();
+        // getExpoPushTokenAsync() needs an explicit projectId — without it,
+        // this previously threw and was swallowed by the catch below,
+        // silently registering nothing on every launch.
+        const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+        const tokenData = await Notifications.getExpoPushTokenAsync(
+          projectId ? { projectId } : undefined,
+        );
         if (tokenData?.data) await api.user.registerPushToken(tokenData.data).catch(() => {});
-      } catch (_e) {}
+      } catch (e) {
+        console.warn('[Flash] Push token registration failed:', e.message);
+      }
     })();
   }, [token, hydrated]);
 

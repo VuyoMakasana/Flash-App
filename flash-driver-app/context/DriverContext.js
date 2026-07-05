@@ -18,6 +18,7 @@ import React, {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import driverApi, { saveTokens, clearTokens } from '../services/api';
 import {
   startBackgroundLocation,
@@ -43,7 +44,13 @@ const registerPushToken = async () => {
     }
     if (finalStatus !== 'granted') return;
 
-    const tokenData = await Notifications.getExpoPushTokenAsync();
+    // getExpoPushTokenAsync() needs an explicit projectId — without it, this
+    // previously threw and was swallowed by the catch below, silently
+    // registering nothing on every launch.
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+    const tokenData = await Notifications.getExpoPushTokenAsync(
+      projectId ? { projectId } : undefined,
+    );
     const pushToken = tokenData.data;
     await driverApi.driver.savePushToken(pushToken).catch(() => {});
   } catch (e) {
