@@ -1,12 +1,17 @@
 const errorHandler = (err, req, res, next) => {
-  console.error("[Error]", {
-    message: err.message,
-    stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
+  // req.log is a pino child logger scoped to this request (via pino-http in
+  // server.js) — already carries req.id, so this error line is queryable
+  // alongside every other log line for the same request. Falls back to
+  // console.error if pino-http isn't in the middleware chain (e.g. a test
+  // that constructs the error handler in isolation).
+  const log = req.log || console;
+  log.error({
+    err: { message: err.message, stack: err.stack },
     url: req.url,
     method: req.method,
     ip: req.ip,
     userId: req.userId,
-  });
+  }, "Unhandled request error");
 
   // Handle specific error types
   if (err.code === "23505") {

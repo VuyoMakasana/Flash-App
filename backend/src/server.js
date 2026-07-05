@@ -5,7 +5,7 @@ const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const helmet = require("helmet");
-const morgan = require("morgan");
+const pinoHttp = require("pino-http");
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
@@ -30,6 +30,7 @@ if (missingEnv.length) {
 }
 
 const pool = require("./config/database");
+const logger = require("./config/logger");
 const { errorHandler, notFound } = require("./middleware/errorHandler");
 const {
   limiter,
@@ -109,10 +110,10 @@ function createApp() {
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true }));
 
-// Logging
-  if (process.env.NODE_ENV !== "test") {
-    app.use(morgan(process.env.NODE_ENV === "production" ? "tiny" : "combined"));
-  }
+// Logging — structured JSON, with a request ID (req.id) attached to every
+// log line for a given request, including anything logged via req.log
+// inside a route handler. Replaces morgan's plain-text access log.
+  app.use(pinoHttp({ logger }));
 
 // Rate limiting
   app.use("/api/", limiter);
