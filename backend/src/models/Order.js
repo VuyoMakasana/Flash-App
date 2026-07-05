@@ -235,7 +235,8 @@ class Order extends BaseModel {
       SELECT o.*,
              d.name as driver_name, d.phone as driver_phone,
              d.vehicle_type as driver_vehicle, d.profile_photo_url as driver_photo,
-             d.rating as driver_rating, d.current_lat as driver_lat, d.current_lng as driver_lng,
+             d.rating as driver_rating, d.total_deliveries as driver_total_deliveries,
+             d.current_lat as driver_lat, d.current_lng as driver_lng,
              json_agg(json_build_object(
                'id', oi.id, 'product_name', oi.product_name, 'size', oi.size,
                'quantity', oi.quantity, 'total_price', oi.total_price
@@ -259,7 +260,8 @@ class Order extends BaseModel {
     const sql = `
       SELECT o.*, d.name as driver_name, d.phone as driver_phone,
              d.vehicle_type as driver_vehicle, d.profile_photo_url as driver_photo,
-             d.rating as driver_rating, d.current_lat as driver_lat, d.current_lng as driver_lng,
+             d.rating as driver_rating, d.total_deliveries as driver_total_deliveries,
+             d.current_lat as driver_lat, d.current_lng as driver_lng,
              json_agg(json_build_object(
                'id', oi.id, 'product_id', oi.product_id, 'product_name', oi.product_name,
                'size', oi.size, 'quantity', oi.quantity, 'unit_price', oi.unit_price, 'total_price', oi.total_price

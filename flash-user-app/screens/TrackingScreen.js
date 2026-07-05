@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, Pressable, ActivityIndicator,
-  Platform, Linking, Animated,
+  Platform, Linking, Animated, Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -11,6 +11,14 @@ import api, { BASE_URL } from '../services/api';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
 // FIX 4: Align tracking labels with backend state machine values
+// NOTE: these two maps also define `statuses` (Object.keys(STATUS_LABELS)),
+// the ordered sequence rendered as progress steps below — 'cancelled' is
+// deliberately NOT in here, since it's a terminal alternate state, not a
+// step in the linear happy path. It's handled as a special case in the
+// status-pill fallback and the steps-list render instead (see orderStatus
+// === 'cancelled' below), so a cancellation racing in via socket update
+// while this screen is open shows a clear cancelled state rather than the
+// raw backend enum string or a corrupted step sequence.
 const STATUS_LABELS = {
   paid:                 'Finding your driver...',
   driver_assigned:      'Driver assigned',
@@ -88,6 +96,7 @@ export default function TrackingScreen() {
             vehicle: data.order.driver_vehicle,
             phone: data.order.driver_phone,
             rating: data.order.driver_rating,
+            photo: data.order.driver_photo,
             total_deliveries: data.order.driver_total_deliveries || 0,
           });
         }
@@ -169,6 +178,8 @@ export default function TrackingScreen() {
                   vehicle: data.order.driver_vehicle,
                   phone:   data.order.driver_phone,
                   rating:  data.order.driver_rating,
+                  photo:   data.order.driver_photo,
+                  total_deliveries: data.order.driver_total_deliveries || 0,
                 });
               }
             }
@@ -189,8 +200,9 @@ export default function TrackingScreen() {
     };
   }, [orderId, showBanner]);
 
-  const statusColor = STATUS_COLORS[orderStatus] || '#6b7280';
-  const statusLabel = STATUS_LABELS[orderStatus] || orderStatus;
+  const isCancelled = orderStatus === 'cancelled';
+  const statusColor = isCancelled ? '#ef4444' : (STATUS_COLORS[orderStatus] || '#6b7280');
+  const statusLabel = isCancelled ? 'Order cancelled' : (STATUS_LABELS[orderStatus] || orderStatus);
   const isCompleted = orderStatus === 'completed' || orderStatus === 'delivered';
   const statuses    = Object.keys(STATUS_LABELS);
 
@@ -256,7 +268,7 @@ export default function TrackingScreen() {
       <View style={styles.panel}>
 
         {/* ── Cash reminder banner (Part 2) ─────────────────────────────── */}
-        {(isCashDelivery || cashReminder) && (
+        {!isCancelled && (isCashDelivery || cashReminder) && (
           <View style={styles.cashBanner}>
             <Ionicons name="cash-outline" size={18} color="#0a0a0a" />
             <Text style={styles.cashBannerText}>
@@ -271,16 +283,23 @@ export default function TrackingScreen() {
           <Text style={styles.statusPillText}>{statusLabel}</Text>
         </View>
 
-        {/* Driver card with call + message buttons */}
+        {/* Driver card with photo, name, rating + call/message buttons —
+            customers previously only saw a moving map marker plus a generic
+            person-icon placeholder; the backend already returned a photo
+            URL (driver_photo) that nothing here ever read. */}
         {driver ? (
           <View style={styles.driverCard}>
-            <View style={styles.driverAvatar}>
-              <Ionicons name="person" size={24} color="#fff" />
-            </View>
+            {driver.photo ? (
+              <Image source={{ uri: driver.photo }} style={styles.driverAvatarImg} />
+            ) : (
+              <View style={styles.driverAvatar}>
+                <Ionicons name="person" size={24} color="#fff" />
+              </View>
+            )}
             <View style={{ flex: 1 }}>
               <Text style={styles.driverName}>{driver.name}</Text>
               <Text style={styles.driverMeta}>
-                {driver.vehicle}  •  {driver.rating}★  •  {driver.total_deliveries} trips
+                {driver.vehicle}  •  {parseFloat(driver.rating || 5).toFixed(1)}★  •  {driver.total_deliveries || 0} trips
               </Text>
             </View>
             {/* ── Part 2: Call button (masked dialler) ─────────────────── */}
@@ -299,22 +318,26 @@ export default function TrackingScreen() {
           </View>
         ) : null}
 
-        {/* Progress steps */}
-        <View style={styles.steps}>
-          {statuses.map((key, idx) => {
-            const currentIdx = statuses.indexOf(orderStatus);
-            const done = idx <= currentIdx;
-            return (
-              <View key={key} style={styles.stepRow}>
-                <View style={[styles.stepDot, done && { backgroundColor: statusColor }]} />
-                <Text style={[styles.stepLabel, done && styles.stepLabelDone]}>
-                  {STATUS_LABELS[key]}
-                </Text>
-                {done && <Ionicons name="checkmark-circle" size={16} color={statusColor} />}
-              </View>
-            );
-          })}
-        </View>
+        {/* Progress steps — hidden for cancelled orders, where a linear
+            "which step are we on" sequence doesn't apply; the status pill
+            above already reads "Order cancelled" in that case. */}
+        {!isCancelled && (
+          <View style={styles.steps}>
+            {statuses.map((key, idx) => {
+              const currentIdx = statuses.indexOf(orderStatus);
+              const done = idx <= currentIdx;
+              return (
+                <View key={key} style={styles.stepRow}>
+                  <View style={[styles.stepDot, done && { backgroundColor: statusColor }]} />
+                  <Text style={[styles.stepLabel, done && styles.stepLabelDone]}>
+                    {STATUS_LABELS[key]}
+                  </Text>
+                  {done && <Ionicons name="checkmark-circle" size={16} color={statusColor} />}
+                </View>
+              );
+            })}
+          </View>
+        )}
 
         {isCompleted && (
           <View style={styles.completedBanner}>
@@ -375,6 +398,9 @@ const styles = StyleSheet.create({
   driverAvatar: {
     width: 46, height: 46, borderRadius: 14,
     backgroundColor: '#0a0a0a', alignItems: 'center', justifyContent: 'center',
+  },
+  driverAvatarImg: {
+    width: 46, height: 46, borderRadius: 14, backgroundColor: '#e5e7eb',
   },
   driverName:    { fontWeight: '800', color: '#111827' },
   driverMeta:    { color: '#6b7280', fontSize: 12, marginTop: 2 },

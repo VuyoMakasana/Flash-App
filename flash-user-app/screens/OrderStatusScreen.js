@@ -15,7 +15,13 @@ const STEPS = [
   { key: 'delivered',           label: 'Delivered',        icon: 'home' },
 ];
 
+// scheduled_for_morning/waiting_for_driver were missing here entirely, so an
+// order that had genuinely already paid and confirmed fell through to rank 0
+// — the same as a brand-new, unconfirmed order — making it look like payment
+// never registered.
 const ORDER_RANK = {
+  scheduled_for_morning: 1,
+  waiting_for_driver: 1,
   paid: 1,
   driver_assigned: 2,
   driver_arrived_store: 3,
@@ -130,6 +136,33 @@ export default function OrderStatusScreen() {
           </View>
         )}
 
+        {/* CANCELLED: previously the progress steps just showed frozen at
+            rank 0 with no explanation at all for why nothing was moving. */}
+        {order.status === 'cancelled' && (
+          <View style={styles.cancelledBanner}>
+            <Ionicons name="close-circle" size={16} color="#ef4444" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cancelledTitle}>Order Cancelled</Text>
+              <Text style={styles.cancelledBody}>
+                This order was cancelled. If you were charged, your refund will follow the policy in our Terms & Conditions.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* SCHEDULED FOR MORNING: order paid outside operating hours (07:00–19:00 SAST) */}
+        {order.status === 'scheduled_for_morning' && (
+          <View style={styles.noDriverBanner}>
+            <Ionicons name="moon-outline" size={16} color="#b45309" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.noDriverTitle}>Scheduled for the morning</Text>
+              <Text style={styles.noDriverBody}>
+                Flash is currently closed. Your order is confirmed and will be assigned to a driver at 07:00.
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* NO-DRIVER WARNING: Shows when order is paid but no driver found after 10 minutes */}
         {/* WHY: Users need to know their order is waiting and they can cancel for a full refund */}
         {order.status === 'waiting_for_driver' && order.payment_status === 'paid' && (() => {
@@ -233,6 +266,9 @@ const styles = StyleSheet.create({
   total: { fontSize: 28, fontWeight: '900', color: '#0a0a0a' },
   pendingBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8 },
   pendingBannerText: { color: '#92400e', fontWeight: '700', fontSize: 12 },
+  cancelledBanner: { flexDirection: 'row', gap: 10, backgroundColor: '#fef2f2', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#fecaca' },
+  cancelledTitle: { color: '#991b1b', fontWeight: '700', fontSize: 13, marginBottom: 3 },
+  cancelledBody: { color: '#7f1d1d', fontSize: 12, lineHeight: 18 },
   noDriverBanner: { flexDirection: 'row', gap: 10, backgroundColor: '#fffbeb', borderRadius: 12, padding: 14, borderWidth: 1, borderColor: '#fde68a' },
   noDriverTitle: { color: '#92400e', fontWeight: '700', fontSize: 13, marginBottom: 3 },
   noDriverBody: { color: '#78350f', fontSize: 12, lineHeight: 18 },
