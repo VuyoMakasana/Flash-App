@@ -16,17 +16,17 @@
  * to verify against a live map. A box is the simplest shape that's easy to
  * reason about and adjust.
  *
- * These coordinates are a best-effort draft from general geographic
- * knowledge, NOT verified against an authoritative source (e.g. the
- * municipality's own GIS boundary) — reviewed and approved as a starting
- * point, but flagged here again as something to double-check against a real
- * map before this becomes the actual production gate.
+ * Bounds confirmed by user: urban Gqeberha box (south -34.03, north -33.83,
+ * west 25.55, east 25.68) — covers Central, Summerstrand, Walmer, and the
+ * surrounding urban area. Tighter than the original draft box (which also
+ * reached out to Kariega/Despatch/Coega); replace/widen if delivery needs to
+ * extend beyond urban Gqeberha.
  */
 const NMB_BOUNDS = {
-  minLat: -34.05,
-  maxLat: -33.70,
-  minLng: 25.35,
-  maxLng: 25.75,
+  minLat: -34.03,
+  maxLat: -33.83,
+  minLng: 25.55,
+  maxLng: 25.68,
 };
 
 function isWithinNelsonMandelaBay(lat, lng) {
@@ -44,16 +44,14 @@ function isWithinNelsonMandelaBay(lat, lng) {
 const OUTSIDE_SERVICE_AREA_MESSAGE =
   'Flash currently only delivers within Nelson Mandela Bay (Gqeberha). This location is outside our service area.';
 
-// TODO(user): replace with Flash's real store/warehouse pickup coordinate.
-// There is no "malls"/store-location table anywhere in this codebase — every
-// order is currently treated as picking up from this one fixed location
-// rather than trusting client-supplied pickup coordinates for something that
-// never changes. Placeholder is the Gqeberha city-center coordinate used
-// elsewhere in this file's own worked examples — almost certainly NOT
-// Flash's actual pickup address.
+// Flash's real pickup/warehouse coordinate: 12B Mkele Street, Kwazakhele,
+// 6205. There is no "malls"/store-location table anywhere in this
+// codebase — every order is currently treated as picking up from this one
+// fixed location rather than trusting client-supplied pickup coordinates
+// for something that never changes.
 const FLASH_STORE_LOCATION = {
-  lat: -33.958,
-  lng: 25.600,
+  lat: -33.8842210,
+  lng: 25.5853185,
 };
 
 module.exports = {
