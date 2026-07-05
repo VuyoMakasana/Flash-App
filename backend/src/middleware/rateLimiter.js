@@ -91,6 +91,19 @@ const locationLimiter = rateLimit({
   ...storeOption,
 });
 
+// Payment initiation — 10 per 15 minutes. Previously only the general
+// 100/15min limiter covered /payments/initialize and /charge-saved-card —
+// the two endpoints most exposed to card-testing/fraud attempts (rapidly
+// trying many saved cards, or hammering Paystack initialization).
+const paymentLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many payment attempts. Please wait before trying again.' },
+  ...storeOption,
+});
+
 // Cash OTP — 3 per minute
 const otpLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -119,4 +132,5 @@ module.exports = {
   locationLimiter,
   otpLimiter,
   trustRequestLimiter,
+  paymentLimiter,
 };

@@ -11,12 +11,13 @@ const express           = require('express');
 const router            = express.Router();
 const { authenticate, requireRole } = require('../middleware/auth');
 const PaymentController = require('../controllers/paymentController');
-const { otpLimiter }    = require('../middleware/rateLimiter');
+const { otpLimiter, paymentLimiter } = require('../middleware/rateLimiter');
 
 router.post(
   '/initialize',
   authenticate,
   requireRole('user'),
+  paymentLimiter,
   PaymentController.initializePayment,
 );
 
@@ -61,6 +62,7 @@ router.post(
   '/charge-saved-card',
   authenticate,
   requireRole('user'),
+  paymentLimiter,
   PaymentController.chargeSavedCard,
 );
 
