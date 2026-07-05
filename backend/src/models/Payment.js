@@ -1,6 +1,6 @@
 const BaseModel = require("./BaseModel");
 const crypto = require("crypto");
-const { encrypt, decrypt } = require("../utils/paymentCrypto");
+const { encrypt, decrypt, getKey } = require("../utils/paymentCrypto");
 
 class Payment extends BaseModel {
   static tableName = "payments";
@@ -98,9 +98,15 @@ class Payment extends BaseModel {
   }
 
   static authCodeFingerprint(userId, authorizationCode) {
-    const secret = process.env.PAYMENT_METHOD_ENCRYPTION_KEY || process.env.JWT_SECRET || "flash-dev-fallback-key";
+    // Reuses paymentCrypto's key derivation (required in production, no
+    // fallback to JWT_SECRET) instead of re-deriving its own secret here.
+    // The previous fallback chain (PAYMENT_METHOD_ENCRYPTION_KEY ||
+    // JWT_SECRET || a hardcoded literal) undermined the whole point of
+    // keeping payment-data secrets independent of JWT_SECRET, and the
+    // hardcoded literal would have been a publicly-known HMAC key if
+    // PAYMENT_METHOD_ENCRYPTION_KEY were ever unset in production.
     return crypto
-      .createHmac("sha256", secret)
+      .createHmac("sha256", getKey())
       .update(`${userId}:${authorizationCode}`)
       .digest("hex");
   }

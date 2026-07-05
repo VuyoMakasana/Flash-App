@@ -514,7 +514,12 @@ async function gracefulShutdown(signal) {
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 process.on("unhandledRejection", (reason) => {
-  console.error("[UnhandledRejection]", reason);
+  // Previously only console.error'd — every unhandled rejection in
+  // production was invisible to Sentry, the same blind spot Sentry was
+  // added to close for synchronous/request-path errors. Sentry.captureException
+  // safely no-ops if Sentry.init() was never called (no SENTRY_DSN/non-prod).
+  logger.error({ err: reason }, "Unhandled promise rejection");
+  Sentry.captureException(reason instanceof Error ? reason : new Error(String(reason)));
 });
 
 module.exports = {

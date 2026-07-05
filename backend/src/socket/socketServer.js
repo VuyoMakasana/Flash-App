@@ -69,6 +69,33 @@ async function canAccessOrderRoom(orderId, userId, userRole) {
   return false;
 }
 
+// canAccessOrderRoom was re-run on every single driver_location_update event
+// — for an active delivery pinging every few seconds, that's a DB read per
+// ping to re-verify a fact (which user/driver the order belongs to) that
+// essentially never changes for the life of the delivery. Cached per
+// socket+order for a short window: long enough to remove nearly all of the
+// redundant reads, short enough that a mid-flight reassignment (rare, but
+// possible via the stuck-order requeue cron) is reflected within seconds.
+const ORDER_ACCESS_CACHE_TTL_MS = 30_000;
+const orderAccessCache = new Map(); // `${socketId}:${orderId}` -> { allowed, expiresAt }
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of orderAccessCache.entries()) {
+    if (now >= entry.expiresAt) orderAccessCache.delete(key);
+  }
+}, ORDER_ACCESS_CACHE_TTL_MS);
+
+async function canAccessOrderRoomCached(socket, orderId) {
+  const key = `${socket.id}:${orderId}`;
+  const cached = orderAccessCache.get(key);
+  if (cached && Date.now() < cached.expiresAt) return cached.allowed;
+
+  const allowed = await canAccessOrderRoom(orderId, socket.userId, socket.userRole);
+  orderAccessCache.set(key, { allowed, expiresAt: Date.now() + ORDER_ACCESS_CACHE_TTL_MS });
+  return allowed;
+}
+
 module.exports = function setupSocket(io) {
   const jwtSecret = getRequired('JWT_SECRET', 'socket');
 
@@ -136,7 +163,7 @@ module.exports = function setupSocket(io) {
       if (!generalRateAllowed(socket.id)) return;
       if (
         socket.userRole === 'user' &&
-        (await canAccessOrderRoom(orderId, socket.userId, socket.userRole))
+        (await canAccessOrderRoomCached(socket, orderId))
       ) {
         socket.join(`order:${orderId}`);
         socket.join(`chat:${orderId}`);
@@ -152,7 +179,7 @@ module.exports = function setupSocket(io) {
     socket.on('driver_location_update', async ({ lat, lng, orderId }) => {
       if (socket.userRole !== 'driver')     return;
       if (!locationRateAllowed(socket.id)) return;
-      if (orderId && !(await canAccessOrderRoom(orderId, socket.userId, socket.userRole))) return;
+      if (orderId && !(await canAccessOrderRoomCached(socket, orderId))) return;
 
       const payload = { driverId: socket.userId, lat, lng, timestamp: new Date().toISOString() };
       if (orderId) io.to(`order:${orderId}`).emit('driver_location', payload);
@@ -202,7 +229,7 @@ module.exports = function setupSocket(io) {
       if (!generalRateAllowed(socket.id)) return;
       if (
         (socket.userRole === 'driver' || socket.userRole === 'user') &&
-        (await canAccessOrderRoom(orderId, socket.userId, socket.userRole))
+        (await canAccessOrderRoomCached(socket, orderId))
       ) {
         socket.join(`order:${orderId}`);
         socket.join(`chat:${orderId}`);

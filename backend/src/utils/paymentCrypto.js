@@ -62,4 +62,4 @@ function decrypt(encryptedValue) {
   return plain.toString('utf8');
 }
 
-module.exports = { encrypt, decrypt };
+module.exports = { encrypt, decrypt, getKey };
