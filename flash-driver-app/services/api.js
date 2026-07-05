@@ -33,6 +33,18 @@ export const clearTokens = async () => {
   await SecureStore.deleteItemAsync('FLASH_DRIVER_REFRESH_TOKEN').catch(() => {});
 };
 
+// H11 FIX: session-expiry recovery previously relied entirely on
+// ErrorUtils.setGlobalHandler catching the thrown 'SESSION_EXPIRED' Error in
+// _layout.js — but that only catches truly *uncaught* exceptions, and nearly
+// every screen wraps its driverApi calls in a local try/catch (the dominant
+// pattern in this app), which swallows the error before it ever reaches
+// ErrorUtils. A driver whose token expired saw a raw "SESSION_EXPIRED" alert
+// and stayed stuck on the current screen. _layout.js now registers a real
+// callback here, invoked directly and unconditionally at the moment expiry
+// is detected — independent of whether the caller catches the error too.
+let onSessionExpired = null;
+export const setSessionExpiredHandler = (fn) => { onSessionExpired = fn; };
+
 // ── Shared fetch wrapper ────────────────────────────────────────────────────
 function buildHeaders(token, isFormData, extra) {
   return {
@@ -83,6 +95,7 @@ async function request(path, options = {}) {
     }
 
     await clearTokens();
+    if (onSessionExpired) onSessionExpired();
     throw new Error('SESSION_EXPIRED');
   }
 

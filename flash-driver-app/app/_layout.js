@@ -10,6 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { View, ActivityIndicator, ErrorUtils } from 'react-native';
 import { DriverProvider, useDriver } from '../context/DriverContext';
+import { setSessionExpiredHandler } from '../services/api';
 
 // ── BACKGROUND LOCATION TASK REGISTRATION ───────────────────────────────────
 // This import MUST stay at module level and MUST appear before any component
@@ -30,9 +31,18 @@ function RootLayoutNav() {
   const router = useRouter();
   const segments = useSegments();
 
-  // SESSION EXPIRY: Intercept SESSION_EXPIRED errors thrown by the driver api.js
-  // 401 handler anywhere in the app and cleanly log the driver out.
+  // H11 FIX: session-expiry recovery now runs via a direct callback that
+  // api.js's request() invokes the instant it detects an expired/revoked
+  // token — unconditionally, before it even throws. Previously this only
+  // ran through ErrorUtils.setGlobalHandler, which catches *uncaught*
+  // exceptions only; nearly every screen wraps its driverApi calls in a
+  // local try/catch (the dominant pattern in this app), which silently
+  // swallowed the SESSION_EXPIRED error before it ever reached ErrorUtils —
+  // a driver whose token expired just saw a raw "SESSION_EXPIRED" alert and
+  // stayed stuck on the current screen. The ErrorUtils hook stays as a
+  // defensive fallback for the rare call site with no local catch.
   useEffect(() => {
+    setSessionExpiredHandler(handleSessionExpired);
     const originalHandler = ErrorUtils.getGlobalHandler();
     ErrorUtils.setGlobalHandler((error, isFatal) => {
       if (error?.message === 'SESSION_EXPIRED') {
