@@ -17,6 +17,7 @@ export default function BankAccountScreen() {
   const [banks, setBanks] = useState([]);
   const [selectedBank, setSelectedBank] = useState(null);
   const [accountNumber, setAccountNumber] = useState('');
+  const [password, setPassword] = useState('');
   const [verifiedName, setVerifiedName] = useState('');
   const [existingAccount, setExistingAccount] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -67,9 +68,11 @@ export default function BankAccountScreen() {
   };
 
   const handleSave = async () => {
+    if (!password) { Alert.alert('Password Required', 'Enter your password to confirm this change.'); return; }
     setSaving(true);
     try {
-      await driverApi.bank.saveAccount(accountNumber, selectedBank.code, verifiedName);
+      await driverApi.bank.saveAccount(accountNumber, selectedBank.code, verifiedName, password);
+      setPassword('');
       setStep('done');
       setExistingAccount({ account_name: verifiedName, bank_name: selectedBank.name, account_number: accountNumber });
       Alert.alert('Bank Account Saved', 'You can now request payouts to this account.');
@@ -163,6 +166,20 @@ export default function BankAccountScreen() {
             <Ionicons name="checkmark-circle" size={18} color="#10b981" />
             <Text style={styles.verifiedName}>{verifiedName}</Text>
           </View>
+        )}
+
+        {step === 'verified' && (
+          <>
+            <Text style={[styles.label, { marginTop: 16 }]}>Confirm Password</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter your account password"
+              placeholderTextColor="#6b7280"
+              secureTextEntry
+              value={password}
+              onChangeText={setPassword}
+            />
+          </>
         )}
 
         {step === 'form' && (

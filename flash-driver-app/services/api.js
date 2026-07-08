@@ -212,12 +212,15 @@ const bank = {
     // Paystack resolved the account — mark it verified for the caller.
     return { ...data, verified: true };
   },
-  saveAccount: (accountNumber, bankCode, accountName) => request('/drivers/bank/save', {
+  // H-5 FIX: password is required server-side as a step-up auth check
+  // before a new payout destination is activated.
+  saveAccount: (accountNumber, bankCode, accountName, password) => request('/drivers/bank/save', {
     method: 'POST',
     body:   JSON.stringify({
       account_number: accountNumber,
       bank_code:      bankCode,
       account_name:   accountName,
+      password,
     }),
   }),
 };

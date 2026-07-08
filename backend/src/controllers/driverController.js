@@ -15,7 +15,8 @@ const {
 const { autoAssignNearestDriver } = require('../services/autoMatchService');
 const PayoutService = require('../services/payoutService');
 const paystackService = require('../services/paystackService');
-const { saveDriverPushToken } = require('../services/notificationService');
+const { saveDriverPushToken, sendPushNotification } = require('../services/notificationService');
+const bcrypt = require('bcryptjs');
 const { isClosedNow } = require('../services/operatingHoursService');
 const {
   checkCommissionBlock,
@@ -417,14 +418,38 @@ class DriverController {
   }
 
   static async saveBankAccount(req, res) {
-    const { account_number, bank_code, account_name } = req.body;
+    const { account_number, bank_code, account_name, password } = req.body;
     if (!account_number || !bank_code || !account_name) {
       return res.status(400).json({
         error: 'account_number, bank_code, and account_name are required',
       });
     }
+    if (!password) {
+      return res.status(400).json({ error: 'Password confirmation is required to change payout details' });
+    }
 
     try {
+      // H-5 FIX: step-up auth. Previously, anyone holding a driver's
+      // session token alone (stolen device, leaked JWT) could redirect all
+      // future payouts to their own account with no further check, and the
+      // real driver had no signal until a payout went missing. Require the
+      // driver to re-enter their password immediately before activating a
+      // new payout destination.
+      //
+      // Password re-entry, not OTP: there's no reliable SMS/OTP delivery
+      // infrastructure wired up yet, and shipping a real (if simpler)
+      // protection now beats blocking this fix on building that first. A
+      // one-time-code step is a reasonable future upgrade, not a rejected
+      // approach — swap this check for one when OTP delivery exists.
+      const driver = await Driver.findById(req.userId, 'drivers');
+      if (!driver) {
+        return res.status(404).json({ error: 'Driver not found' });
+      }
+      const passwordValid = await bcrypt.compare(password, driver.password_hash);
+      if (!passwordValid) {
+        return res.status(401).json({ error: 'Incorrect password' });
+      }
+
       const recipientRes = await paystackService.createTransferRecipient({
         name: account_name,
         accountNumber: account_number,
@@ -455,6 +480,15 @@ class DriverController {
          DO UPDATE SET recipient_code = $2, is_active = true, updated_at = NOW()`,
         [req.userId, recipientCode, account_number, bank_code, account_name],
       );
+
+      // H-5 FIX: notify the driver's own device on every payout-destination
+      // change, so a real driver has an immediate signal if this wasn't
+      // them — not just silence until a payout goes missing.
+      sendPushNotification({
+        tokens: driver.push_token,
+        title:  'Payout details changed',
+        body:   'Your bank account for payouts was just updated. If this wasn\'t you, contact support immediately.',
+      }).catch(() => {});
 
       res.status(201).json({ success: true, recipient_code: recipientCode, account_name });
     } catch (err) {
