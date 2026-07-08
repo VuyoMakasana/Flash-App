@@ -7,8 +7,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRoute } from '@react-navigation/native';
 import { io } from 'socket.io-client';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BASE_URL } from '../services/api';
+import { BASE_URL, getToken } from '../services/api';
 import api from '../services/api';
 import { useFlash } from '../context/FlashContext';
 
@@ -41,7 +40,7 @@ export default function ChatScreen() {
       }
 
       // 2. Connect Socket.io for real-time messages
-      const token = await AsyncStorage.getItem('FLASH_TOKEN');
+      const token = await getToken();
       if (!token) return;
 
       const socket = io(BASE_URL, { auth: { token }, transports: ['websocket'] });

@@ -6,9 +6,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { io } from 'socket.io-client';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
-import api, { BASE_URL } from '../services/api';
+import api, { BASE_URL, getToken } from '../services/api';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
 // FIX 4: Align tracking labels with backend state machine values
@@ -151,7 +150,7 @@ export default function TrackingScreen() {
     hydrateOrder();
 
     const connectSocket = async () => {
-      const token = await AsyncStorage.getItem('FLASH_TOKEN');
+      const token = await getToken();
       if (!token) return;
 
       const socket = io(BASE_URL, { auth: { token }, transports: ['websocket'] });
