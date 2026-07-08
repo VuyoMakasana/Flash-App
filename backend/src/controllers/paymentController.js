@@ -413,7 +413,7 @@ class PaymentController {
 
     try {
       const result = await db.query(
-        `SELECT id, driver_id, user_id, payment_method, payment_status
+        `SELECT id, driver_id, user_id, payment_method, payment_status, status
          FROM orders WHERE id = $1`,
         [orderId],
       );
@@ -426,6 +426,14 @@ class PaymentController {
       }
       if (order.payment_method !== 'cash') {
         return res.status(409).json({ error: 'Not a cash order' });
+      }
+      // H-6 FIX: mirrors confirmCashReceived's precondition. Without this,
+      // a driver who actually collected cash could call this instead of
+      // the real OTP-gated confirmation flow, keep the money, skip the R20
+      // commission entirely, and after 2 occurrences get the innocent
+      // *customer* auto-flagged for cash abuse.
+      if (order.status !== 'delivered') {
+        return res.status(409).json({ error: 'Cash failure can only be reported after delivery' });
       }
 
       await db.query(

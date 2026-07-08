@@ -90,6 +90,7 @@ router.post(
   '/cash/fail',
   authenticate,
   requireRole('driver'),
+  otpLimiter,
   PaymentController.markCashFailed,
 );
 
