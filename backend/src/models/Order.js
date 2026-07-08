@@ -10,6 +10,17 @@
 
 const BaseModel = require('./BaseModel');
 const { randomBytes } = require('crypto');
+const { calculateDistance } = require('../utils/helpers');
+
+// H-4 FIX: delivery fee used to be picked by the client (matching
+// pickup_mall_id/dropoff_mall_id, both client-supplied with no malls table
+// to validate against — any customer could send matching IDs on every
+// order for a guaranteed R90 instead of R180). There is no multi-vendor
+// "malls" concept in this codebase; pickup is always the one fixed store
+// location. Same two fees, same customer-facing pricing — just gated by
+// real haversine distance from the store to the (geofence-validated)
+// dropoff point instead of a client-supplied ID match.
+const NEARBY_DELIVERY_RADIUS_KM = 5;
 
 // ─── EXTERNAL ITEM PRICE VALIDATOR ───────────────────────────────────────────
 //
@@ -51,8 +62,9 @@ function validateExternalItemPrice(rawPrice, itemName) {
 class Order extends BaseModel {
   static tableName = 'orders';
 
-  static calculateDeliveryFee({ pickupMallId, dropoffMallId }) {
-    if (pickupMallId && dropoffMallId && String(pickupMallId) === String(dropoffMallId)) {
+  static calculateDeliveryFee({ pickupLat, pickupLng, dropoffLat, dropoffLng }) {
+    const distKm = calculateDistance(pickupLat, pickupLng, dropoffLat, dropoffLng);
+    if (distKm !== null && distKm <= NEARBY_DELIVERY_RADIUS_KM) {
       return 90;
     }
     return 180;
@@ -78,7 +90,12 @@ class Order extends BaseModel {
     } = orderData;
 
     const orderNumber         = `FLASH-${Date.now().toString(36).toUpperCase()}-${randomBytes(2).toString('hex').toUpperCase()}`;
-    const computedDeliveryFee = this.calculateDeliveryFee({ pickupMallId: pickup_mall_id, dropoffMallId: dropoff_mall_id });
+    const computedDeliveryFee = this.calculateDeliveryFee({
+      pickupLat:  pickup_lat,
+      pickupLng:  pickup_lng,
+      dropoffLat: dropoff_lat,
+      dropoffLng: dropoff_lng,
+    });
 
     // TRUSTED DRIVER EXCLUSIVITY WINDOW (see Driver.js getAvailableOrders/acceptOrder):
     // When a user selects a preferred/trusted driver, that driver gets a

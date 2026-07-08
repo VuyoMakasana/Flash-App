@@ -73,23 +73,55 @@ describe('Order IDOR protection', () => {
 
 // ─── Delivery fee calculation ─────────────────────────────────────────────────
 
+// H-4 FIX: calculateDeliveryFee used to take client-supplied
+// pickupMallId/dropoffMallId with no malls table to validate them against
+// - any customer could send matching IDs on every order for a guaranteed
+// R90 instead of R180, regardless of real distance. It now takes real
+// coordinates and computes distance itself (haversine, via
+// utils/helpers.calculateDistance). These fixture coordinates are the
+// live store location and two real Nelson Mandela Bay points used to
+// verify this fix live: ~2.9km (inside the R90 radius) and ~15.6km
+// (outside it).
+const STORE_COORDS = { lat: -33.8842210, lng: 25.5853185 };
+const NEAR_COORDS   = { lat: -33.9050, lng: 25.6050 }; // ~2.9km from store
+const FAR_COORDS    = { lat: -34.0100, lng: 25.6600 }; // ~15.6km from store
+
 describe('Order.calculateDeliveryFee', () => {
-  test('same-mall delivery costs R90', () => {
+  test('delivery within the nearby radius costs R90', () => {
     const Order = require('../../src/models/Order');
-    const fee = Order.calculateDeliveryFee({ pickupMallId: 'mall-1', dropoffMallId: 'mall-1' });
+    const fee = Order.calculateDeliveryFee({
+      pickupLat: STORE_COORDS.lat, pickupLng: STORE_COORDS.lng,
+      dropoffLat: NEAR_COORDS.lat, dropoffLng: NEAR_COORDS.lng,
+    });
     expect(fee).toBe(90);
   });
 
-  test('cross-mall delivery costs R180', () => {
+  test('delivery beyond the nearby radius costs R180', () => {
     const Order = require('../../src/models/Order');
-    const fee = Order.calculateDeliveryFee({ pickupMallId: 'mall-1', dropoffMallId: 'mall-2' });
+    const fee = Order.calculateDeliveryFee({
+      pickupLat: STORE_COORDS.lat, pickupLng: STORE_COORDS.lng,
+      dropoffLat: FAR_COORDS.lat, dropoffLng: FAR_COORDS.lng,
+    });
     expect(fee).toBe(180);
   });
 
-  test('no mall specified defaults to R180', () => {
+  test('missing coordinates defaults to R180', () => {
     const Order = require('../../src/models/Order');
     const fee = Order.calculateDeliveryFee({});
     expect(fee).toBe(180);
+  });
+
+  // Regression guard for the actual vulnerability: matching client-supplied
+  // mall IDs must have zero influence on the fee now that the function
+  // doesn't even accept them - only real coordinates decide the tier.
+  test('client-supplied mall IDs have no effect on the fee', () => {
+    const Order = require('../../src/models/Order');
+    const fee = Order.calculateDeliveryFee({
+      pickupLat: STORE_COORDS.lat, pickupLng: STORE_COORDS.lng,
+      dropoffLat: FAR_COORDS.lat, dropoffLng: FAR_COORDS.lng,
+      pickupMallId: 'mall-1', dropoffMallId: 'mall-1',
+    });
+    expect(fee).toBe(180); // still R180 despite "matching" mall IDs
   });
 });
 
