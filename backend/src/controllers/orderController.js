@@ -27,8 +27,10 @@ const { isWithinNelsonMandelaBay, OUTSIDE_SERVICE_AREA_MESSAGE, FLASH_STORE_LOCA
 // than server errors (500).
 const CLIENT_ERROR_PREFIXES = [
   'Invalid price for',
+  'Invalid quantity for',
   'is out of stock',
   'Order must have items',
+  'Order total must be positive',
 ];
 
 function isClientError(message) {

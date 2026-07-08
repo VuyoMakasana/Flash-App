@@ -106,6 +106,13 @@ class Order extends BaseModel {
       const validatedItems  = [];
 
       for (const item of items) {
+        const rawQty = Number(item.quantity);
+        if (!Number.isInteger(rawQty) || rawQty <= 0) {
+          throw new Error(
+            `Invalid quantity for "${item.name || 'item'}": must be a positive integer`
+          );
+        }
+
         let serverPrice = null;
 
         if (item.productId) {
@@ -124,13 +131,13 @@ class Order extends BaseModel {
             // Stock check — decrement atomically
             const stock     = invRow.rows[0].stock_by_size || {};
             const available = parseInt(stock[item.size] || 0);
-            if (item.size && available < parseInt(item.quantity)) {
+            if (item.size && available < rawQty) {
               throw new Error(
                 `${item.name || invRow.rows[0].product_name} size ${item.size} is out of stock`
               );
             }
             if (item.size) {
-              const newStock = { ...stock, [item.size]: available - parseInt(item.quantity) };
+              const newStock = { ...stock, [item.size]: available - rawQty };
               await client.query(
                 `UPDATE flash_inventory SET stock_by_size = $1, updated_at = NOW() WHERE id = $2`,
                 [JSON.stringify(newStock), item.productId]
@@ -155,7 +162,7 @@ class Order extends BaseModel {
           );
         }
 
-        const qty = parseInt(item.quantity) || 1;
+        const qty = rawQty;
         computedSubtotal += serverPrice * qty;
 
         validatedItems.push({
@@ -168,7 +175,10 @@ class Order extends BaseModel {
       }
       // ── END PRICE VALIDATION ───────────────────────────────────────────────
 
-      const finalTotal      = computedSubtotal + computedDeliveryFee;
+      const finalTotal = computedSubtotal + computedDeliveryFee;
+      if (finalTotal <= 0) {
+        throw new Error('Order total must be positive');
+      }
       const flashCommission = Math.max(10, Math.round(computedDeliveryFee * 0.25 * 100) / 100);
       const driverPayout    = Math.round((computedDeliveryFee - flashCommission) * 100) / 100;
 
