@@ -78,7 +78,12 @@ async function verifyAppleToken(identityToken, clientId) {
 
   if (payload.iss !== "https://appleid.apple.com") throw new Error("Apple token issuer mismatch");
 
-  const accepted = [clientId, process.env.APPLE_DRIVER_CLIENT_ID, process.env.APPLE_SERVICE_ID].filter(Boolean);
+  // Only the caller's own clientId (plus the shared web Services ID, used
+  // for browser-based Sign in with Apple flows common to both apps) is
+  // accepted here - the driver app's client ID must NOT be unconditionally
+  // trusted on every call, or a token minted for one app is accepted by
+  // the other app's sign-in endpoint regardless of which one is calling.
+  const accepted = [clientId, process.env.APPLE_SERVICE_ID].filter(Boolean);
   if (!accepted.includes(payload.aud)) throw new Error(`Apple token audience mismatch: ${payload.aud}`);
   if (payload.exp < Math.floor(Date.now() / 1000)) throw new Error("Apple token expired");
 

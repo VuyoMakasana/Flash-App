@@ -287,7 +287,10 @@ class AuthController {
     if (!idToken) return res.status(400).json({ error: 'Google ID token required' });
 
     try {
-      const googleUser = await verifyGoogleToken(idToken);
+      const googleUser = await verifyGoogleToken(idToken, [
+        process.env.GOOGLE_CLIENT_ID_USER_ANDROID,
+        process.env.GOOGLE_CLIENT_ID_USER_IOS,
+      ]);
       const googleId   = googleUser.sub;
 
       // 1. Existing account by Google ID
@@ -344,7 +347,10 @@ class AuthController {
     if (!idToken) return res.status(400).json({ error: 'Google ID token required' });
 
     try {
-      const googleUser = await verifyGoogleToken(idToken);
+      const googleUser = await verifyGoogleToken(idToken, [
+        process.env.GOOGLE_CLIENT_ID_DRIVER_ANDROID,
+        process.env.GOOGLE_CLIENT_ID_DRIVER_IOS,
+      ]);
       const googleId   = googleUser.sub;
 
       const byGoogle = await pool.query('SELECT * FROM drivers WHERE google_id = $1', [googleId]);

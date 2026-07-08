@@ -1,6 +1,6 @@
 const https = require('https');
 
-async function verifyGoogleToken(idToken) {
+async function verifyGoogleToken(idToken, expectedAudiences) {
   return new Promise((resolve, reject) => {
     const path = `/oauth2/v3/tokeninfo?id_token=${encodeURIComponent(idToken)}`;
 
@@ -18,12 +18,13 @@ async function verifyGoogleToken(idToken) {
           // FIXED: if no client IDs are configured, REJECT the token.
           // Previously: empty array → validAudiences.length = 0 → check skipped entirely.
           // Any attacker with any Google token from any app could sign in.
-          const validAudiences = [
-            process.env.GOOGLE_CLIENT_ID_USER_ANDROID,
-            process.env.GOOGLE_CLIENT_ID_USER_IOS,
-            process.env.GOOGLE_CLIENT_ID_DRIVER_ANDROID,
-            process.env.GOOGLE_CLIENT_ID_DRIVER_IOS,
-          ].filter(Boolean);
+          //
+          // H-3 FIX: the caller (googleSignInUser / googleSignInDriver) now
+          // passes only its own app's client IDs instead of this function
+          // building the full cross-app list internally - otherwise a
+          // token minted for the user app's audience was equally valid on
+          // the driver app's sign-in endpoint and vice versa.
+          const validAudiences = (expectedAudiences || []).filter(Boolean);
 
           if (!validAudiences.length) {
             return reject(new Error('Google Sign In is not configured on this server'));
