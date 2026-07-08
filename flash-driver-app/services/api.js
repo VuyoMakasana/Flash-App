@@ -45,6 +45,28 @@ export const clearTokens = async () => {
 let onSessionExpired = null;
 export const setSessionExpiredHandler = (fn) => { onSessionExpired = fn; };
 
+// H-7 FIX: no fetch() call here had a timeout — a dropped connection (common
+// on South African cellular networks, this app's actual target) hung
+// indefinitely instead of failing, with no way for the caller to know
+// whether the request is still in flight. 20s is generous enough for a slow
+// mobile connection while still giving the user a clear failure instead of
+// a frozen screen.
+const REQUEST_TIMEOUT_MS = 20_000;
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('Request timed out. Check your connection and try again.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Shared fetch wrapper ────────────────────────────────────────────────────
 function buildHeaders(token, isFormData, extra) {
   return {
@@ -61,14 +83,14 @@ async function request(path, options = {}) {
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
   const headers = buildHeaders(token, isFormData, options.headers);
 
-  const res = await fetch(`${BASE_URL}/api${path}`, { ...options, headers });
+  const res = await fetchWithTimeout(`${BASE_URL}/api${path}`, { ...options, headers });
 
   // Token expired — try to refresh once
   if (res.status === 401) {
     const refreshToken = await getRefreshToken();
     if (refreshToken) {
       try {
-        const refreshRes = await fetch(`${BASE_URL}/api/auth/refresh`, {
+        const refreshRes = await fetchWithTimeout(`${BASE_URL}/api/auth/refresh`, {
           method:  'POST',
           headers: { 'Content-Type': 'application/json' },
           body:    JSON.stringify({ refreshToken }),
@@ -78,7 +100,7 @@ async function request(path, options = {}) {
           const data = await refreshRes.json();
           await saveTokens(data.token, data.refreshToken);
 
-          const retryRes = await fetch(`${BASE_URL}/api${path}`, {
+          const retryRes = await fetchWithTimeout(`${BASE_URL}/api${path}`, {
             ...options,
             headers: buildHeaders(data.token, isFormData, options.headers),
           });
