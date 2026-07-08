@@ -322,7 +322,7 @@ Every file below was opened and read in full, either by me directly or by one of
 
 **Critical — fix before launch**
 - [ ] C-0: Resolve GitHub Actions billing lock (you — I cannot do this)
-- [ ] C-1: Add `redact` config to `pinoHttp()` in `server.js:121`
+- [x] C-1: Add `redact` config to `pinoHttp()` in `server.js:121` — fixed & verified 2026-07-08: added `redact: ["req.headers.authorization", "req.headers.cookie"]`; sent a live request with a unique marker bearer token to the rebuilt Docker backend, grepped real container logs — marker token absent, `authorization` field shows `"[Redacted]"`, rest of the log line (method/url/status/responseTime/headers) intact. See commit for `fix(C-1)`.
 - [ ] C-2: Fix `TrackingScreen.js`/`ChatScreen.js` to read the token from SecureStore, not AsyncStorage
 - [ ] C-3: Validate `item.quantity` is a positive integer in `Order.js` before pricing/stock logic
 - [ ] C-4: Add ownership check to `Driver.updateLocation`; add `requireApprovedDriver` to `/drivers/location`; reconcile driver-app `isOnline` on hydration

@@ -118,7 +118,10 @@ function createApp() {
 // Logging — structured JSON, with a request ID (req.id) attached to every
 // log line for a given request, including anything logged via req.log
 // inside a route handler. Replaces morgan's plain-text access log.
-  app.use(pinoHttp({ logger }));
+  app.use(pinoHttp({
+    logger,
+    redact: ["req.headers.authorization", "req.headers.cookie"],
+  }));
 
 // Rate limiting
   app.use("/api/", limiter);
