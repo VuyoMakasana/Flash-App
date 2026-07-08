@@ -31,6 +31,7 @@ export default function FeedScreen({ navigation }) {
       setHasMore(data.hasMore);
       setPage(pageNum);
     } catch (e) {
+      if (e.message === 'SESSION_EXPIRED') return;
       Alert.alert('Error', e.message);
     } finally {
       setLoading(false);
@@ -81,6 +82,7 @@ export default function FeedScreen({ navigation }) {
       setCommentInputs(prev => ({ ...prev, [postId]: '' }));
       setPosts(prev => prev.map(p => p.id === postId ? { ...p, comments_count: p.comments_count + 1 } : p));
     } catch (e) {
+      if (e.message === 'SESSION_EXPIRED') return;
       Alert.alert('Error', e.message);
     }
   };

@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { StatusBar, ErrorUtils } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { FlashProvider, useFlash } from './context/FlashContext';
+import { setSessionExpiredHandler } from './services/api';
 import { View, ActivityIndicator } from 'react-native';
 
 import * as Sentry from '@sentry/react-native';
@@ -160,7 +161,15 @@ function AppNavigator() {
   const { isAuthenticated, loading, handleSessionExpired, user } = useFlash();
   const needsTerms = isAuthenticated && !user?.terms_accepted;
 
+  // H-8 FIX: setSessionExpiredHandler is invoked directly by api.js's
+  // request() the instant it detects an expired/revoked token —
+  // unconditionally, before it even throws. The ErrorUtils hook stays as a
+  // defensive fallback for the rare call site with no local try/catch;
+  // the direct callback is what actually fires for the dominant pattern in
+  // this app (screens wrapping api calls in a local catch, which swallows
+  // the thrown error before it would ever reach ErrorUtils).
   React.useEffect(() => {
+    setSessionExpiredHandler(handleSessionExpired);
     const originalHandler = ErrorUtils.getGlobalHandler();
     ErrorUtils.setGlobalHandler((error, isFatal) => {
       if (error?.message === 'SESSION_EXPIRED') {

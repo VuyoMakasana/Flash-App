@@ -16,6 +16,7 @@ export default function TrustedDriversScreen({ navigation }) {
       const data = await api.trustedDrivers.getAll();
       setTrusted(data.trustedDrivers || []);
     } catch (e) {
+      if (e.message === 'SESSION_EXPIRED') return;
       Alert.alert('Error', e.message);
     } finally {
       setLoading(false);
@@ -42,7 +43,7 @@ export default function TrustedDriversScreen({ navigation }) {
             try {
               await api.trustedDrivers.remove(driverId);
               setTrusted(prev => prev.filter(d => d.driver_id !== driverId));
-            } catch (e) { Alert.alert('Error', e.message); }
+            } catch (e) { if (e.message !== 'SESSION_EXPIRED') Alert.alert('Error', e.message); }
           },
         },
       ]

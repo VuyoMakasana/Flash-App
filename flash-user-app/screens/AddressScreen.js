@@ -117,6 +117,7 @@ export default function AddressScreen() {
       setShowForm(false);
       await loadAddresses();
     } catch (e) {
+      if (e.message === 'SESSION_EXPIRED') return;
       Alert.alert('Error', e.message || 'Could not save address.');
     } finally {
       setSaving(false);

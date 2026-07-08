@@ -41,6 +41,7 @@ export default function SettingsScreen() {
               await api.user.deleteAccount();
               await logout();
             } catch (e) {
+              if (e.message === 'SESSION_EXPIRED') return;
               Alert.alert('Error', e.message || 'Could not delete account. Contact support@flash.co.za');
             } finally {
               setDeleting(false);

@@ -31,6 +31,10 @@ export default function SavedCardsScreen() {
       const data = await api.payments.getSavedCards();
       setCards(data.cards || []);
     } catch (e) {
+      // H-8 FIX: session expiry is now handled centrally (see services/api.js
+      // setSessionExpiredHandler) - showing the raw internal string here is
+      // redundant and confusing on top of the redirect that already fires.
+      if (e.message === 'SESSION_EXPIRED') return;
       Alert.alert('Error', e.message);
     } finally {
       setLoading(false);
@@ -54,7 +58,7 @@ export default function SavedCardsScreen() {
           try {
             await api.payments.removeCard(cardId);
             setCards(prev => prev.filter(c => c.id !== cardId));
-          } catch (e) { Alert.alert('Error', e.message); }
+          } catch (e) { if (e.message !== 'SESSION_EXPIRED') Alert.alert('Error', e.message); }
         },
       },
     ]);
@@ -64,7 +68,7 @@ export default function SavedCardsScreen() {
     try {
       await api.payments.setDefaultCard(cardId);
       setCards(prev => prev.map(c => ({ ...c, is_default: c.id === cardId })));
-    } catch (e) { Alert.alert('Error', e.message); }
+    } catch (e) { if (e.message !== 'SESSION_EXPIRED') Alert.alert('Error', e.message); }
   };
 
   if (loading) return <View style={s.center}><ActivityIndicator size="large" color="#0a0a0a" /></View>;

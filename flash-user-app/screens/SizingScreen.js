@@ -92,6 +92,7 @@ export default function SizingScreen({ navigation }) {
       setProfile(res.profile);
       Alert.alert('Saved!', 'Your measurements are saved. Flash will recommend your size on every product.');
     } catch (e) {
+      if (e.message === 'SESSION_EXPIRED') return;
       Alert.alert('Error', e.message);
     } finally {
       setSaving(false);

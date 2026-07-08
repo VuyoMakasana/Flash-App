@@ -41,6 +41,20 @@ const clearTokens = async () => {
   await SecureStore.deleteItemAsync('FLASH_REFRESH_TOKEN').catch(() => {});
 };
 
+// H-8 FIX: session-expiry recovery previously relied entirely on
+// ErrorUtils.setGlobalHandler catching the thrown 'SESSION_EXPIRED' Error in
+// App.js — but that only catches truly *uncaught* exceptions, and nearly
+// every screen wraps its api calls in a local try/catch, which swallows the
+// error before it ever reaches ErrorUtils. FlashContext's isAuthenticated
+// state was never actually reset, so a user whose token expired was stuck
+// in a dead, authenticated-looking UI until they force-quit. App.js now
+// registers a real callback here, invoked directly and unconditionally at
+// the moment expiry is detected — independent of whether the caller catches
+// the error too. (Same pattern already used in flash-driver-app/services/
+// api.js.)
+let onSessionExpired = null;
+export const setSessionExpiredHandler = (fn) => { onSessionExpired = fn; };
+
 // H-7 FIX: no fetch() call here had a timeout — a dropped connection (common
 // on South African cellular networks, this app's actual target) hung
 // indefinitely instead of failing, with no way for the caller to know
@@ -111,6 +125,7 @@ async function request(path, options = {}) {
     }
 
     await clearTokens();
+    if (onSessionExpired) onSessionExpired();
     throw new Error('SESSION_EXPIRED');
   }
 
