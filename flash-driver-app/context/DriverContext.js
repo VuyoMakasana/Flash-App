@@ -22,6 +22,7 @@ import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import driverApi, { saveTokens, clearTokens } from '../services/api';
 import {
+  BACKGROUND_LOCATION_TASK,
   startBackgroundLocation,
   stopBackgroundLocation,
 } from '../tasks/backgroundLocationTask';
@@ -77,6 +78,37 @@ export const DriverProvider = ({ children }) => {
 
         if (t) setToken(t);
         if (d) setDriver(JSON.parse(d));
+
+        // Reconcile isOnline against reality instead of trusting a cached
+        // guess: a driver who force-quit mid-shift (or reinstalled) can
+        // leave the OS background-location task and the server's is_online
+        // flag out of sync with each other, and neither is trustworthy on
+        // its own. Whichever direction they disagree, resolve down to
+        // "not online" — stop any orphaned OS task, and correct a stale
+        // server-side is_online=true — rather than defaulting the UI to
+        // false while a background task may still be silently running.
+        if (t) {
+          const [osTaskRunning, profile] = await Promise.all([
+            Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(() => false),
+            driverApi.driver.getProfile().catch(() => null),
+          ]);
+          const serverOnline = profile?.driver?.is_online ?? false;
+          if (profile?.driver) {
+            setDriver(profile.driver);
+            await AsyncStorage.setItem(AS_KEYS.driver, JSON.stringify(profile.driver));
+          }
+
+          if (osTaskRunning && serverOnline) {
+            setIsOnlineState(true);
+          } else {
+            setIsOnlineState(false);
+            if (osTaskRunning) await stopBackgroundLocation().catch(() => {});
+            if (serverOnline) {
+              await driverApi.driver.setOnline(false).catch(() => {});
+              setDriver(prev => (prev ? { ...prev, is_online: false } : prev));
+            }
+          }
+        }
       } catch (e) {
         console.warn('Driver hydration failed', e);
       } finally {

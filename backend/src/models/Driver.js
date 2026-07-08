@@ -113,6 +113,20 @@ class Driver extends BaseModel {
   }
 
   static async updateLocation(driverId, lat, lng, orderId, io) {
+    // Drop (not persist/broadcast) any orderId the caller doesn't actually
+    // own — otherwise a driver could POST a location tagged with any order,
+    // and it would be broadcast live into that order's customer-facing
+    // tracking room.
+    if (orderId) {
+      const ownsOrder = await this.query(
+        "SELECT 1 FROM orders WHERE id=$1 AND driver_id=$2",
+        [orderId, driverId],
+      );
+      if (ownsOrder.rows.length === 0) {
+        orderId = null;
+      }
+    }
+
     await this.query(
       "UPDATE drivers SET current_lat=$1, current_lng=$2, updated_at=NOW() WHERE id=$3",
       [lat, lng, driverId],

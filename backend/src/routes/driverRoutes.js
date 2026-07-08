@@ -53,6 +53,7 @@ router.post(
   "/location",
   authenticate,
   requireRole("driver"),
+  requireApprovedDriver,
   locationLimiter,
   DriverController.updateLocation,
 );
