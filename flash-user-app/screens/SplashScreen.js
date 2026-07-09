@@ -112,7 +112,7 @@ export default function SplashScreen({ navigation, onFinish }) {
 
       {/* Subtle bottom attribution */}
       <Animated.Text style={[styles.poweredBy, { opacity: taglineOpacity }]}>
-        flash.co.za
+        flashdelivery.co.za
       </Animated.Text>
     </Animated.View>
   );

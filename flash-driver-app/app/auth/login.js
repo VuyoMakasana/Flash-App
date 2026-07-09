@@ -66,7 +66,7 @@ export default function DriverLoginScreen() {
       } else if (status === 'under_review' || msg.includes('review') || msg.includes('pending')) {
         Alert.alert('Under Review', 'Your application is being reviewed. We will notify you when approved.');
       } else if (status === 'suspended' || msg.includes('suspended')) {
-        Alert.alert('Account Suspended', 'Your account has been suspended. Contact support@flash.co.za');
+        Alert.alert('Account Suspended', 'Your account has been suspended. Contact support@flashdelivery.co.za');
       } else if (status === 'rejected') {
         Alert.alert('Application Not Approved', msg);
       } else {

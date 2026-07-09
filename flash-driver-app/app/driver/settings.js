@@ -42,7 +42,7 @@ export default function DriverSettings() {
               await driverApi.driver.updateProfile({ delete_account: true });
               await logout();
             } catch (e) {
-              Alert.alert('Error', e.message || 'Could not delete account. Contact support@flash.co.za');
+              Alert.alert('Error', e.message || 'Could not delete account. Contact support@flashdelivery.co.za');
             } finally {
               setDeleting(false);
             }
@@ -123,7 +123,15 @@ export default function DriverSettings() {
         <Row
           icon="document-text-outline"
           label="Privacy Policy"
-          onPress={() => Linking.openURL('https://flash.co.za/privacy')}
+          onPress={() => Linking.openURL('https://flash-website.netlify.app/privacy')}
+        >
+          <Ionicons name="chevron-forward" size={16} color="#6b7280" />
+        </Row>
+        <View style={styles.divider} />
+        <Row
+          icon="reader-outline"
+          label="Terms & Conditions"
+          onPress={() => Linking.openURL('https://flash-website.netlify.app/terms')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>
@@ -131,7 +139,7 @@ export default function DriverSettings() {
         <Row
           icon="help-circle-outline"
           label="Help & Support"
-          onPress={() => Linking.openURL('mailto:support@flash.co.za')}
+          onPress={() => Linking.openURL('mailto:support@flashdelivery.co.za')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>

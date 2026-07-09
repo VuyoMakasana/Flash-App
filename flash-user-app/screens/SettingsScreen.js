@@ -42,7 +42,7 @@ export default function SettingsScreen() {
               await logout();
             } catch (e) {
               if (e.message === 'SESSION_EXPIRED') return;
-              Alert.alert('Error', e.message || 'Could not delete account. Contact support@flash.co.za');
+              Alert.alert('Error', e.message || 'Could not delete account. Contact support@flashdelivery.co.za');
             } finally {
               setDeleting(false);
             }
@@ -134,7 +134,15 @@ export default function SettingsScreen() {
         <Row
           icon="document-text-outline"
           label="Privacy Policy"
-          onPress={() => Linking.openURL('https://flash.co.za/privacy')}
+          onPress={() => Linking.openURL('https://flash-website.netlify.app/privacy')}
+        >
+          <Ionicons name="chevron-forward" size={16} color="#6b7280" />
+        </Row>
+        <View style={styles.divider} />
+        <Row
+          icon="reader-outline"
+          label="Terms & Conditions"
+          onPress={() => Linking.openURL('https://flash-website.netlify.app/terms')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>
@@ -142,7 +150,7 @@ export default function SettingsScreen() {
         <Row
           icon="help-circle-outline"
           label="Help & Support"
-          onPress={() => Linking.openURL('mailto:support@flash.co.za')}
+          onPress={() => Linking.openURL('mailto:support@flashdelivery.co.za')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>
@@ -172,7 +180,7 @@ export default function SettingsScreen() {
         </Row>
       </View>
 
-      <Text style={styles.version}>Flash v1.0.0 · flash.co.za</Text>
+      <Text style={styles.version}>Flash v1.0.0 · flashdelivery.co.za</Text>
     </ScrollView>
   );
 }

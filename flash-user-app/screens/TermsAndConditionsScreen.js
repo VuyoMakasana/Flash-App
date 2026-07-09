@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFlash } from '../context/FlashContext';
+
+const TERMS_URL = 'https://flash-website.netlify.app/terms';
 
 export default function TermsAndConditionsScreen() {
   const { acceptTermsAndAuthenticate, logout } = useFlash();
@@ -22,24 +24,25 @@ export default function TermsAndConditionsScreen() {
     <View style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={styles.heading}>Terms & Conditions</Text>
-        <Text style={styles.updated}>Last updated: January 2025</Text>
+        <Text style={styles.intro}>
+          Please read our full Terms & Conditions before continuing. It covers payments and
+          refunds, returns, driver conduct, prohibited use, and how we may update these terms
+          over time.
+        </Text>
 
-        {[
-          ['1. Acceptance', 'By using Flash, you agree to these terms. If you do not agree, please do not use the app.'],
-          ['2. Service', 'Flash connects users with independent drivers for same-day clothing delivery. We are a platform, not a logistics company.'],
-          // FIXED: Updated refund policy to match actual code logic — old text said "non-refundable once en route" but code applies tiered refund rules based on delivery stage
-          ['3. Payments', 'All payments are processed securely via Paystack. Flash does not store card details. Refunds are processed based on delivery stage: full refund before driver assignment; store amount refunded (delivery fee retained) if driver is assigned; no refund once driver has picked up your order. A 25% cancellation fee applies when cancelling after driver assignment. Refunds take 5–10 business days to appear in your account.'],
-          ['4. Returns', 'Return requests must be submitted within 24 hours of delivery. Items must be unused and in original packaging.'],
-          ['5. Driver Conduct', 'Drivers are independent contractors. Flash verifies their documents but is not liable for driver conduct beyond platform policies.'],
-          ['6. Privacy', 'We collect location data during active orders only. We do not sell personal data to third parties.'],
-          ['7. Prohibited Use', 'You may not use Flash for any unlawful purpose, to harass drivers or users, or to circumvent payment systems.'],
-          ['8. Changes', 'Flash reserves the right to update these terms at any time. Continued use constitutes acceptance.'],
-        ].map(([title, body]) => (
-          <View key={title} style={styles.section}>
-            <Text style={styles.sectionTitle}>{title}</Text>
-            <Text style={styles.sectionBody}>{body}</Text>
-          </View>
-        ))}
+        <Pressable
+          style={styles.linkBtn}
+          onPress={() => Linking.openURL(TERMS_URL)}
+        >
+          <Ionicons name="document-text-outline" size={20} color="#0a0a0a" />
+          <Text style={styles.linkBtnText}>Read the full Terms & Conditions</Text>
+          <Ionicons name="open-outline" size={18} color="#6b7280" />
+        </Pressable>
+
+        <Text style={styles.footnote}>
+          By tapping "I Accept & Continue" below, you confirm you have read and agree to these
+          Terms & Conditions and our Privacy Policy.
+        </Text>
       </ScrollView>
 
       <View style={styles.footer}>
@@ -68,11 +71,11 @@ export default function TermsAndConditionsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   content: { padding: 24, paddingBottom: 40 },
-  heading: { fontSize: 26, fontWeight: '900', color: '#0a0a0a', marginBottom: 4 },
-  updated: { color: '#9ca3af', marginBottom: 24, fontSize: 13 },
-  section: { marginBottom: 20 },
-  sectionTitle: { fontWeight: '800', fontSize: 16, color: '#111827', marginBottom: 6 },
-  sectionBody: { color: '#4b5563', lineHeight: 22 },
+  heading: { fontSize: 26, fontWeight: '900', color: '#0a0a0a', marginBottom: 12 },
+  intro: { color: '#4b5563', lineHeight: 22, marginBottom: 20 },
+  linkBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#f3f4f6', borderRadius: 14, padding: 16, marginBottom: 20 },
+  linkBtnText: { flex: 1, fontWeight: '700', color: '#0a0a0a', fontSize: 15 },
+  footnote: { color: '#9ca3af', fontSize: 12, lineHeight: 18 },
   footer: { padding: 20, gap: 12, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
   btn: { backgroundColor: '#0a0a0a', paddingVertical: 16, borderRadius: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   btnText: { color: '#fff', fontWeight: '800', fontSize: 16 },
