@@ -774,6 +774,17 @@ async function migrate() {
     throw err;
   } finally {
     client12.release();
+  }
+
+  // ── v13 ────────────────────────────────────────────────────────────────────
+  const client13 = await pool.connect();
+  try {
+    await migrateV13(client13);
+  } catch (err) {
+    console.error('Migration v13 failed:', err.message);
+    throw err;
+  } finally {
+    client13.release();
     await pool.end();
   }
 
@@ -946,4 +957,21 @@ async function migrateV12(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12 };
+// ─── v13: drivers.terms_accepted (driver app had no terms-acceptance
+// mechanism of any kind - no column, no gate, no screen) ──────────────────────
+async function migrateV13(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS terms_accepted BOOLEAN NOT NULL DEFAULT false`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v13 completed: drivers.terms_accepted');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v13 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13 };

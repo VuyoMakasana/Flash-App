@@ -200,6 +200,15 @@ export const DriverProvider = ({ children }) => {
     setIsOnlineState(false);
   }, []);
 
+  const acceptTerms = useCallback(async () => {
+    await driverApi.auth.acceptTerms();
+    setDriver(prev => {
+      const next = prev ? { ...prev, terms_accepted: true } : prev;
+      if (next) AsyncStorage.setItem(AS_KEYS.driver, JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+  }, []);
+
   const refreshProfile = useCallback(async () => {
     try {
       const data = await driverApi.driver.getProfile();
@@ -259,6 +268,7 @@ export const DriverProvider = ({ children }) => {
     loginWithGoogle,
     register,
     logout,
+    acceptTerms,
     refreshProfile,
     setOnline,
     handleSessionExpired,

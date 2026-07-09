@@ -52,6 +52,15 @@ class Driver extends BaseModel {
     });
   }
 
+  // Mirrors User.acceptTerms — the driver app previously had no
+  // terms-acceptance mechanism of any kind (no column, no gate, no screen).
+  static async acceptTerms(driverId) {
+    return await super.update(this.tableName, driverId, {
+      terms_accepted: true,
+      terms_accepted_at: new Date(),
+    });
+  }
+
   static async getDocuments(driverId) {
     const result = await this.query(
       "SELECT document_type, verified, uploaded_at FROM driver_documents WHERE driver_id = $1",

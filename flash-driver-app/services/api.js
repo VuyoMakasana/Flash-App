@@ -182,6 +182,8 @@ const auth = {
     await saveTokens(data.token, data.refreshToken);
     return data;
   },
+
+  acceptTerms: () => request('/auth/driver/accept-terms', { method: 'POST' }),
 };
 
 // ── Orders ────────────────────────────────────────────────────────────────

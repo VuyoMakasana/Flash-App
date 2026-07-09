@@ -60,6 +60,7 @@ router.post('/driver/login',
 );
 router.post('/driver/apple',  [body('identityToken').notEmpty()], AuthController.appleSignInDriver);
 router.post('/driver/google', [body('idToken').notEmpty()],       AuthController.googleSignInDriver);
+router.post('/driver/accept-terms', authenticate, AuthController.acceptTermsDriver);
 
 // ── Token Management ──────────────────────────────────────────────────────
 router.post('/refresh', [body('refreshToken').notEmpty()], AuthController.refreshToken);

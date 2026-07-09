@@ -412,6 +412,16 @@ class AuthController {
     }
   }
 
+  static async acceptTermsDriver(req, res) {
+    try {
+      await Driver.acceptTerms(req.userId);
+      return res.json({ success: true });
+    } catch (err) {
+      console.error('[Auth] acceptTermsDriver:', err.message);
+      return res.status(500).json({ error: 'Failed to accept terms' });
+    }
+  }
+
   // ── Refresh token ──────────────────────────────────────────────────────────
   static async refreshToken(req, res) {
     const { refreshToken } = req.body;

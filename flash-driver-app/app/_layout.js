@@ -58,10 +58,18 @@ function RootLayoutNav() {
     if (loading) return;
     const inAuth = segments[0] === 'auth';
     const inDriver = segments[0] === 'driver';
+    const inTerms = segments[0] === 'auth' && segments[1] === 'terms';
 
     if (!isAuthenticated && !inAuth) {
       router.replace('/auth/login');
-    } else if (isAuthenticated) {
+    } else if (isAuthenticated && driver && driver.terms_accepted !== true && !inTerms) {
+      // The driver app previously had no terms-acceptance mechanism at all —
+      // a driver could register and start earning without ever seeing any
+      // Terms & Conditions. Gated the same way the user app already gates
+      // on FlashContext's terms_accepted, ahead of the approval/onboarding
+      // check below so it applies regardless of document-review status.
+      router.replace('/auth/terms');
+    } else if (isAuthenticated && driver && driver.terms_accepted === true) {
       const status = driver?.status;
       if (status === 'approved' && inAuth) {
         router.replace('/driver/dashboard');
@@ -69,7 +77,7 @@ function RootLayoutNav() {
         router.replace('/auth/onboarding');
       }
     }
-  }, [isAuthenticated, loading, segments, driver?.status, router]);
+  }, [isAuthenticated, loading, segments, driver?.status, driver?.terms_accepted, router]);
 
   if (loading) {
     return (
@@ -85,6 +93,7 @@ function RootLayoutNav() {
         <Stack.Screen name="index" />
         <Stack.Screen name="auth/login" />
         <Stack.Screen name="auth/register" />
+        <Stack.Screen name="auth/terms" />
         <Stack.Screen name="auth/onboarding" />
         <Stack.Screen name="driver/dashboard" />
         <Stack.Screen name="driver/earnings" />
