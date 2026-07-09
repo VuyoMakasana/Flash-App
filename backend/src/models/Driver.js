@@ -1,5 +1,6 @@
 const BaseModel = require("./BaseModel");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 const s3Service = require("../services/s3Service");
 
 
@@ -59,6 +60,58 @@ class Driver extends BaseModel {
       terms_accepted: true,
       terms_accepted_at: new Date(),
     });
+  }
+
+  // Mirrors User.deleteAccount's anonymization pattern (Apple/Google App
+  // Store review requires an in-app self-service deletion path, an email
+  // process alone doesn't satisfy it). Two extra guards a plain customer
+  // doesn't need: a driver mid-delivery can't be anonymized without
+  // stranding a customer's order, and a driver still owed money (payouts
+  // are staged through DriverWallet, released on completion) can't be
+  // anonymized without losing track of what's owed.
+  static async deleteAccount(driverId) {
+    const activeOrder = await this.query(
+      `SELECT id FROM orders WHERE driver_id = $1
+       AND status IN ('driver_assigned', 'driver_arrived_store', 'picked_up', 'in_transit', 'delivered')
+       LIMIT 1`,
+      [driverId],
+    );
+    if (activeOrder.rows.length) {
+      throw new Error("ACTIVE_ORDER");
+    }
+
+    const wallet = await this.query(
+      `SELECT wallet_balance, pending_balance FROM driver_wallets WHERE driver_id = $1`,
+      [driverId],
+    );
+    const w = wallet.rows[0];
+    if (w && (Number(w.wallet_balance) > 0 || Number(w.pending_balance) > 0)) {
+      throw new Error("UNPAID_BALANCE");
+    }
+
+    const anonymizedEmail = `deleted-${driverId}@flash.invalid`;
+    const password_hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
+
+    const result = await this.query(
+      `UPDATE drivers
+       SET name = 'Deleted Driver', email = $2, password_hash = $3,
+           phone = NULL, vehicle_type = NULL, vehicle_plate = NULL,
+           profile_photo_url = NULL, apple_id = NULL, google_id = NULL,
+           push_token = NULL, is_online = false, status = 'suspended',
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING id`,
+      [driverId, anonymizedEmail, password_hash],
+    );
+
+    if (!result.rows.length) {
+      throw new Error("Driver not found");
+    }
+
+    await this.query(
+      `UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND role = 'driver' AND revoked_at IS NULL`,
+      [driverId],
+    );
   }
 
   static async getDocuments(driverId) {

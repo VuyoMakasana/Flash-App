@@ -39,7 +39,7 @@ export default function DriverSettings() {
           onPress: async () => {
             setDeleting(true);
             try {
-              await driverApi.driver.updateProfile({ delete_account: true });
+              await driverApi.driver.deleteAccount();
               await logout();
             } catch (e) {
               Alert.alert('Error', e.message || 'Could not delete account. Contact support@flashdelivery.co.za');

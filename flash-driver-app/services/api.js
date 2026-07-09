@@ -215,6 +215,7 @@ const driver = {
     method: 'POST',
     body:   formData,
   }),
+  deleteAccount: () => request('/drivers/account', { method: 'DELETE' }),
 };
 
 // ── Bank account / payout setup ─────────────────────────────────────────────

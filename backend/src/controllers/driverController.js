@@ -53,6 +53,25 @@ class DriverController {
     }
   }
 
+  static async deleteAccount(req, res) {
+    try {
+      await Driver.deleteAccount(req.userId);
+      res.json({ success: true });
+    } catch (err) {
+      if (err.message === 'ACTIVE_ORDER') {
+        return res.status(409).json({ error: 'You have an active delivery in progress. Finish or hand it off before deleting your account.' });
+      }
+      if (err.message === 'UNPAID_BALANCE') {
+        return res.status(409).json({ error: 'You have an outstanding wallet balance. Request a payout before deleting your account.' });
+      }
+      if (err.message === 'Driver not found') {
+        return res.status(404).json({ error: 'Driver not found' });
+      }
+      console.error('[Driver] deleteAccount error:', err.message);
+      res.status(500).json({ error: 'Failed to delete account' });
+    }
+  }
+
   static async uploadDocument(req, res) {
     const { document_type } = req.body;
     const REQUIRED_DOCS = [

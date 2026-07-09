@@ -35,6 +35,16 @@ router.put(
   requireRole("driver"),
   DriverController.updateProfile,
 );
+// Legal/compliance: driverApi.driver.updateProfile({ delete_account: true })
+// previously called this route with a body field the backend never read —
+// a dead no-op. Apple/Google App Store review requires a real in-app
+// self-service deletion path, not just an email process.
+router.delete(
+  "/account",
+  authenticate,
+  requireRole("driver"),
+  DriverController.deleteAccount,
+);
 router.post(
   "/documents/upload",
   authenticate,
