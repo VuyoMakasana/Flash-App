@@ -38,7 +38,7 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "developer@flashdelivery.co.za",
+        "appleId": "YOUR_APPLE_ID_EMAIL",
         "ascAppId": "YOUR_APP_STORE_CONNECT_APP_ID",
         "appleTeamId": "YOUR_APPLE_TEAM_ID"
       },

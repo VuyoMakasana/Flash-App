@@ -18,7 +18,7 @@ app.post('/api/auth/user/register', (req, res) => {
     user: {
       id: 'user_' + Date.now(),
       name: name || 'New User',
-      email: email || 'user@flashdelivery.co.za',
+      email: email || 'user@example.com',
       phone: phone || '',
       terms_accepted: false,
       role: 'user'
@@ -33,7 +33,7 @@ app.post('/api/auth/user/login', (req, res) => {
     user: {
       id: 'user_123',
       name: 'Vuyo',
-      email: email || 'user@flashdelivery.co.za',
+      email: email || 'user@example.com',
       phone: '0730849837',
       terms_accepted: true,
       role: 'user'
@@ -53,7 +53,7 @@ app.post('/api/auth/driver/register', (req, res) => {
     driver: {
       id: 'driver_' + Date.now(),
       name: name || 'New Driver',
-      email: email || 'driver@flashdelivery.co.za',
+      email: email || 'driver@example.com',
       status: 'pending_documents',
       role: 'driver'
     }
@@ -67,7 +67,7 @@ app.post('/api/auth/driver/login', (req, res) => {
     driver: {
       id: 'driver_123',
       name: 'Test Driver',
-      email: email || 'driver@flashdelivery.co.za',
+      email: email || 'driver@example.com',
       status: 'approved',
       role: 'driver',
       rating: 4.8,
@@ -83,7 +83,7 @@ app.get('/api/users/me', (req, res) => {
   res.json({
     id: 'user_123',
     name: 'Vuyo',
-    email: 'user@flashdelivery.co.za',
+    email: 'user@example.com',
     phone: '0730849837',
     address: 'Cape Town, South Africa'
   });
@@ -199,7 +199,7 @@ app.get('/api/drivers/me', (req, res) => {
   res.json({
     id: 'driver_123',
     name: 'Test Driver',
-    email: 'driver@flashdelivery.co.za',
+    email: 'driver@example.com',
     status: 'approved',
     rating: 4.8,
     total_deliveries: 42,

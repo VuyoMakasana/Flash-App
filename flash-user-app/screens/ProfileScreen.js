@@ -113,7 +113,7 @@ export default function ProfileScreen() {
           // app — it's the only screen with a "Delete Account" entry point.
           { icon: 'settings-outline',         label: 'Settings',        onPress: () => navigation.navigate('Settings') },
           // Previously a real no-op (onPress: () => {}) — tapping did nothing at all.
-          { icon: 'help-circle-outline',      label: 'Help & Support',  onPress: () => Linking.openURL('mailto:support@flashdelivery.co.za') },
+          { icon: 'help-circle-outline',      label: 'Help & Support',  onPress: () => Linking.openURL('mailto:makasanaivyson@gmail.com') },
         ].map(item => (
           <Pressable key={item.label} style={styles.menuRow} onPress={item.onPress}>
             <Ionicons name={item.icon} size={20} color="#374151" />

@@ -167,8 +167,8 @@ export default function OnboardingScreen() {
             {driver.status === 'approved' && 'Account approved! You can now accept deliveries.'}
             {driver.status === 'documents_submitted' && 'Documents submitted. Under review (1-2 business days).'}
             {driver.status === 'under_review' && 'Your application is being reviewed by our team.'}
-            {driver.status === 'rejected' && 'Application not approved. Contact support@flashdelivery.co.za'}
-            {driver.status === 'suspended' && 'Account suspended. Contact support@flashdelivery.co.za for assistance.'}
+            {driver.status === 'rejected' && 'Application not approved. Contact makasanaivyson@gmail.com'}
+            {driver.status === 'suspended' && 'Account suspended. Contact makasanaivyson@gmail.com for assistance.'}
           </Text>
         </View>
       )}

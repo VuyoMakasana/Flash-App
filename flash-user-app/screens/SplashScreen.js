@@ -110,10 +110,6 @@ export default function SplashScreen({ navigation, onFinish }) {
         </Animated.Text>
       </View>
 
-      {/* Subtle bottom attribution */}
-      <Animated.Text style={[styles.poweredBy, { opacity: taglineOpacity }]}>
-        flashdelivery.co.za
-      </Animated.Text>
     </Animated.View>
   );
 }
@@ -148,12 +144,5 @@ const styles = StyleSheet.create({
     letterSpacing: 4,
     fontWeight: '400',
     marginTop: 4,
-  },
-  poweredBy: {
-    position: 'absolute',
-    bottom: 48,
-    color: '#374151',
-    fontSize: 12,
-    letterSpacing: 2,
   },
 });

@@ -28,7 +28,7 @@ function createTransporter() {
 }
 
 const transporter = createTransporter();
-const FROM_ADDRESS = process.env.EMAIL_FROM || 'Flash <noreply@flashdelivery.co.za>';
+const FROM_ADDRESS = process.env.EMAIL_FROM || 'Flash <makasanaivyson@gmail.com>';
 const APP_URL      = process.env.APP_URL    || 'http://localhost:3000';
 
 async function sendEmail({ to, subject, html, text }) {

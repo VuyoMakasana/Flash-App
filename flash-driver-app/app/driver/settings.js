@@ -42,7 +42,7 @@ export default function DriverSettings() {
               await driverApi.driver.deleteAccount();
               await logout();
             } catch (e) {
-              Alert.alert('Error', e.message || 'Could not delete account. Contact support@flashdelivery.co.za');
+              Alert.alert('Error', e.message || 'Could not delete account. Contact makasanaivyson@gmail.com');
             } finally {
               setDeleting(false);
             }
@@ -139,7 +139,7 @@ export default function DriverSettings() {
         <Row
           icon="help-circle-outline"
           label="Help & Support"
-          onPress={() => Linking.openURL('mailto:support@flashdelivery.co.za')}
+          onPress={() => Linking.openURL('mailto:makasanaivyson@gmail.com')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>

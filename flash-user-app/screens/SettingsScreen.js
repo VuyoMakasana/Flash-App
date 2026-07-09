@@ -42,7 +42,7 @@ export default function SettingsScreen() {
               await logout();
             } catch (e) {
               if (e.message === 'SESSION_EXPIRED') return;
-              Alert.alert('Error', e.message || 'Could not delete account. Contact support@flashdelivery.co.za');
+              Alert.alert('Error', e.message || 'Could not delete account. Contact makasanaivyson@gmail.com');
             } finally {
               setDeleting(false);
             }
@@ -150,7 +150,7 @@ export default function SettingsScreen() {
         <Row
           icon="help-circle-outline"
           label="Help & Support"
-          onPress={() => Linking.openURL('mailto:support@flashdelivery.co.za')}
+          onPress={() => Linking.openURL('mailto:makasanaivyson@gmail.com')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>
@@ -180,7 +180,7 @@ export default function SettingsScreen() {
         </Row>
       </View>
 
-      <Text style={styles.version}>Flash v1.0.0 · flashdelivery.co.za</Text>
+      <Text style={styles.version}>Flash v1.0.0</Text>
     </ScrollView>
   );
 }
