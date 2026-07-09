@@ -31,6 +31,8 @@ export default function CheckoutScreen() {
   const [phone, setPhone] = useState(profile.phone || '');
   const [email, setEmail] = useState(profile.email || '');
   const [address, setAddress] = useState(profile.address || '');
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [selectedAddressId, setSelectedAddressId] = useState(null);
 
   const subtotal    = useMemo(() => cart.reduce((s, i) => s + i.price * i.quantity, 0), [cart]);
   const selectedDrv = realDrivers.find(d => d.id === selectedDriverId);
@@ -76,6 +78,34 @@ export default function CheckoutScreen() {
     };
     saveDraft();
   }, [name, phone, email, address, slot, deliveryMode]);
+
+  // ── Fetch saved addresses so the delivery-address field can be picked
+  // instead of retyped every time (Home/Work/Other, per AddressScreen.js).
+  // The typed/selected text is still just a label sent to the driver -
+  // dropoff_lat/dropoff_lng always come from the device's live GPS position
+  // below, unchanged, since this app has no address-to-coordinate geocoding.
+  useEffect(() => {
+    const loadSavedAddresses = async () => {
+      try {
+        const data = await api.user.getAddresses();
+        const list = data.addresses || [];
+        setSavedAddresses(list);
+        const def = list.find(a => a.is_default);
+        if (def && !address) {
+          setAddress(def.full_address || def.street);
+          setSelectedAddressId(def.id);
+        }
+      } catch (e) {
+        // silently fall back — manual address entry still works fine
+      }
+    };
+    loadSavedAddresses();
+  }, []);
+
+  const selectSavedAddress = (addr) => {
+    setSelectedAddressId(addr.id);
+    setAddress(addr.full_address || addr.street);
+  };
 
   // ── Fetch real nearby drivers when user picks "pick a driver" ─────────────
   const fetchDrivers = useCallback(async () => {
@@ -203,11 +233,37 @@ export default function CheckoutScreen() {
           keyboardType="email-address"
           autoCapitalize="none"
         />
+        {savedAddresses.length > 0 && (
+          <View style={styles.savedAddressRow}>
+            {savedAddresses.map(addr => (
+              <Pressable
+                key={addr.id}
+                style={[
+                  styles.savedAddressChip,
+                  selectedAddressId === addr.id && styles.savedAddressChipActive,
+                ]}
+                onPress={() => selectSavedAddress(addr)}
+              >
+                <Ionicons
+                  name={addr.label === 'Home' ? 'home-outline' : addr.label === 'Work' ? 'briefcase-outline' : 'location-outline'}
+                  size={14}
+                  color={selectedAddressId === addr.id ? '#fff' : '#111827'}
+                />
+                <Text style={[
+                  styles.savedAddressChipText,
+                  selectedAddressId === addr.id && styles.savedAddressChipTextActive,
+                ]}>
+                  {addr.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
         <TextInput
           style={[styles.input, styles.inputMultiline]}
           placeholder="Delivery address"
           value={address}
-          onChangeText={setAddress}
+          onChangeText={(text) => { setAddress(text); setSelectedAddressId(null); }}
           multiline
         />
       </View>
@@ -411,6 +467,11 @@ const styles = StyleSheet.create({
   input:            { backgroundColor: '#f9fafb', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, color: '#111827' },
   inputMultiline:   { minHeight: 72, textAlignVertical: 'top' },
   sectionTitle:     { fontWeight: '800', color: '#111827', fontSize: 18 },
+  savedAddressRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  savedAddressChip: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e5e7eb' },
+  savedAddressChipActive: { backgroundColor: '#0a0a0a', borderColor: '#0a0a0a' },
+  savedAddressChipText: { fontSize: 13, fontWeight: '600', color: '#111827' },
+  savedAddressChipTextActive: { color: '#fff' },
   toggleRow:        { flexDirection: 'row', gap: 10 },
   toggle:           { flex: 1, paddingVertical: 10, borderRadius: 12, backgroundColor: '#f3f4f6', alignItems: 'center' },
   toggleActive:     { backgroundColor: '#0a0a0a' },
