@@ -5,6 +5,17 @@ const { v4: uuidv4 } = require("uuid");
 const pool = require("../config/database");
 const { getRequired, isProd, isDev } = require("../config/env");
 
+// There is no admins table — a single, config-driven admin identity
+// (ADMIN_EMAIL/ADMIN_PASSWORD_HASH) is the only one this system supports.
+// The JWT's `id` claim used to be the literal string "admin", which
+// middleware/auth.js copies straight into req.userId for every
+// admin-authenticated request. Any admin-gated write that stores
+// req.userId into a UUID-typed column (e.g. return_requests.approved_by)
+// crashed unconditionally with a Postgres type error. Using a real, fixed
+// UUID here instead means req.userId is a valid UUID everywhere, for
+// every admin action, without each write site needing to special-case it.
+const ADMIN_USER_ID = "00000000-0000-0000-0000-000000000001";
+
 class AdminController {
   static async login(req, res) {
     const { email, password } = req.body;
@@ -75,7 +86,7 @@ class AdminController {
       // a leaked admin token stayed valid for its full 8h life with no way to
       // kill it early, and there was no admin logout endpoint at all.
       const token = jwt.sign(
-        { id: "admin", role: "admin", jti: uuidv4() },
+        { id: ADMIN_USER_ID, role: "admin", jti: uuidv4() },
         jwtSecret,
         { expiresIn: "8h" },
       );
