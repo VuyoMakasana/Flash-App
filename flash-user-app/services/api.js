@@ -150,10 +150,10 @@ const auth = {
     return data;
   },
 
-  register: async (name, email, password, phone) => {
+  register: async (name, email, password, phone, dateOfBirth) => {
     const data = await request('/auth/user/register', {
       method: 'POST',
-      body:   JSON.stringify({ name, email, password, phone }),
+      body:   JSON.stringify({ name, email, password, phone, date_of_birth: dateOfBirth }),
     });
     await saveTokens(data.token, data.refreshToken);
     return data;

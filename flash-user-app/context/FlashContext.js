@@ -144,8 +144,8 @@ export const FlashProvider = ({ children }) => {
     return data;
   }, [_postLogin]);
 
-  const register = useCallback(async (name, email, password, phone) => {
-    const data = await api.auth.register(name, email, password, phone);
+  const register = useCallback(async (name, email, password, phone, dateOfBirth) => {
+    const data = await api.auth.register(name, email, password, phone, dateOfBirth);
     await _postLogin(data);
     return data;
   }, [_postLogin]);

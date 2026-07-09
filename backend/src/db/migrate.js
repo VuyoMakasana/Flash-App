@@ -785,6 +785,17 @@ async function migrate() {
     throw err;
   } finally {
     client13.release();
+  }
+
+  // ── v14 ────────────────────────────────────────────────────────────────────
+  const client14 = await pool.connect();
+  try {
+    await migrateV14(client14);
+  } catch (err) {
+    console.error('Migration v14 failed:', err.message);
+    throw err;
+  } finally {
+    client14.release();
     await pool.end();
   }
 
@@ -974,4 +985,21 @@ async function migrateV13(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13 };
+// ─── v14: users.date_of_birth / drivers.date_of_birth (both live legal
+// pages claim 18+, but nothing enforced it at registration) ──────────────────
+async function migrateV14(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE`);
+    await client.query(`ALTER TABLE drivers ADD COLUMN IF NOT EXISTS date_of_birth DATE`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v14 completed: users/drivers.date_of_birth');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v14 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14 };

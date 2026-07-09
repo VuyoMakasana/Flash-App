@@ -12,9 +12,26 @@ const { authenticate } = require('../middleware/auth');
 // All auth routes get the strict rate limiter (10 per 15 min)
 router.use(authLimiter);
 
+// Both live legal pages (Terms & Privacy) claim a minimum age of 18, but
+// nothing enforced it at registration on either app. Shared by user and
+// driver registration below — server-side is the only enforcement that
+// can't be bypassed by editing the app or calling the API directly.
+const dateOfBirthValidator = body('date_of_birth')
+  .isISO8601().withMessage('A valid date of birth is required')
+  .bail()
+  .custom((value) => {
+    const dob = new Date(value);
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+    const monthDiff = today.getMonth() - dob.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) age--;
+    if (age < 18) throw new Error('You must be at least 18 years old to register');
+    return true;
+  });
+
 // ── User Registration & Login ──────────────────────────────────────────────
 router.post('/user/register',
-  [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 10 })],
+  [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 10 }), dateOfBirthValidator],
   AuthController.registerUser
 );
 router.post('/user/login',
@@ -51,7 +68,7 @@ router.post('/user/reset-password',
 
 // ── Driver Registration & Login ────────────────────────────────────────────
 router.post('/driver/register',
-  [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 10 }), body('phone').notEmpty()],
+  [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 10 }), body('phone').notEmpty(), dateOfBirthValidator],
   AuthController.registerDriver
 );
 router.post('/driver/login',

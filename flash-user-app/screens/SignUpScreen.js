@@ -6,11 +6,28 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useFlash } from '../context/FlashContext';
 
+// Both live legal pages (Terms & Privacy) claim a minimum age of 18 — this
+// mirrors the backend's authoritative check (authRoutes.js's
+// dateOfBirthValidator) so a user gets instant feedback instead of a round
+// trip, but the server enforces it regardless of what the client sends.
+function calculateAge(day, month, year) {
+  const dob = new Date(Number(year), Number(month) - 1, Number(day));
+  if (Number.isNaN(dob.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const monthDiff = today.getMonth() - dob.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) age--;
+  return age;
+}
+
 export default function SignUpScreen({ navigation }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [dobDay, setDobDay] = useState('');
+  const [dobMonth, setDobMonth] = useState('');
+  const [dobYear, setDobYear] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const { register } = useFlash();
@@ -24,6 +41,21 @@ export default function SignUpScreen({ navigation }) {
       Alert.alert('Weak Password', 'Password must be at least 10 characters.');
       return;
     }
+    if (!dobDay || !dobMonth || !dobYear) {
+      Alert.alert('Date of Birth Required', 'Please enter your date of birth.');
+      return;
+    }
+    const age = calculateAge(dobDay, dobMonth, dobYear);
+    if (age === null) {
+      Alert.alert('Invalid Date', 'Please enter a valid date of birth.');
+      return;
+    }
+    if (age < 18) {
+      Alert.alert('Age Restriction', 'You must be at least 18 years old to create a Flash account.');
+      return;
+    }
+
+    const dateOfBirth = `${dobYear}-${String(dobMonth).padStart(2, '0')}-${String(dobDay).padStart(2, '0')}`;
 
     setLoading(true);
     try {
@@ -33,7 +65,7 @@ export default function SignUpScreen({ navigation }) {
       // reliably as soon as register() resolves, rather than racing against
       // the auth-stack-to-tabs swap that isAuthenticated alone used to
       // trigger immediately.
-      await register(name.trim(), email.trim().toLowerCase(), password, phone.trim() || null);
+      await register(name.trim(), email.trim().toLowerCase(), password, phone.trim() || null, dateOfBirth);
     } catch (err) {
       Alert.alert('Sign Up Failed', err.message || 'Could not create account.');
     } finally {
@@ -83,6 +115,40 @@ export default function SignUpScreen({ navigation }) {
               </View>
             </View>
           ))}
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Date of Birth</Text>
+            <View style={styles.dobRow}>
+              <TextInput
+                style={[styles.dobInput, { flex: 1 }]}
+                placeholder="DD"
+                placeholderTextColor="#9ca3af"
+                value={dobDay}
+                onChangeText={t => setDobDay(t.replace(/[^0-9]/g, '').slice(0, 2))}
+                keyboardType="number-pad"
+                maxLength={2}
+              />
+              <TextInput
+                style={[styles.dobInput, { flex: 1 }]}
+                placeholder="MM"
+                placeholderTextColor="#9ca3af"
+                value={dobMonth}
+                onChangeText={t => setDobMonth(t.replace(/[^0-9]/g, '').slice(0, 2))}
+                keyboardType="number-pad"
+                maxLength={2}
+              />
+              <TextInput
+                style={[styles.dobInput, { flex: 1.4 }]}
+                placeholder="YYYY"
+                placeholderTextColor="#9ca3af"
+                value={dobYear}
+                onChangeText={t => setDobYear(t.replace(/[^0-9]/g, '').slice(0, 4))}
+                keyboardType="number-pad"
+                maxLength={4}
+              />
+            </View>
+            <Text style={styles.dobHint}>You must be 18 or older to use Flash.</Text>
+          </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Password</Text>
@@ -139,6 +205,9 @@ const styles = StyleSheet.create({
   inputIcon: { marginRight: 8 },
   input: { flex: 1, paddingVertical: 14, fontSize: 16, color: '#111827' },
   eyeBtn: { padding: 4 },
+  dobRow: { flexDirection: 'row', gap: 8 },
+  dobInput: { backgroundColor: '#f9fafb', borderRadius: 14, borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 12, paddingVertical: 14, fontSize: 16, color: '#111827', textAlign: 'center' },
+  dobHint: { color: '#9ca3af', fontSize: 12, marginTop: 2 },
   button: { backgroundColor: '#0a0a0a', borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 4 },
   buttonDisabled: { opacity: 0.6 },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '800' },

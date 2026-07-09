@@ -64,12 +64,12 @@ class AuthController {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { name, email, password, phone } = req.body;
+    const { name, email, password, phone, date_of_birth } = req.body;
     try {
       if (await User.findByEmail(email))
         return res.status(409).json({ error: 'Email already registered' });
 
-      const user = await User.create({ name, email, password, phone });
+      const user = await User.create({ name, email, password, phone, date_of_birth });
       const { accessToken, refreshToken } = await issueTokenPair(user.id, 'user');
       const { password_hash, ...safeUser } = user;
 
@@ -515,12 +515,12 @@ class AuthController {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
-    const { name, email, password, phone, vehicle_type, vehicle_plate } = req.body;
+    const { name, email, password, phone, vehicle_type, vehicle_plate, date_of_birth } = req.body;
     try {
       if (await Driver.findByEmail(email))
         return res.status(409).json({ error: 'Email already registered' });
 
-      const driver = await Driver.create({ name, email, password, phone, vehicle_type, vehicle_plate });
+      const driver = await Driver.create({ name, email, password, phone, vehicle_type, vehicle_plate, date_of_birth });
       const { password_hash, ...safe } = driver;
       const { accessToken, refreshToken } = await issueTokenPair(driver.id, 'driver');
 

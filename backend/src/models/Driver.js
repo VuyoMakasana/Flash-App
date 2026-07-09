@@ -17,7 +17,7 @@ class Driver extends BaseModel {
   }
 
   static async create(driverData) {
-    const { name, email, password, phone, vehicle_type, vehicle_plate } =
+    const { name, email, password, phone, vehicle_type, vehicle_plate, date_of_birth } =
       driverData;
     const password_hash = await bcrypt.hash(password, 12);
 
@@ -29,6 +29,7 @@ class Driver extends BaseModel {
       vehicle_type: vehicle_type || null,
       vehicle_plate: vehicle_plate || null,
       status: "pending_documents",
+      date_of_birth: date_of_birth || null,
     });
   }
 

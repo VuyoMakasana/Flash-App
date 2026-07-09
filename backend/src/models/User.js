@@ -13,10 +13,11 @@ class User extends BaseModel {
   }
 
   static async create(userData) {
-    const { name, email, password, phone } = userData;
+    const { name, email, password, phone, date_of_birth } = userData;
     const password_hash = await bcrypt.hash(password, 12);
     return await super.create(this.tableName, {
       name, email, password_hash, phone: phone || null, terms_accepted: false,
+      date_of_birth: date_of_birth || null,
     });
   }
 
