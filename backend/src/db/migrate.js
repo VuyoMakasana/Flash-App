@@ -763,6 +763,17 @@ async function migrate() {
     throw err;
   } finally {
     client11.release();
+  }
+
+  // ── v12 ────────────────────────────────────────────────────────────────────
+  const client12 = await pool.connect();
+  try {
+    await migrateV12(client12);
+  } catch (err) {
+    console.error('Migration v12 failed:', err.message);
+    throw err;
+  } finally {
+    client12.release();
     await pool.end();
   }
 
@@ -895,4 +906,44 @@ async function migrateV11(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11 };
+// ─── v12: addresses table (saved address book) ────────────────────────────────
+async function migrateV12(client) {
+  await client.query('BEGIN');
+  try {
+    // AddressScreen.js (flash-user-app) was already fully built against this
+    // exact shape - label/street/apartment/suburb/city/gate_code/landmark/
+    // is_default - with no backend behind it at all (every action 404'd).
+    // Matching the existing frontend contract exactly rather than inventing
+    // a new one.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS addresses (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        label         VARCHAR(50) NOT NULL DEFAULT 'Home',
+        street        TEXT NOT NULL,
+        apartment     TEXT,
+        suburb        TEXT,
+        city          TEXT,
+        gate_code     TEXT,
+        landmark      TEXT,
+        full_address  TEXT,
+        is_default    BOOLEAN NOT NULL DEFAULT false,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS idx_addresses_user ON addresses(user_id)`
+    );
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v12 completed: addresses table');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v12 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12 };
