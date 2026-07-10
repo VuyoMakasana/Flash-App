@@ -516,6 +516,12 @@ export default function DriverDashboard() {
               <View style={[styles.statusBadge, { backgroundColor: STATUS_COLORS[activeOrder.status] || '#374151' }]}>
                 <Text style={styles.statusText}>{STATUS_LABELS[activeOrder.status] || activeOrder.status}</Text>
               </View>
+              {activeOrder.is_return_order && (
+                <View style={styles.returnBadge}>
+                  <Ionicons name="return-down-back-outline" size={12} color="#fff" />
+                  <Text style={styles.returnBadgeText}>RETURN</Text>
+                </View>
+              )}
               {activeOrder.is_cash_delivery && (
                 <View style={styles.cashBadge}>
                   <Ionicons name="cash-outline" size={12} color="#0a0a0a" />
@@ -528,7 +534,11 @@ export default function DriverDashboard() {
 
             {/* Pickup address */}
             <View style={styles.addressRow}>
-              <Ionicons name="storefront-outline" size={14} color="#9ca3af" />
+              <Ionicons
+                name={activeOrder.is_return_order ? 'person-outline' : 'storefront-outline'}
+                size={14}
+                color="#9ca3af"
+              />
               <Text style={styles.addressText} numberOfLines={2}>{activeOrder.pickup_address}</Text>
             </View>
 
@@ -691,6 +701,12 @@ export default function DriverDashboard() {
             <View key={order.id} style={styles.orderCard}>
               <View style={styles.row}>
                 <Text style={styles.orderNum}>{order.order_number}</Text>
+                {order.is_return_order && (
+                  <View style={styles.returnBadge}>
+                    <Ionicons name="return-down-back-outline" size={12} color="#fff" />
+                    <Text style={styles.returnBadgeText}>RETURN</Text>
+                  </View>
+                )}
                 {order.is_cash_delivery && (
                   <View style={styles.cashBadge}>
                     <Ionicons name="cash-outline" size={12} color="#0a0a0a" />
@@ -699,7 +715,11 @@ export default function DriverDashboard() {
                 )}
               </View>
               <View style={styles.addressRow}>
-                <Ionicons name="storefront-outline" size={14} color="#9ca3af" />
+                <Ionicons
+                  name={order.is_return_order ? 'person-outline' : 'storefront-outline'}
+                  size={14}
+                  color="#9ca3af"
+                />
                 <Text style={styles.addressText} numberOfLines={1}>{order.pickup_address}</Text>
               </View>
               <View style={styles.addressRow}>
@@ -795,6 +815,8 @@ const styles = StyleSheet.create({
   statusText:         { color: '#fff', fontSize: 12, fontWeight: '600' },
   cashBadge:          { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#f59e0b', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   cashBadgeText:      { color: '#0a0a0a', fontSize: 11, fontWeight: '800' },
+  returnBadge:        { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#3b82f6', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  returnBadgeText:    { color: '#fff', fontSize: 11, fontWeight: '800' },
   // MEDIUM-1 FIX: Navigation button
   navBtn:             { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#f59e0b', borderRadius: 12, padding: 14, marginTop: 4 },
   navBtnText:         { color: '#0a0a0a', fontWeight: '800', fontSize: 15 },

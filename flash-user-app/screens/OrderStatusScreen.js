@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, ScrollView, Pressable, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { useFlash } from '../context/FlashContext';
 import api from '../services/api';
 
 // FIX 4: Align status steps with backend state machine values
@@ -31,15 +30,32 @@ const ORDER_RANK = {
   completed: 6,
 };
 
+// Mirrors the backend's own eligibility window (Return.js's
+// ELIGIBILITY_WINDOW_HOURS) — this is a UX convenience only, the server is
+// the real, authoritative check. delivered_at missing entirely (an order
+// that reached delivered/completed before that column existed) is treated
+// the same conservative way the backend treats it: not eligible, since
+// there's no way to verify the window.
+const RETURN_WINDOW_HOURS = 48;
+
+function getReturnEligibility(order) {
+  if (!order.delivered_at) {
+    return { canRequest: false, message: 'Returns aren’t available for this order.' };
+  }
+  const elapsedHours = (Date.now() - new Date(order.delivered_at).getTime()) / 36e5;
+  if (elapsedHours >= RETURN_WINDOW_HOURS) {
+    return { canRequest: false, message: 'The return window for this order has closed.' };
+  }
+  return { canRequest: true, message: null };
+}
+
 export default function OrderStatusScreen() {
   const navigation  = useNavigation();
   const route       = useRoute();
   const { order: routeOrder, orderId } = route.params || {};
-  const { requestReturn } = useFlash();
 
   const [order,     setOrder]     = useState(routeOrder || null);
   const [loading,   setLoading]   = useState(!routeOrder && !!orderId);
-  const [returning, setReturning] = useState(false);
   const [ratingValue, setRatingValue]         = useState(0);
   const [submittingRating, setSubmittingRating] = useState(false);
   const [ratingSubmitted, setRatingSubmitted]   = useState(false);
@@ -90,26 +106,7 @@ export default function OrderStatusScreen() {
   const currentRank = ORDER_RANK[order?.status] || 0;
 
   const handleReturn = () => {
-    Alert.alert('Request Return', 'Are you sure you want to request a return?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Yes, Return',
-        style: 'destructive',
-        onPress: async () => {
-          setReturning(true);
-          try {
-            await requestReturn(order.id, 'Customer requested return');
-            Alert.alert('Return Requested', 'Our team will contact you within 24 hours.');
-          } catch (e) {
-            // Handle session expiry gracefully — don't show error, just redirect to login
-            if (e.message === 'SESSION_EXPIRED') return;
-            Alert.alert('Error', 'Could not submit return request.');
-          } finally {
-            setReturning(false);
-          }
-        },
-      },
-    ]);
+    navigation.navigate('ReturnRequest', { order });
   };
 
   const handleSubmitRating = async () => {
@@ -278,17 +275,22 @@ export default function OrderStatusScreen() {
       )}
 
       {/* Return */}
-      {order.status === 'completed' && !order.return_requested && (
-        <Pressable style={styles.returnBtn} onPress={handleReturn} disabled={returning}>
-          {returning
-            ? <ActivityIndicator color="#ef4444" />
-            : <>
-                <Ionicons name="return-down-back" size={16} color="#ef4444" />
-                <Text style={styles.returnText}>Request Return</Text>
-              </>
-          }
-        </Pressable>
-      )}
+      {order.status === 'completed' && !order.return_requested && (() => {
+        const { canRequest, message } = getReturnEligibility(order);
+        return (
+          <View>
+            <Pressable
+              style={[styles.returnBtn, !canRequest && styles.returnBtnDisabled]}
+              onPress={handleReturn}
+              disabled={!canRequest}
+            >
+              <Ionicons name="return-down-back" size={16} color={canRequest ? '#ef4444' : '#9ca3af'} />
+              <Text style={[styles.returnText, !canRequest && styles.returnTextDisabled]}>Request Return</Text>
+            </Pressable>
+            {!canRequest && <Text style={styles.returnHint}>{message}</Text>}
+          </View>
+        );
+      })()}
 
       {/* FIXED: Refund banner moved inside the single ScrollView.
           It was placed after the closing </ScrollView> tag which created
@@ -341,6 +343,9 @@ const styles = StyleSheet.create({
   itemPrice: { fontWeight: '800', color: '#0a0a0a' },
   returnBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: '#ef4444', paddingVertical: 14, borderRadius: 14 },
   returnText: { color: '#ef4444', fontWeight: '700' },
+  returnBtnDisabled: { borderColor: '#e5e7eb' },
+  returnTextDisabled: { color: '#9ca3af' },
+  returnHint: { textAlign: 'center', color: '#9ca3af', fontSize: 12, marginTop: 8 },
   starRow: { flexDirection: 'row', gap: 8, justifyContent: 'center' },
   submitRatingBtn: { backgroundColor: '#0a0a0a', borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   submitRatingText: { color: '#fff', fontWeight: '700' },

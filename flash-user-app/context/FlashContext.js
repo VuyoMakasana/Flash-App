@@ -329,8 +329,8 @@ export const FlashProvider = ({ children }) => {
     }
   }, []);
 
-  const requestReturn = useCallback(async (orderId, reason) => {
-    await api.orders.return(orderId, { reason });
+  const requestReturn = useCallback(async (orderId, items, reason) => {
+    await api.orders.return(orderId, { items, reason });
     setOrders(prev => prev.map(o => o.id === orderId ? { ...o, return_requested: true } : o));
   }, []);
 

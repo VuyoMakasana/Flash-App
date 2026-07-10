@@ -267,6 +267,7 @@ class Order extends BaseModel {
              d.status as driver_verification_status,
              d.current_lat as driver_lat, d.current_lng as driver_lng,
              EXISTS(SELECT 1 FROM driver_ratings dr WHERE dr.order_id = o.id) as has_rating,
+             EXISTS(SELECT 1 FROM return_requests rr WHERE rr.order_id = o.id) as return_requested,
              json_agg(json_build_object(
                'id', oi.id, 'product_name', oi.product_name, 'size', oi.size,
                'quantity', oi.quantity, 'total_price', oi.total_price
@@ -292,6 +293,7 @@ class Order extends BaseModel {
              d.vehicle_type as driver_vehicle, d.profile_photo_url as driver_photo,
              d.rating as driver_rating, d.total_deliveries as driver_total_deliveries,
              d.current_lat as driver_lat, d.current_lng as driver_lng,
+             EXISTS(SELECT 1 FROM return_requests rr WHERE rr.order_id = o.id) as return_requested,
              json_agg(json_build_object(
                'id', oi.id, 'product_id', oi.product_id, 'product_name', oi.product_name,
                'size', oi.size, 'quantity', oi.quantity, 'unit_price', oi.unit_price, 'total_price', oi.total_price
