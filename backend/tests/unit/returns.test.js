@@ -47,7 +47,11 @@ beforeEach(() => {
 // ─── requestReturn ──────────────────────────────────────────────────────────
 
 describe('Return.requestReturn', () => {
-  const deliveredAt = new Date(Date.now() - 10 * 60 * 60 * 1000); // 10h ago — within 48h window
+  // Blocked for the first 48h after delivery, open at and after that mark
+  // indefinitely — no upper bound. This default represents an order well
+  // past the 48h mark (eligible), used by every test below that isn't
+  // specifically exercising the eligibility boundary itself.
+  const deliveredAt = new Date(Date.now() - 50 * 60 * 60 * 1000); // 50h ago — window open
 
   function orderRow(overrides = {}) {
     return { id: ORDER_ID, status: 'completed', user_id: USER_ID, delivered_at: deliveredAt, ...overrides };
@@ -65,24 +69,42 @@ describe('Return.requestReturn', () => {
       .rejects.toThrow('Return eligibility cannot be verified for this order');
   });
 
-  test('rejects once the 48-hour window has expired', async () => {
+  test('rejects a return requested before the 48-hour window has opened', async () => {
+    const recentlyDelivered = new Date(Date.now() - 10 * 60 * 60 * 1000); // 10h ago — still blocked
     const client = makeClient({
       onQuery: (s) => {
-        if (/FROM orders WHERE id = \$1/.test(s)) return { rows: [orderRow()] };
-        if (/within_window/.test(s)) return { rows: [{ within_window: false }] };
+        if (/FROM orders WHERE id = \$1/.test(s)) return { rows: [orderRow({ delivered_at: recentlyDelivered })] };
+        if (/window_open/.test(s)) return { rows: [{ window_open: false }] };
       },
     });
     pool.connect.mockResolvedValue(client);
 
     await expect(Return.requestReturn(ORDER_ID, USER_ID, [{ order_item_id: 'oi-1', quantity_returned: 1 }], null))
-      .rejects.toThrow('Return window has expired');
+      .rejects.toThrow('Returns open 48 hours after delivery');
+  });
+
+  test('allows a return once the 48-hour window has opened', async () => {
+    const client = makeClient({
+      onQuery: (s) => {
+        if (/FROM orders WHERE id = \$1/.test(s)) return { rows: [orderRow()] };
+        if (/window_open/.test(s)) return { rows: [{ window_open: true }] };
+        if (/FROM order_items/.test(s)) return { rows: [{ id: 'oi-1', quantity: 1, unit_price: '150.00' }] };
+        if (/INSERT INTO return_requests/.test(s)) {
+          return { rows: [{ id: RETURN_ID, order_id: ORDER_ID, user_id: USER_ID, fee_amount: 100, refund_amount: 50 }] };
+        }
+      },
+    });
+    pool.connect.mockResolvedValue(client);
+
+    const result = await Return.requestReturn(ORDER_ID, USER_ID, [{ order_item_id: 'oi-1', quantity_returned: 1 }], null);
+    expect(result.id).toBe(RETURN_ID);
   });
 
   test('rejects a quantity greater than what was originally purchased', async () => {
     const client = makeClient({
       onQuery: (s, params) => {
         if (/FROM orders WHERE id = \$1/.test(s)) return { rows: [orderRow()] };
-        if (/within_window/.test(s)) return { rows: [{ within_window: true }] };
+        if (/window_open/.test(s)) return { rows: [{ window_open: true }] };
         if (/FROM order_items/.test(s)) return { rows: [{ id: 'oi-1', quantity: 2, unit_price: '500.00' }] };
       },
     });
@@ -97,7 +119,7 @@ describe('Return.requestReturn', () => {
     const client = makeClient({
       onQuery: (s) => {
         if (/FROM orders WHERE id = \$1/.test(s)) return { rows: [orderRow()] };
-        if (/within_window/.test(s)) return { rows: [{ within_window: true }] };
+        if (/window_open/.test(s)) return { rows: [{ window_open: true }] };
         if (/FROM order_items/.test(s)) return { rows: [{ id: 'oi-1', quantity: 2, unit_price: '50.00' }] };
       },
     });
@@ -112,7 +134,7 @@ describe('Return.requestReturn', () => {
     const client = makeClient({
       onQuery: (s, params) => {
         if (/FROM orders WHERE id = \$1/.test(s)) return { rows: [orderRow()] };
-        if (/within_window/.test(s)) return { rows: [{ within_window: true }] };
+        if (/window_open/.test(s)) return { rows: [{ window_open: true }] };
         if (/FROM order_items/.test(s)) {
           return {
             rows: [

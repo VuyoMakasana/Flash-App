@@ -32,10 +32,12 @@ const ORDER_RANK = {
 
 // Mirrors the backend's own eligibility window (Return.js's
 // ELIGIBILITY_WINDOW_HOURS) — this is a UX convenience only, the server is
-// the real, authoritative check. delivered_at missing entirely (an order
-// that reached delivered/completed before that column existed) is treated
-// the same conservative way the backend treats it: not eligible, since
-// there's no way to verify the window.
+// the real, authoritative check. Blocked for the first RETURN_WINDOW_HOURS
+// after delivery, open at and after that mark indefinitely (no upper
+// bound). delivered_at missing entirely (an order that reached
+// delivered/completed before that column existed) is treated the same
+// conservative way the backend treats it: not eligible, since there's no
+// way to verify the window.
 const RETURN_WINDOW_HOURS = 48;
 
 function getReturnEligibility(order) {
@@ -43,8 +45,8 @@ function getReturnEligibility(order) {
     return { canRequest: false, message: 'Returns aren’t available for this order.' };
   }
   const elapsedHours = (Date.now() - new Date(order.delivered_at).getTime()) / 36e5;
-  if (elapsedHours >= RETURN_WINDOW_HOURS) {
-    return { canRequest: false, message: 'The return window for this order has closed.' };
+  if (elapsedHours < RETURN_WINDOW_HOURS) {
+    return { canRequest: false, message: `Returns open ${RETURN_WINDOW_HOURS} hours after delivery` };
   }
   return { canRequest: true, message: null };
 }

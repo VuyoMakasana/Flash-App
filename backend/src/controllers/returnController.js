@@ -21,13 +21,15 @@ class ReturnController {
         "Not your order",
         "Can only return delivered orders",
         "Return eligibility cannot be verified for this order",
-        "Return window has expired",
         "At least one item must be selected for return",
         "One or more selected items do not belong to this order",
         "Quantity returned must be a positive whole number",
         "Cannot return more than the originally purchased quantity",
       ];
-      if (clientErrors.includes(err.message)) {
+      // Startswith, not an exact string in the array above — this message
+      // embeds ELIGIBILITY_WINDOW_HOURS (Return.js), so an exact match would
+      // silently break again if that constant ever changes.
+      if (clientErrors.includes(err.message) || err.message.startsWith("Returns open")) {
         return res.status(400).json({ error: err.message });
       }
       if (err.message === "Return already requested") {

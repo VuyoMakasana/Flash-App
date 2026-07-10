@@ -42,12 +42,17 @@ class Return extends BaseModel {
         throw new Error("Return eligibility cannot be verified for this order");
       }
 
+      // Blocked for the first ELIGIBILITY_WINDOW_HOURS after delivery, open
+      // at and after that mark indefinitely — no upper bound. (Previously
+      // inverted: allowed immediately at delivery, blocked after 48h. That
+      // was backwards from the confirmed design and shipped live before
+      // being caught.)
       const windowCheck = await client.query(
-        `SELECT (NOW() - $1::timestamptz) <= INTERVAL '${ELIGIBILITY_WINDOW_HOURS} hours' AS within_window`,
+        `SELECT (NOW() - $1::timestamptz) >= INTERVAL '${ELIGIBILITY_WINDOW_HOURS} hours' AS window_open`,
         [order.delivered_at],
       );
-      if (!windowCheck.rows[0].within_window) {
-        throw new Error("Return window has expired");
+      if (!windowCheck.rows[0].window_open) {
+        throw new Error(`Returns open ${ELIGIBILITY_WINDOW_HOURS} hours after delivery`);
       }
 
       if (!Array.isArray(items) || items.length === 0) {
