@@ -2,7 +2,13 @@ const db = require("../config/database");
 const paystackService = require("./paystackService");
 
 class RefundService {
-  static async refundOrderPayment(orderId, userId, reason = "customer_cancellation") {
+  // overrideAmount (optional): refund less than the full payment amount —
+  // used by the returns feature to net the return fee out of the refund
+  // (refund_amount = subtotal - fee) instead of refunding the full original
+  // payment. Every existing caller (order-cancellation refunds) omits this
+  // argument entirely, so `overrideAmount == null` preserves the exact
+  // original full-amount behavior unchanged.
+  static async refundOrderPayment(orderId, userId, reason = "customer_cancellation", overrideAmount = null) {
     const client = await db.connect();
     let refundRow;
     let order;
@@ -75,11 +81,24 @@ class RefundService {
 
       payment = paymentResult.rows[0];
 
+      // A caller-supplied overrideAmount can only ever reduce the refund
+      // below what was actually paid — never increase it. Falls back to the
+      // full payment amount when not provided (overrideAmount == null),
+      // which is what every existing caller does.
+      let refundAmount = parseFloat(payment.amount);
+      if (overrideAmount != null) {
+        const parsedOverride = parseFloat(overrideAmount);
+        if (Number.isNaN(parsedOverride) || parsedOverride <= 0 || parsedOverride > refundAmount) {
+          throw new Error("Invalid refund amount");
+        }
+        refundAmount = parsedOverride;
+      }
+
       const createRefund = await client.query(
         `INSERT INTO payment_refunds (order_id, user_id, payment_id, amount, provider, status, reason)
          VALUES ($1, $2, $3, $4, $5, 'processing', $6)
          RETURNING *`,
-        [orderId, userId, payment.id, payment.amount, payment.provider, reason],
+        [orderId, userId, payment.id, refundAmount, payment.provider, reason],
       );
 
       refundRow = createRefund.rows[0];
@@ -92,7 +111,7 @@ class RefundService {
     }
 
     try {
-      const amountInCents = Math.round(parseFloat(payment.amount || order.total || 0) * 100);
+      const amountInCents = Math.round(parseFloat(refundRow.amount || payment.amount || order.total || 0) * 100);
       const providerResult = await paystackService.refundTransaction(
         payment.provider_transaction_id,
         amountInCents,
