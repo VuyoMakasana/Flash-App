@@ -130,4 +130,46 @@ async function sendEmailVerificationEmail(toEmail, verifyToken) {
   });
 }
 
-module.exports = { sendPasswordResetEmail, sendEmailVerificationEmail };
+// ─── Returns — awaiting final review ───────────────────────────────────────
+// Fired the instant a return's reverse-delivery order reaches 'completed'
+// while the return itself is still 'approved' (i.e. dispatched but not yet
+// finalized) — closes the gap where nothing would otherwise tell anyone a
+// return is sitting ready for the manual refund/reject decision. There is
+// no admin dashboard/app in this codebase, so email to ADMIN_EMAIL is the
+// only currently-real notification channel.
+
+async function sendReturnAwaitingReviewEmail({ returnId, orderNumber, refundAmount }) {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  if (!adminEmail) {
+    console.warn('[Email] ADMIN_EMAIL not configured — skipping return-awaiting-review notification');
+    return null;
+  }
+
+  return sendEmail({
+    to:      adminEmail,
+    subject: `Return ready for final review — ${orderNumber}`,
+    text:    `Return ${returnId} (order ${orderNumber}) has been delivered back to the store and is awaiting your final decision.\n\nRefund amount if approved: R${parseFloat(refundAmount).toFixed(2)}\n\nFinalize or reject via POST /api/returns/${returnId}/finalize-refund or /reject.`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="display:inline-block;background:#0a0a0a;border-radius:16px;padding:16px">
+        <span style="color:#fff;font-size:28px;font-weight:900;letter-spacing:4px">FLASH</span>
+      </div>
+    </div>
+    <h2 style="color:#111827;margin-top:0">Return ready for final review</h2>
+    <p style="color:#6b7280">The item for order <strong>${orderNumber}</strong> has been delivered back to the store. It's awaiting your final decision — refund or reject.</p>
+    <p style="color:#111827;font-size:20px;font-weight:800">R${parseFloat(refundAmount).toFixed(2)} <span style="color:#6b7280;font-size:13px;font-weight:400">refund if approved</span></p>
+    <p style="color:#9ca3af;font-size:12px;border-top:1px solid #f3f4f6;padding-top:16px;margin-bottom:0">
+      Return ID: ${returnId}
+    </p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
+module.exports = { sendPasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail };

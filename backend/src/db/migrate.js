@@ -796,6 +796,28 @@ async function migrate() {
     throw err;
   } finally {
     client14.release();
+  }
+
+  // ── v15 ────────────────────────────────────────────────────────────────────
+  const client15 = await pool.connect();
+  try {
+    await migrateV15(client15);
+  } catch (err) {
+    console.error('Migration v15 failed:', err.message);
+    throw err;
+  } finally {
+    client15.release();
+  }
+
+  // ── v16 ────────────────────────────────────────────────────────────────────
+  const client16 = await pool.connect();
+  try {
+    await migrateV16(client16);
+  } catch (err) {
+    console.error('Migration v16 failed:', err.message);
+    throw err;
+  } finally {
+    client16.release();
     await pool.end();
   }
 
@@ -1002,4 +1024,64 @@ async function migrateV14(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14 };
+// ─── v15: orders.delivered_at (no immutable "when did this actually arrive"
+// timestamp existed anywhere — only updated_at, which gets overwritten on
+// every subsequent status transition. Standalone from the returns rebuild
+// since it's generally useful, not returns-specific) ──────────────────────────
+async function migrateV15(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v15 completed: orders.delivered_at');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v15 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v16: returns rebuild — item-level selection, real fee, card refunds
+// instead of store credit. New columns on return_requests (old store-credit
+// columns left untouched — never dropped, just unused by the new flow) plus
+// a new return_request_items line-item table. Also closes the
+// RETURNS_AND_LEGAL_AUDIT.md MEDIUM finding (return_requests.user_id had no
+// supporting index, confirmed live Seq Scan) while this table is already
+// being touched. ────────────────────────────────────────────────────────────
+async function migrateV16(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS fee_amount DECIMAL(10,2)`);
+    await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS refund_amount DECIMAL(10,2)`);
+    await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS rejected_by UUID`);
+    await client.query(`ALTER TABLE return_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT`);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_return_requests_user_id ON return_requests(user_id)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS return_request_items (
+        id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        return_id           UUID NOT NULL REFERENCES return_requests(id) ON DELETE CASCADE,
+        order_item_id       UUID NOT NULL REFERENCES order_items(id),
+        quantity_returned   INTEGER NOT NULL,
+        unit_price          DECIMAL(10,2) NOT NULL,
+        line_refund_amount  DECIMAL(10,2) NOT NULL,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (return_id, order_item_id)
+      )
+    `);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_return_request_items_return_id ON return_request_items(return_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v16 completed: return_requests columns + return_request_items table');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v16 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16 };

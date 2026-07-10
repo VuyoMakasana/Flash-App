@@ -302,11 +302,20 @@ class Driver extends BaseModel {
     // while it has an unexpired preferred_driver_id that is NOT this driver.
     // This is what makes the exclusivity window actually exclusive — without
     // this filter, "trusted driver" was purely cosmetic.
+    // A return's reverse-delivery order (is_return_order=true) has no
+    // order_items of its own — its item detail lives in
+    // return_request_items instead, so item_count falls back to that count
+    // for return orders rather than always showing 0.
     const sql = `
       SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
              o.driver_payout, o.is_cash_delivery, o.cash_to_collect,
              o.pickup_address, o.pickup_lat, o.pickup_lng,
-             o.created_at, COUNT(oi.id) as item_count
+             o.created_at, o.is_return_order,
+             CASE WHEN o.is_return_order THEN (
+               SELECT COUNT(*) FROM return_request_items rri
+               JOIN return_requests rr ON rr.id = rri.return_id
+               WHERE rr.return_order_id = o.id
+             ) ELSE COUNT(oi.id) END AS item_count
       FROM orders o
       LEFT JOIN order_items oi ON oi.order_id = o.id
       WHERE o.status = 'waiting_for_driver'
@@ -379,9 +388,13 @@ class Driver extends BaseModel {
       `SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
               o.total, o.driver_payout, o.pickup_address, o.dropoff_address,
               o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng,
-              o.is_cash_delivery, o.created_at,
+              o.is_cash_delivery, o.created_at, o.is_return_order,
               u.name as customer_name, u.phone as customer_phone,
-              COUNT(oi.id) as item_count
+              CASE WHEN o.is_return_order THEN (
+                SELECT COUNT(*) FROM return_request_items rri
+                JOIN return_requests rr ON rr.id = rri.return_id
+                WHERE rr.return_order_id = o.id
+              ) ELSE COUNT(oi.id) END AS item_count
        FROM orders o
        LEFT JOIN users u ON u.id = o.user_id
        LEFT JOIN order_items oi ON oi.order_id = o.id

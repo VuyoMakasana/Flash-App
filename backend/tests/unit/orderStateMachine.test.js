@@ -17,10 +17,12 @@
 jest.mock('../../src/config/database');
 jest.mock('../../src/models/DriverWallet');
 jest.mock('../../src/services/notificationService');
+jest.mock('../../src/services/emailService');
 
 const pool = require('../../src/config/database');
 const DriverWallet = require('../../src/models/DriverWallet');
 const notificationService = require('../../src/services/notificationService');
+const emailService = require('../../src/services/emailService');
 const {
   canTransition,
   normalizeState,
@@ -68,6 +70,8 @@ beforeEach(() => {
   // state transition itself) - the automock's default undefined return
   // would throw on that .catch() call, so give it a real resolved promise.
   notificationService.notifyUserOrderUpdate = jest.fn().mockResolvedValue();
+  emailService.sendReturnAwaitingReviewEmail = jest.fn().mockResolvedValue();
+  pool.query = jest.fn().mockResolvedValue({ rows: [] });
 });
 
 // ─── Pure transition logic ─────────────────────────────────────────────────
@@ -114,6 +118,60 @@ describe('updateOrderStatus', () => {
     expect(result.status).toBe('paid');
     // No UPDATE should have run - nothing changed.
     expect(client.calls.some(([sql]) => /UPDATE orders/i.test(sql))).toBe(false);
+  });
+
+  test('sets delivered_at the first time an order transitions to delivered', async () => {
+    const client = makeClient({ id: 'o1', status: 'in_transit', driver_id: 'driver-A', user_id: 'u1' });
+    pool.connect.mockResolvedValue(client);
+
+    await updateOrderStatus('o1', 'delivered', { actorRole: 'driver', actorId: 'driver-A' });
+
+    const updateCall = client.calls.find(([sql]) => /UPDATE orders\b/i.test(sql));
+    // params: [status, delivery_payment_status, driver_paid, orderId, deliveredAtParam]
+    expect(updateCall[1][4]).toBeInstanceOf(Date);
+  });
+
+  test('does not pass a new delivered_at value on a later transition away from delivered', async () => {
+    const client = makeClient({ id: 'o1', status: 'delivered', driver_id: 'driver-A', user_id: 'u1', payment_method: 'card' });
+    pool.connect.mockResolvedValue(client);
+
+    await updateOrderStatus('o1', 'completed', { actorRole: 'driver', actorId: 'driver-A' });
+
+    const updateCall = client.calls.find(([sql]) => /UPDATE orders\b/i.test(sql));
+    // COALESCE(delivered_at, $5) — passing null here means "don't touch it",
+    // preserving whatever was already set the first time delivered fired.
+    expect(updateCall[1][4]).toBeNull();
+  });
+
+  test('emails the admin when a return\'s reverse-delivery order completes while still awaiting review', async () => {
+    const client = makeClient({
+      id: 'return-order-1', status: 'delivered', driver_id: 'driver-A', user_id: 'u1',
+      payment_method: 'store_account', is_return_order: true,
+    });
+    pool.connect.mockResolvedValue(client);
+    pool.query.mockResolvedValue({
+      rows: [{ id: 'return-1', refund_amount: '150.00', order_number: 'FLASH-ABC-RET-1' }],
+    });
+
+    await updateOrderStatus('return-order-1', 'completed', { actorRole: 'driver', actorId: 'driver-A' });
+
+    expect(emailService.sendReturnAwaitingReviewEmail).toHaveBeenCalledWith({
+      returnId: 'return-1',
+      orderNumber: 'FLASH-ABC-RET-1',
+      refundAmount: '150.00',
+    });
+  });
+
+  test('does not email when a regular (non-return) order completes', async () => {
+    const client = makeClient({
+      id: 'o1', status: 'delivered', driver_id: 'driver-A', user_id: 'u1',
+      payment_method: 'card', is_return_order: false,
+    });
+    pool.connect.mockResolvedValue(client);
+
+    await updateOrderStatus('o1', 'completed', { actorRole: 'driver', actorId: 'driver-A' });
+
+    expect(emailService.sendReturnAwaitingReviewEmail).not.toHaveBeenCalled();
   });
 
   test('a driver cannot change an order assigned to a different driver', async () => {

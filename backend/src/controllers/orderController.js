@@ -287,16 +287,35 @@ class OrderController {
 
   static async requestReturn(req, res) {
     const { orderId } = req.params;
-    const { reason }  = req.body;
+    const { items, reason } = req.body;
+    const io = req.app.get('io');
     const Return = require('../models/Return');
 
     try {
-      const returnRequest = await Return.requestReturn(orderId, req.userId, reason);
+      const returnRequest = await Return.requestReturn(orderId, req.userId, items, reason, io);
       res.status(201).json({ returnRequest });
     } catch (err) {
-      if (err.message === 'Order not found')                return res.status(404).json({ error: 'Order not found' });
-      if (err.message === 'Can only return delivered orders') return res.status(400).json({ error: err.message });
-      if (err.message === 'Return already requested')        return res.status(409).json({ error: err.message });
+      const clientErrors = [
+        'Order not found',
+        'Not your order',
+        'Can only return delivered orders',
+        'Return eligibility cannot be verified for this order',
+        'Return window has expired',
+        'At least one item must be selected for return',
+        'One or more selected items do not belong to this order',
+        'Quantity returned must be a positive whole number',
+        'Cannot return more than the originally purchased quantity',
+      ];
+      if (clientErrors.includes(err.message)) {
+        return res.status(400).json({ error: err.message });
+      }
+      if (err.message === 'Return already requested') {
+        return res.status(409).json({ error: err.message });
+      }
+      if (err.message.startsWith('Selected items must total at least')) {
+        return res.status(400).json({ error: err.message });
+      }
+      console.error('[Order] requestReturn error:', err.message);
       res.status(500).json({ error: 'Failed to request return' });
     }
   }

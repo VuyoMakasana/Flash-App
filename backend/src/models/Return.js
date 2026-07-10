@@ -1,93 +1,140 @@
 const BaseModel = require("./BaseModel");
+const RefundService = require("../services/refundService");
+
+// Flat single-store return fee. Flash currently has exactly one physical
+// store/warehouse (FLASH_STORE_LOCATION, orderController.js) — there is no
+// multi-vendor "stores" concept anywhere in this codebase, so a per-store
+// fee tier has nowhere to attach yet. Kept as a plain constant (not a DB
+// column default) so a future multi-store fee calculation lives entirely in
+// application code with zero schema change required.
+const RETURN_FEE = 100.0;
+const ELIGIBILITY_WINDOW_HOURS = 48;
 
 class Return extends BaseModel {
-  static async requestReturn(orderId, userId, reason, io) {
+  // Item-level return request: customer selects specific order_items and a
+  // quantity for each (capped at what was originally purchased), replacing
+  // the old whole-order-only model. Eligibility is anchored to orders
+  // .delivered_at (an order that reached 'delivered'/'completed' before this
+  // column existed has delivered_at = NULL, and is treated as NOT eligible —
+  // there's no way to verify its window, and silently allowing it through
+  // would reintroduce the exact "no timestamp check" gap this column fixes).
+  static async requestReturn(orderId, userId, items, reason, io) {
     return await this.transaction(async (client) => {
-      const order = await client.query(
-        "SELECT id, status, user_id, subtotal, delivery_fee FROM orders WHERE id=$1",
+      const orderResult = await client.query(
+        `SELECT id, status, user_id, delivered_at FROM orders WHERE id = $1`,
         [orderId],
       );
 
-      if (!order.rows.length) {
+      if (!orderResult.rows.length) {
         throw new Error("Order not found");
       }
 
-      if (order.rows[0].user_id !== userId) {
+      const order = orderResult.rows[0];
+      if (order.user_id !== userId) {
         throw new Error("Not your order");
       }
 
-      if (!["delivered", "completed"].includes(order.rows[0].status)) {
+      if (!["delivered", "completed"].includes(order.status)) {
         throw new Error("Can only return delivered orders");
       }
 
+      if (!order.delivered_at) {
+        throw new Error("Return eligibility cannot be verified for this order");
+      }
+
+      const windowCheck = await client.query(
+        `SELECT (NOW() - $1::timestamptz) <= INTERVAL '${ELIGIBILITY_WINDOW_HOURS} hours' AS within_window`,
+        [order.delivered_at],
+      );
+      if (!windowCheck.rows[0].within_window) {
+        throw new Error("Return window has expired");
+      }
+
+      if (!Array.isArray(items) || items.length === 0) {
+        throw new Error("At least one item must be selected for return");
+      }
+
+      // Validate every selected line belongs to this order and doesn't
+      // exceed the originally-purchased quantity, snapshotting unit_price at
+      // request time (not a live re-read later, so a price change after
+      // this request doesn't silently alter what's owed).
+      const orderItemIds = items.map((i) => i.order_item_id);
+      const ownedItems = await client.query(
+        `SELECT id, quantity, unit_price FROM order_items
+         WHERE order_id = $1 AND id = ANY($2::uuid[])`,
+        [orderId, orderItemIds],
+      );
+      const ownedById = new Map(ownedItems.rows.map((r) => [r.id, r]));
+
+      let itemsSubtotal = 0;
+      const lineItems = [];
+      for (const { order_item_id, quantity_returned } of items) {
+        const owned = ownedById.get(order_item_id);
+        if (!owned) {
+          throw new Error("One or more selected items do not belong to this order");
+        }
+        const qty = parseInt(quantity_returned, 10);
+        if (!Number.isInteger(qty) || qty <= 0) {
+          throw new Error("Quantity returned must be a positive whole number");
+        }
+        if (qty > owned.quantity) {
+          throw new Error("Cannot return more than the originally purchased quantity");
+        }
+        const unitPrice = parseFloat(owned.unit_price);
+        const lineRefund = Math.round(unitPrice * qty * 100) / 100;
+        itemsSubtotal += lineRefund;
+        lineItems.push({ order_item_id, quantity_returned: qty, unit_price: unitPrice, lineRefund });
+      }
+
+      if (itemsSubtotal < RETURN_FEE) {
+        throw new Error(
+          `Selected items must total at least R${RETURN_FEE.toFixed(2)} to submit a return`,
+        );
+      }
+
+      const refundAmount = Math.round((itemsSubtotal - RETURN_FEE) * 100) / 100;
+
       const result = await client.query(
-        `INSERT INTO return_requests (order_id, user_id, reason) VALUES ($1,$2,$3)
+        `INSERT INTO return_requests (order_id, user_id, reason, fee_amount, refund_amount)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (order_id) DO NOTHING RETURNING *`,
-        [orderId, userId, reason || null],
+        [orderId, userId, reason || null, RETURN_FEE, refundAmount],
       );
 
       if (!result.rows.length) {
         throw new Error("Return already requested");
       }
 
-      return result.rows[0];
-    });
-  }
+      const returnRow = result.rows[0];
 
-  static async pickupReturn(returnId, driverId, io) {
-    return await this.transaction(async (client) => {
-      // H3 FIX: was missing FOR UPDATE, unlike approveReturn's identical
-      // pattern below — two concurrent calls (e.g. a retried request from a
-      // flaky driver connection) could both pass this check before either
-      // committed, both proceeding to insert a store_credits row and
-      // double-issue store credit for one return.
-      const returnResult = await client.query(
-        `SELECT rr.*, o.subtotal, o.user_id FROM return_requests rr
-         JOIN orders o ON o.id = rr.order_id
-         WHERE rr.id=$1 AND rr.status='requested'
-         FOR UPDATE OF rr`,
-        [returnId],
-      );
-
-      if (!returnResult.rows.length) {
-        throw new Error("Return not found or already processed");
+      for (const line of lineItems) {
+        await client.query(
+          `INSERT INTO return_request_items (return_id, order_item_id, quantity_returned, unit_price, line_refund_amount)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [returnRow.id, line.order_item_id, line.quantity_returned, line.unit_price, line.lineRefund],
+        );
       }
 
-      const ret = returnResult.rows[0];
-
-      await client.query(
-        `UPDATE return_requests SET driver_id=$1, status='picked_up', picked_up_at=NOW(), updated_at=NOW() WHERE id=$2`,
-        [driverId, returnId],
-      );
-
-      const creditAmount = parseFloat(ret.subtotal);
-      await client.query(
-        `INSERT INTO store_credits (user_id, return_id, amount, balance, reason, expires_at)
-         VALUES ($1,$2,$3,$3,'Return credit — reorder any time',NOW() + INTERVAL '90 days')`,
-        [ret.user_id, returnId, creditAmount],
-      );
-
-      await client.query(
-        `UPDATE return_requests SET credit_issued=true, credit_amount=$1, updated_at=NOW() WHERE id=$2`,
-        [creditAmount, returnId],
-      );
-
       if (io) {
-        io.to(`user:${ret.user_id}`).emit("return_credit_issued", {
-          returnId,
-          creditAmount,
-          message: `R${creditAmount.toFixed(2)} store credit added to your account. Use it on your next order!`,
+        io.to(`user:${userId}`).emit("return_requested", {
+          returnId: returnRow.id,
+          orderId,
+          feeAmount: RETURN_FEE,
+          refundAmount,
         });
       }
 
-      return {
-        success: true,
-        creditIssued: creditAmount,
-        message: `Return picked up. R${creditAmount.toFixed(2)} instant credit issued to customer.`,
-      };
+      return { ...returnRow, items: lineItems };
     });
   }
 
+  // Admin authorizes pickup — creates the reverse-delivery order for a
+  // driver to physically collect the item(s) and bring them back to the
+  // store. This does NOT refund anything; refund only fires later, via
+  // finalizeRefund, once the reverse order is independently confirmed
+  // delivered. No order_items are created for the reverse order — item
+  // detail lives in return_request_items, the single source of truth,
+  // rather than being duplicated into a second table.
   static async approveReturn(returnId, adminId) {
     return await this.transaction(async (client) => {
       const returnResult = await client.query(
@@ -111,8 +158,7 @@ class Return extends BaseModel {
       }
 
       const originalOrder = await client.query(
-        `SELECT order_number, subtotal, delivery_fee
-         FROM orders WHERE id = $1`,
+        `SELECT order_number FROM orders WHERE id = $1`,
         [ret.order_id],
       );
 
@@ -174,6 +220,107 @@ class Return extends BaseModel {
     });
   }
 
+  // Admin rejects the return — callable while still 'requested' (never
+  // dispatched at all) or 'approved' (dispatched, with or without the
+  // reverse order having been delivered yet). Deliberately does NOT touch
+  // driver_wallets/driver_wallet_ledger under any circumstance — a driver
+  // who completes the reverse-delivery leg is paid through the ordinary
+  // order-completion path regardless of this decision (see
+  // orderStateMachineService.js's delivered->completed handling, which
+  // never reads return_requests.status).
+  static async rejectReturn(returnId, adminId, rejectionReason) {
+    return await this.transaction(async (client) => {
+      const returnResult = await client.query(
+        `SELECT * FROM return_requests WHERE id = $1 FOR UPDATE`,
+        [returnId],
+      );
+
+      if (!returnResult.rows.length) {
+        throw new Error("Return not found");
+      }
+
+      const ret = returnResult.rows[0];
+      if (!["requested", "approved"].includes(ret.status)) {
+        throw new Error("Return request is not in a rejectable state");
+      }
+
+      const updated = await client.query(
+        `UPDATE return_requests
+         SET status = 'rejected',
+             rejected_at = NOW(),
+             rejected_by = $2,
+             rejection_reason = $3,
+             updated_at = NOW()
+         WHERE id = $1
+         RETURNING *`,
+        [returnId, adminId || null, rejectionReason || null],
+      );
+
+      return updated.rows[0];
+    });
+  }
+
+  // Admin finalizes the refund — only reachable once the return is
+  // 'approved' AND its reverse-delivery order has independently reached
+  // 'completed' (the driver has physically brought the item back). This is
+  // the "real confirmation step" the refund is gated on. Calls
+  // RefundService.refundOrderPayment with the pre-computed, fee-netted
+  // refund_amount as an override — never the full original payment.
+  static async finalizeRefund(returnId, adminId) {
+    const returnResult = await this.query(
+      `SELECT rr.*, o.status AS return_order_status
+       FROM return_requests rr
+       JOIN orders o ON o.id = rr.return_order_id
+       WHERE rr.id = $1`,
+      [returnId],
+    );
+
+    if (!returnResult.rows.length) {
+      throw new Error("Return not found");
+    }
+
+    const ret = returnResult.rows[0];
+    if (ret.status !== "approved") {
+      throw new Error("Return request is not awaiting final review");
+    }
+    if (ret.return_order_status !== "completed") {
+      throw new Error("Reverse-delivery order has not been completed yet");
+    }
+
+    const refund = await RefundService.refundOrderPayment(
+      ret.order_id,
+      ret.user_id,
+      "return_refund",
+      parseFloat(ret.refund_amount),
+    );
+
+    await this.query(
+      `UPDATE return_requests SET status = 'refunded', updated_at = NOW() WHERE id = $1`,
+      [returnId],
+    );
+
+    return { returnId, status: "refunded", refund };
+  }
+
+  // There is no admin dashboard/app anywhere in this codebase — this is
+  // currently the only way to discover a return exists and needs action at
+  // all. Returns dispatched (status='approved') but not yet finalized,
+  // distinguishing (via return_order_status) ones still in transit from
+  // ones already back at the store and awaiting the final refund/reject
+  // decision — the email notification fires once, but this is the durable
+  // way to see the whole queue at any time.
+  static async getPendingForAdmin() {
+    const result = await this.query(
+      `SELECT rr.*, o.order_number, ro.status AS return_order_status, ro.order_number AS return_order_number
+       FROM return_requests rr
+       JOIN orders o ON o.id = rr.order_id
+       LEFT JOIN orders ro ON ro.id = rr.return_order_id
+       WHERE rr.status = 'approved'
+       ORDER BY rr.approved_at ASC`,
+    );
+    return result.rows;
+  }
+
   static async getCredits(userId) {
     const result = await this.query(
       `SELECT id, amount, balance, reason, expires_at, created_at
@@ -192,9 +339,19 @@ class Return extends BaseModel {
 
   static async getUserReturns(userId) {
     const result = await this.query(
-      `SELECT rr.*, o.order_number, o.subtotal FROM return_requests rr
+      `SELECT rr.*, o.order_number, o.subtotal,
+              json_agg(json_build_object(
+                'order_item_id', rri.order_item_id,
+                'quantity_returned', rri.quantity_returned,
+                'unit_price', rri.unit_price,
+                'line_refund_amount', rri.line_refund_amount
+              )) FILTER (WHERE rri.id IS NOT NULL) AS items
+       FROM return_requests rr
        JOIN orders o ON o.id = rr.order_id
-       WHERE rr.user_id=$1 ORDER BY rr.created_at DESC`,
+       LEFT JOIN return_request_items rri ON rri.return_id = rr.id
+       WHERE rr.user_id=$1
+       GROUP BY rr.id, o.order_number, o.subtotal
+       ORDER BY rr.created_at DESC`,
       [userId],
     );
     return result.rows;

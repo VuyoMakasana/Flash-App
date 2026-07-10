@@ -93,6 +93,36 @@ async function notifyOrderStatusChange(updatedOrder, targetState) {
   await notifyUserOrderUpdate(updatedOrder.user_id, updatedOrder.id, targetState).catch(() => {});
 }
 
+// A return's reverse-delivery order reaching 'completed' is the moment the
+// item is physically back at the store — the return itself doesn't move
+// past 'approved' automatically (see Return.finalizeRefund's design: a
+// human must review before a refund actually fires). Without this, nothing
+// would ever tell anyone that review is now possible, and a return could
+// sit indefinitely un-finalized.
+async function notifyReturnAwaitingReview(updatedOrder) {
+  if (!updatedOrder.is_return_order) return;
+  try {
+    const result = await pool.query(
+      `SELECT rr.id, rr.refund_amount, o.order_number
+       FROM return_requests rr
+       JOIN orders o ON o.id = rr.order_id
+       WHERE rr.return_order_id = $1 AND rr.status = 'approved'`,
+      [updatedOrder.id],
+    );
+    if (!result.rows.length) return;
+    const { sendReturnAwaitingReviewEmail } = require('./emailService');
+    const row = result.rows[0];
+    await sendReturnAwaitingReviewEmail({
+      returnId: row.id,
+      orderNumber: row.order_number,
+      refundAmount: row.refund_amount,
+    });
+  } catch (_err) {
+    // Never let a notification failure affect the order-completion result
+    // that already succeeded — same rule as notifyOrderStatusChange above.
+  }
+}
+
 // When context.externalClient is passed, this function joins the caller's
 // existing transaction instead of opening its own — the caller owns
 // BEGIN/COMMIT/ROLLBACK and is responsible for calling emitOrderUpdate /
@@ -177,11 +207,20 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
       }
     }
 
+    // delivered_at is written exactly once, the first time an order reaches
+    // 'delivered' — COALESCE(delivered_at, $5) means a re-entry or a later
+    // transition (e.g. delivered -> completed) can never overwrite it. This
+    // is the immutable anchor the returns feature's 48-hour eligibility
+    // window is computed from; updated_at is unsuitable for that since it's
+    // rewritten on every subsequent transition.
+    const deliveredAtParam = targetState === 'delivered' ? new Date() : null;
+
     const updatedResult = await client.query(
       `UPDATE orders
        SET status = $1,
            delivery_payment_status = COALESCE($2, delivery_payment_status),
            driver_paid = COALESCE($3, driver_paid),
+           delivered_at = COALESCE(delivered_at, $5),
            updated_at = NOW()
        WHERE id = $4
        RETURNING *`,
@@ -190,6 +229,7 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
         updates.delivery_payment_status || null,
         updates.driver_paid ?? null,
         orderId,
+        deliveredAtParam,
       ],
     );
 
@@ -205,6 +245,9 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
     if (!externalClient) {
       emitOrderUpdate(io, orderId, updatedOrder.user_id, updatedOrder.status);
       await notifyOrderStatusChange(updatedOrder, targetState);
+      if (targetState === 'completed') {
+        await notifyReturnAwaitingReview(updatedOrder);
+      }
     }
 
     return updatedOrder;
