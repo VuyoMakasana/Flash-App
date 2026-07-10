@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Flash Admin — Returns</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f5f5f5; margin: 0; padding: 24px; color: #111827;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 800; margin: 0 0 4px; }
+  .sub { color: #6b7280; font-size: 13px; margin: 0 0 24px; }
+
+  #loginCard {
+    max-width: 360px; margin: 80px auto; background: #fff; border-radius: 16px;
+    padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  }
+  #loginCard h1 { text-align: center; }
+  #loginCard .sub { text-align: center; }
+  label { display: block; font-size: 13px; font-weight: 600; margin: 16px 0 6px; }
+  input[type=email], input[type=password] {
+    width: 100%; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 10px;
+    font-size: 14px;
+  }
+  button {
+    cursor: pointer; border: none; border-radius: 10px; font-weight: 700; font-size: 14px;
+  }
+  #loginBtn {
+    width: 100%; margin-top: 20px; padding: 12px; background: #0a0a0a; color: #fff;
+  }
+  #loginBtn:disabled { opacity: 0.6; cursor: default; }
+  #loginError { color: #dc2626; font-size: 13px; margin-top: 12px; display: none; }
+
+  #dashboard { display: none; }
+  .topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+  #logoutBtn { background: #f3f4f6; color: #374151; padding: 8px 14px; }
+  #refreshBtn { background: #f3f4f6; color: #374151; padding: 8px 14px; margin-right: 8px; }
+
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  th, td { text-align: left; padding: 12px 14px; font-size: 13px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+  th { background: #f9fafb; font-weight: 700; color: #6b7280; text-transform: uppercase; font-size: 11px; letter-spacing: 0.03em; }
+  tr:last-child td { border-bottom: none; }
+
+  .badge { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .badge-requested { background: #fef3c7; color: #92400e; }
+  .badge-transit { background: #dbeafe; color: #1e40af; }
+  .badge-ready { background: #d1fae5; color: #065f46; }
+
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn-approve { background: #0a0a0a; color: #fff; padding: 7px 12px; font-size: 12px; }
+  .btn-reject { background: #fee2e2; color: #991b1b; padding: 7px 12px; font-size: 12px; }
+  .btn-finalize { background: #10b981; color: #fff; padding: 7px 12px; font-size: 12px; }
+  .btn-approve:disabled, .btn-reject:disabled, .btn-finalize:disabled { opacity: 0.5; cursor: default; }
+
+  #empty { text-align: center; color: #9ca3af; padding: 40px; background: #fff; border-radius: 12px; }
+  .hidden { display: none; }
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #111827; color: #fff; padding: 12px 20px; border-radius: 10px;
+    font-size: 13px; display: none;
+  }
+
+  #modalOverlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  #modalBox {
+    background: #fff; border-radius: 16px; padding: 24px; width: 100%; max-width: 380px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+  }
+  #modalTitle { font-size: 16px; font-weight: 800; margin: 0 0 8px; }
+  #modalMessage { font-size: 13px; color: #6b7280; margin: 0 0 16px; }
+  #modalInput {
+    width: 100%; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 10px;
+    font-size: 14px; font-family: inherit; resize: vertical; min-height: 70px;
+  }
+  #modalActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  #modalCancelBtn { background: #f3f4f6; color: #374151; padding: 9px 16px; }
+  #modalConfirmBtn { background: #0a0a0a; color: #fff; padding: 9px 16px; }
+</style>
+</head>
+<body>
+
+<div id="loginCard">
+  <h1>FLASH ADMIN</h1>
+  <p class="sub">Returns queue</p>
+  <form id="loginForm">
+    <label for="email">Email</label>
+    <input type="email" id="email" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input type="password" id="password" autocomplete="current-password" required>
+    <button type="submit" id="loginBtn">Log in</button>
+    <p id="loginError"></p>
+  </form>
+</div>
+
+<div id="dashboard" class="wrap">
+  <div class="topbar">
+    <div>
+      <h1>Returns queue</h1>
+      <p class="sub">Requested returns awaiting dispatch, and dispatched returns awaiting final review.</p>
+    </div>
+    <div>
+      <button type="button" id="refreshBtn">Refresh</button>
+      <button type="button" id="logoutBtn">Log out</button>
+    </div>
+  </div>
+  <div id="tableWrap"></div>
+</div>
+
+<div id="toast"></div>
+
+<div id="modalOverlay">
+  <div id="modalBox">
+    <h2 id="modalTitle"></h2>
+    <p id="modalMessage"></p>
+    <textarea id="modalInput" class="hidden"></textarea>
+    <div id="modalActions">
+      <button type="button" id="modalCancelBtn">Cancel</button>
+      <button type="button" id="modalConfirmBtn">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script src="admin.js"></script>
+</body>
+</html>

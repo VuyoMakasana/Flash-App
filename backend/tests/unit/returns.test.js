@@ -245,9 +245,10 @@ describe('Return.finalizeRefund', () => {
 // ─── getPendingForAdmin ─────────────────────────────────────────────────────
 
 describe('Return.getPendingForAdmin', () => {
-  test('returns approved returns, distinguishing in-transit from awaiting-final-review via return_order_status', async () => {
+  test('returns both requested (not yet dispatched) and approved returns, distinguishing in-transit from awaiting-final-review via return_order_status', async () => {
     pool.query = jest.fn().mockResolvedValue({
       rows: [
+        { id: 'ret-0', status: 'requested', return_order_status: null, order_number: 'FLASH-0' },
         { id: 'ret-1', status: 'approved', return_order_status: 'in_transit', order_number: 'FLASH-1' },
         { id: 'ret-2', status: 'approved', return_order_status: 'completed', order_number: 'FLASH-2' },
       ],
@@ -255,8 +256,9 @@ describe('Return.getPendingForAdmin', () => {
 
     const result = await Return.getPendingForAdmin();
 
-    expect(result).toHaveLength(2);
-    expect(result[1].return_order_status).toBe('completed');
-    expect(pool.query.mock.calls[0][0]).toMatch(/WHERE rr\.status = 'approved'/);
+    expect(result).toHaveLength(3);
+    expect(result[0].status).toBe('requested');
+    expect(result[2].return_order_status).toBe('completed');
+    expect(pool.query.mock.calls[0][0]).toMatch(/WHERE rr\.status IN \('requested', 'approved'\)/);
   });
 });

@@ -107,6 +107,14 @@ function createApp() {
   app.use(helmet());
   app.use(corsMiddleware);
 
+// Minimal standalone admin page (login + pending-returns queue + approve/
+// reject/finalize) — there is no admin dashboard/app anywhere else in this
+// codebase. A static page served same-origin so it works cleanly under
+// helmet's default CSP (script-src 'self') with no inline scripts and no
+// CSP relaxation needed; it calls the existing /api/admin and /api/returns
+// endpoints directly via fetch().
+  app.use("/admin", express.static(path.join(__dirname, "..", "public", "admin")));
+
 // Webhook routes: each route applies its own body parser (raw for Paystack,
 // JSON for Payflex) so we mount the router directly without global raw parsing.
   app.use("/api/webhooks", webhookRoutes);

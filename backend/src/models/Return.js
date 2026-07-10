@@ -304,19 +304,19 @@ class Return extends BaseModel {
 
   // There is no admin dashboard/app anywhere in this codebase — this is
   // currently the only way to discover a return exists and needs action at
-  // all. Returns dispatched (status='approved') but not yet finalized,
-  // distinguishing (via return_order_status) ones still in transit from
-  // ones already back at the store and awaiting the final refund/reject
-  // decision — the email notification fires once, but this is the durable
-  // way to see the whole queue at any time.
+  // all. Covers both stages of the loop: brand-new 'requested' returns
+  // still needing an initial approve/reject (dispatch) decision, and
+  // already-'approved' ones awaiting final review — distinguished via
+  // return_order_status (null until dispatched, then in-transit vs
+  // 'completed' and ready for the final refund/reject call).
   static async getPendingForAdmin() {
     const result = await this.query(
       `SELECT rr.*, o.order_number, ro.status AS return_order_status, ro.order_number AS return_order_number
        FROM return_requests rr
        JOIN orders o ON o.id = rr.order_id
        LEFT JOIN orders ro ON ro.id = rr.return_order_id
-       WHERE rr.status = 'approved'
-       ORDER BY rr.approved_at ASC`,
+       WHERE rr.status IN ('requested', 'approved')
+       ORDER BY rr.created_at ASC`,
     );
     return result.rows;
   }
