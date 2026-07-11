@@ -134,13 +134,18 @@ class Driver extends BaseModel {
 
     const uploadResult = await s3Service.uploadFile(file, "flash-documents");
 
+    // H-access-audit FIX: file_url used to be set to the permanent signed
+    // URL Cloudinary returns on upload — now left NULL. public_id +
+    // resource_type are stored instead, and a short-lived signed URL is
+    // generated on demand wherever a document is actually served (see
+    // Admin.getDriverById).
     const result = await this.query(
-      `INSERT INTO driver_documents (driver_id, document_type, file_url, file_name)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO driver_documents (driver_id, document_type, file_name, public_id, resource_type)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (driver_id, document_type) DO UPDATE
-       SET file_url=$3, file_name=$4, verified=false, uploaded_at=NOW()
+       SET file_name=$3, public_id=$4, resource_type=$5, file_url=NULL, verified=false, uploaded_at=NOW()
        RETURNING *`,
-      [driverId, documentType, uploadResult.url, file.originalname],
+      [driverId, documentType, file.originalname, uploadResult.publicId, uploadResult.resourceType],
     );
 
     const allDocs = await this.query(

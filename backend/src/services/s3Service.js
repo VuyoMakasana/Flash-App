@@ -34,10 +34,15 @@ class S3Service {
         },
         (error, result) => {
           if (error) return reject(error);
+          // H-access-audit FIX: result.secure_url on an authenticated upload
+          // is a permanently-valid signed URL, not a short-lived one — the
+          // caller used to store/return this directly, so a driver's KYC
+          // document stayed accessible forever to anyone who ever saw the
+          // URL. Callers must now store publicId + resourceType and call
+          // getSignedUrl() at the moment access is actually needed.
           resolve({
-            url: result.secure_url,
-            key: result.public_id,
             publicId: result.public_id,
+            resourceType: result.resource_type,
           });
         }
       );
@@ -45,18 +50,37 @@ class S3Service {
     });
   }
 
-  // Generate a signed URL for private document access (valid 5 minutes)
-  async getSignedUrl(publicId, expiresInSeconds = 300) {
+  // Generate a signed, time-limited URL for private document access.
+  // H-access-audit FIX: this function was already dead code (never called)
+  // and, separately, actually broken — it never passed resource_type (so
+  // cloudinary.utils.api_url() silently defaulted to 'image', producing a
+  // wrong endpoint for any PDF/raw document) or type (so the signed
+  // request didn't correctly target an `authenticated`-delivery asset),
+  // and passed the literal string 'auto' as the download `format`, which
+  // is not a real Cloudinary format. None of this was ever caught because
+  // nothing called it. Fixed and now actually wired up in Admin.getDriverById.
+  async getSignedUrl(publicId, resourceType = 'image', expiresInSeconds = 300) {
     if (!publicId) return null;
-    return cloudinary.utils.private_download_url(publicId, 'auto', {
+    return cloudinary.utils.private_download_url(publicId, null, {
+      resource_type: resourceType,
+      type: 'authenticated',
       expires_at: Math.floor(Date.now() / 1000) + expiresInSeconds,
     });
   }
 
-  // Delete a file from Cloudinary
-  async deleteFile(publicId) {
+  // Delete a file from Cloudinary.
+  // H-access-audit FIX: previously called destroy(publicId) with no type/
+  // resource_type — Cloudinary defaults those to 'upload'/'image', which
+  // never matches this app's actual authenticated, often-raw-typed
+  // documents, so deletion silently no-opped ({"result":"not found"}) for
+  // every real document. Callers must now pass the resourceType stored
+  // alongside publicId at upload time.
+  async deleteFile(publicId, resourceType = 'image') {
     if (!publicId) return;
-    return cloudinary.uploader.destroy(publicId);
+    return cloudinary.uploader.destroy(publicId, {
+      type: 'authenticated',
+      resource_type: resourceType,
+    });
   }
 }
 

@@ -1,4 +1,5 @@
 const BaseModel = require("./BaseModel");
+const s3Service = require("../services/s3Service");
 
 class Admin extends BaseModel {
   static async getDrivers(status = null) {
@@ -16,12 +17,29 @@ class Admin extends BaseModel {
     ]);
     if (!driver.rows.length) return null;
 
+    // H-access-audit FIX: this used to SELECT * and return the stored
+    // file_url straight through, which (before the upload-side fix) was a
+    // permanently-valid Cloudinary URL — so every admin API call handed out
+    // a link that never expired. Now file_url is never selected; a fresh,
+    // short-lived signed URL is generated per document at request time
+    // instead. Documents uploaded before this fix have no public_id and
+    // get file_url: null — they'll need to be re-uploaded to be viewable.
     const docs = await this.query(
-      "SELECT * FROM driver_documents WHERE driver_id=$1",
+      `SELECT id, driver_id, document_type, file_name, verified, verified_at,
+              verified_by, notes, uploaded_at, public_id, resource_type
+       FROM driver_documents WHERE driver_id=$1`,
       [driverId],
     );
+    const documents = await Promise.all(
+      docs.rows.map(async ({ public_id, resource_type, ...doc }) => ({
+        ...doc,
+        file_url: public_id
+          ? await s3Service.getSignedUrl(public_id, resource_type || "image")
+          : null,
+      })),
+    );
     const { password_hash, ...safeDriver } = driver.rows[0];
-    return { driver: safeDriver, documents: docs.rows };
+    return { driver: safeDriver, documents };
   }
 
   static async updateDriverStatus(driverId, status) {

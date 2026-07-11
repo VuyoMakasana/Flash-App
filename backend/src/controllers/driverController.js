@@ -4,6 +4,7 @@ const Driver = require('../models/Driver');
 const Order = require('../models/Order');
 const { checkDriverSubscriptionAllowed } = require('../services/subscriptionService');
 const { isWithinNelsonMandelaBay, OUTSIDE_SERVICE_AREA_MESSAGE } = require('../utils/geoBoundary');
+const { detectRealMimeType } = require('../utils/fileSignature');
 const DriverWallet = require('../models/DriverWallet');
 const db = require('../config/database');
 const {
@@ -90,6 +91,17 @@ class DriverController {
 
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // H-access-audit FIX: multer's fileFilter (driverRoutes.js) only checks
+    // the client-declared Content-Type header, which is trivially spoofed —
+    // proven live in the access-security audit. This checks the file's
+    // actual leading bytes, which fileFilter itself can't do (multer calls
+    // it before the body is read, so req.file.buffer isn't populated yet).
+    if (!detectRealMimeType(req.file.buffer)) {
+      return res.status(400).json({
+        error: 'File content does not match an allowed type (PDF, JPG, or PNG).',
+      });
     }
 
     try {

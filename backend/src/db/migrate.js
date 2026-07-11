@@ -165,6 +165,18 @@ async function migrate() {
       UNIQUE(driver_id, document_type)
     )`);
 
+    // Access-security audit (2026-07-11): documents were stored and served
+    // via a permanently-valid Cloudinary URL (file_url) instead of a
+    // short-lived signed one. Fixing that means generating the signed URL
+    // on demand from public_id + resource_type instead of storing/returning
+    // a permanent one — file_url is no longer written for new uploads, so
+    // it can no longer be NOT NULL. Existing rows keep their historical
+    // (permanent) file_url untouched; only new uploads populate public_id/
+    // resource_type going forward.
+    await client.query(`ALTER TABLE driver_documents ALTER COLUMN file_url DROP NOT NULL`);
+    await client.query(`ALTER TABLE driver_documents ADD COLUMN IF NOT EXISTS public_id VARCHAR(500)`);
+    await client.query(`ALTER TABLE driver_documents ADD COLUMN IF NOT EXISTS resource_type VARCHAR(20)`);
+
     await client.query(`CREATE TABLE IF NOT EXISTS orders (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       order_number VARCHAR(50) UNIQUE NOT NULL,
