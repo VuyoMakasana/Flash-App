@@ -23,7 +23,34 @@ import '../tasks/backgroundLocationTask';
 
 import * as Sentry from '@sentry/react-native';
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
-  Sentry.init({ dsn: process.env.EXPO_PUBLIC_SENTRY_DSN, environment: 'production' });
+  Sentry.init({
+    dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+    environment: 'production',
+    sendDefaultPii: false,
+    // Defensive backstop — no known live leak today, but nothing previously
+    // stopped a future captureException(err, { extra: { token } }) mistake
+    // from actually reaching Sentry. Recursive, not just top-level of each
+    // object — a single-level scrub misses a sensitive key nested one level
+    // deeper (e.g. contexts.session.cookie), silently letting it through.
+    beforeSend(event) {
+      const SENSITIVE_KEY = /token|password|authorization|cookie|secret/i;
+      const scrub = (obj, seen = new WeakSet()) => {
+        if (!obj || typeof obj !== 'object' || seen.has(obj)) return;
+        seen.add(obj);
+        for (const key of Object.keys(obj)) {
+          if (SENSITIVE_KEY.test(key)) {
+            delete obj[key];
+          } else if (obj[key] && typeof obj[key] === 'object') {
+            scrub(obj[key], seen);
+          }
+        }
+      };
+      scrub(event.extra);
+      scrub(event.contexts);
+      scrub(event.request);
+      return event;
+    },
+  });
 }
 
 function RootLayoutNav() {

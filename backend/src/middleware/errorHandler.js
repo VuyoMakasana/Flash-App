@@ -1,3 +1,5 @@
+const Sentry = require("@sentry/node");
+
 const errorHandler = (err, req, res, next) => {
   // req.log is a pino child logger scoped to this request (via pino-http in
   // server.js) — already carries req.id, so this error line is queryable
@@ -12,6 +14,19 @@ const errorHandler = (err, req, res, next) => {
     ip: req.ip,
     userId: req.userId,
   }, "Unhandled request error");
+
+  // Previously this middleware never told Sentry anything — Sentry only
+  // ever saw out-of-band unhandled promise rejections (server.js's
+  // process.on('unhandledRejection')), never a real request-handler error,
+  // which is the vast majority of real production errors in this codebase
+  // (every controller wraps its own logic in try/catch and forwards here).
+  // Sentry.captureException safely no-ops if Sentry.init() was never called
+  // (no SENTRY_DSN/non-prod). Raw headers are attached here and stripped by
+  // the beforeSend hook in server.js, not filtered here, so there is a
+  // single place that owns what Sentry is allowed to keep.
+  Sentry.captureException(err, {
+    extra: { url: req.url, method: req.method, headers: req.headers },
+  });
 
   // Handle specific error types
   if (err.code === "23505") {

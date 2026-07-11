@@ -18,6 +18,30 @@ if (process.env.SENTRY_DSN && process.env.NODE_ENV === 'production') {
     dsn: process.env.SENTRY_DSN,
     environment: process.env.NODE_ENV,
     tracesSampleRate: 0.1,
+    sendDefaultPii: false,
+    // Same standard as pino-http's redact list a few lines below (the C-1
+    // fix) — this is the single place that owns what Sentry is allowed to
+    // keep. Recursive, not just top-level of each object passed in —
+    // caught during live verification that a single-level scrub misses a
+    // sensitive key nested one level deeper (e.g. contexts.session.cookie),
+    // silently letting it through.
+    beforeSend(event) {
+      const SENSITIVE_KEY = /^(authorization|cookie)$/i;
+      const scrub = (obj, seen = new WeakSet()) => {
+        if (!obj || typeof obj !== "object" || seen.has(obj)) return;
+        seen.add(obj);
+        for (const key of Object.keys(obj)) {
+          if (SENSITIVE_KEY.test(key)) {
+            delete obj[key];
+          } else if (obj[key] && typeof obj[key] === "object") {
+            scrub(obj[key], seen);
+          }
+        }
+      };
+      scrub(event.request);
+      scrub(event.extra);
+      return event;
+    },
   });
 }
 
