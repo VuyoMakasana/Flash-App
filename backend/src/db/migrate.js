@@ -1058,9 +1058,9 @@ async function migrateV15(client) {
 // instead of store credit. New columns on return_requests (old store-credit
 // columns left untouched — never dropped, just unused by the new flow) plus
 // a new return_request_items line-item table. Also closes the
-// RETURNS_AND_LEGAL_AUDIT.md MEDIUM finding (return_requests.user_id had no
-// supporting index, confirmed live Seq Scan) while this table is already
-// being touched. ────────────────────────────────────────────────────────────
+// docs/audits/RETURNS_AND_LEGAL_AUDIT.md MEDIUM finding (return_requests.user_id
+// had no supporting index, confirmed live Seq Scan) while this table is
+// already being touched. ────────────────────────────────────────────────────
 async function migrateV16(client) {
   await client.query('BEGIN');
   try {
