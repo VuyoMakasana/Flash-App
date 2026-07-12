@@ -6,7 +6,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
-import { StatusBar, ErrorUtils } from 'react-native';
+import { StatusBar } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { FlashProvider, useFlash } from './context/FlashContext';
 import { setSessionExpiredHandler } from './services/api';
@@ -201,15 +201,29 @@ function AppNavigator() {
   // the thrown error before it would ever reach ErrorUtils).
   React.useEffect(() => {
     setSessionExpiredHandler(handleSessionExpired);
-    const originalHandler = ErrorUtils.getGlobalHandler();
-    ErrorUtils.setGlobalHandler((error, isFatal) => {
+    // CRITICAL FIX: `import { ErrorUtils } from 'react-native'` never
+    // actually works — ErrorUtils is a React Native global
+    // (global.ErrorUtils), not a named export of the react-native
+    // package, on any RN version. The old import silently resolved to
+    // undefined, so this useEffect crashed the app on every real mount
+    // with "Cannot read property 'getGlobalHandler' of undefined" —
+    // found via real on-device testing, never caught by unit tests or
+    // bundle export checks since neither actually executes a component
+    // render pass. Guarded defensively even though global.ErrorUtils is
+    // provably always set by React Native's own core (see
+    // node_modules/react-native/Libraries/vendor/core/ErrorUtils.js —
+    // `export default global.ErrorUtils`, established before any user
+    // module loads).
+    if (!global.ErrorUtils) return;
+    const originalHandler = global.ErrorUtils.getGlobalHandler();
+    global.ErrorUtils.setGlobalHandler((error, isFatal) => {
       if (error?.message === 'SESSION_EXPIRED') {
         handleSessionExpired();
         return;
       }
       originalHandler(error, isFatal);
     });
-    return () => ErrorUtils.setGlobalHandler(originalHandler);
+    return () => global.ErrorUtils.setGlobalHandler(originalHandler);
   }, [handleSessionExpired]);
 
   if (loading) {

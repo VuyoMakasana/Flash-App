@@ -8,7 +8,7 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { View, ActivityIndicator, ErrorUtils } from 'react-native';
+import { View, ActivityIndicator } from 'react-native';
 import { DriverProvider, useDriver } from '../context/DriverContext';
 import { setSessionExpiredHandler } from '../services/api';
 
@@ -70,15 +70,30 @@ function RootLayoutNav() {
   // defensive fallback for the rare call site with no local catch.
   useEffect(() => {
     setSessionExpiredHandler(handleSessionExpired);
-    const originalHandler = ErrorUtils.getGlobalHandler();
-    ErrorUtils.setGlobalHandler((error, isFatal) => {
+    // CRITICAL FIX: `import { ErrorUtils } from 'react-native'` never
+    // actually works — ErrorUtils is a React Native global
+    // (global.ErrorUtils), not a named export of the react-native
+    // package, on any RN version. The old import silently resolved to
+    // undefined, so this useEffect crashed the app on every real mount
+    // with "Cannot read property 'getGlobalHandler' of undefined" —
+    // found via real on-device testing (flash-user-app hit the
+    // identical bug), never caught by unit tests or bundle export
+    // checks since neither actually executes a component render pass.
+    // Guarded defensively even though global.ErrorUtils is provably
+    // always set by React Native's own core (see
+    // node_modules/react-native/Libraries/vendor/core/ErrorUtils.js —
+    // `export default global.ErrorUtils`, established before any user
+    // module loads).
+    if (!global.ErrorUtils) return;
+    const originalHandler = global.ErrorUtils.getGlobalHandler();
+    global.ErrorUtils.setGlobalHandler((error, isFatal) => {
       if (error?.message === 'SESSION_EXPIRED') {
         handleSessionExpired();
         return;
       }
       originalHandler(error, isFatal);
     });
-    return () => ErrorUtils.setGlobalHandler(originalHandler);
+    return () => global.ErrorUtils.setGlobalHandler(originalHandler);
   }, [handleSessionExpired]);
 
   useEffect(() => {
