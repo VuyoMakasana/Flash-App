@@ -346,3 +346,39 @@ This is a real, distinct credential worth tracking, added to §4.1's table:
 | Secret | Purpose | Where it lives | Who/what has access |
 |---|---|---|---|
 | Sentry MCP OAuth grant ("claude.ai Sentry" connector) | Lets this Claude Code session query/manage the `flash-3h` Sentry org via MCP tools | Held server-side by Anthropic (claude.ai account infrastructure) — not in this repo, not in any local file on this machine | Anyone with access to the `makasanaivyson@gmail.com` claude.ai account session (account-wide grant, not scoped to this repo/project); revocable only via claude.ai's own connector settings, not via any action on this machine or in this repo |
+
+---
+
+## 8. Real on-device testing found a Critical bug that the entire prior audit, every unit test, and every bundle export check missed
+
+This section exists because of what happened tonight, not because it fits neatly under access/insider-threat scope — it's important enough on its own to record here rather than leave buried in commit history.
+
+### 8.1 What happened
+
+Getting `flash-user-app` running on a real iPhone over a restrictive network (fibertime, client-isolated) took several real, unrelated fixes this session: a misconfigured Expo Go/ngrok tunnel setup, an ngrok agent version rejected by ngrok's own servers, a bundle URL leaking Metro's local port through the tunnel, and — because Expo Go's public App Store release is currently two SDK versions behind this app's real SDK 56 — a temporary SDK 54 downgrade on a throwaway branch (`sdk54-testing`, never merged, never pushed) just to get *anything* rendering on the phone at all.
+
+Once the app actually loaded on the device — the first time either mobile app has ever run outside a bundler or export check, by the founder's own account — it crashed immediately with a real, reproducible error: `Cannot read property 'getGlobalHandler' of undefined`, inside a `useEffect` in the app's root component.
+
+### 8.2 The bug, and why nothing before tonight could have caught it
+
+Both `flash-user-app/App.js` and `flash-driver-app/app/_layout.js` had:
+```js
+import { ..., ErrorUtils } from 'react-native';
+```
+`ErrorUtils` has never been a named export of the `react-native` package, on any version — it's a global (`global.ErrorUtils`), established by React Native's own core before any user module even loads. Confirmed directly against the installed source in both apps, and independently against the published `react-native` package for both 0.81 (this app's temporarily-downgraded test version) and 0.85 (the app's real, shipping SDK 56 version) — zero occurrences of `ErrorUtils` as an export in either. This was never an SDK-54-downgrade artifact; it was already sitting on `main`, in both apps, before tonight.
+
+The import silently resolved to `undefined`. The code that used it — a `useEffect` handling session-expiry recovery — ran on every real mount of the app's root component and crashed immediately.
+
+**Why this survived the original pre-launch audit, every unit test, and every `expo export`/bundle check performed throughout this whole engagement**: all of them build, parse, or statically analyze the code. None of them execute an actual React component render pass — and this bug only manifests when a real renderer actually mounts the component and runs its `useEffect`. A backend unit test doesn't touch this file at all; a mobile bundle export confirms the JS is syntactically valid and all imports *resolve to something* (even `undefined` bundles cleanly — a broken destructure isn't a bundling error, it's a runtime error); nothing short of an actual render pass — a real device, a simulator, or a React Native-aware test renderer — was ever going to catch this. This engagement had none of those available until tonight's on-device pass.
+
+### 8.3 Fixed on `main` directly, real proof, not "it compiles"
+
+Fixed in both apps (`ccfbc7c`): read `global.ErrorUtils` directly instead of destructuring a nonexistent export, guarded defensively (skip if genuinely unavailable) even though it's provably always present in this runtime — confirmed by reading React Native's own `ErrorUtils.js` source, which literally reads `export default global.ErrorUtils` with a comment stating the global is established before any user module loads. No behavior change beyond no longer crashing.
+
+Verified past "does it compile," matching the standard already used throughout this session: started each app's real dev server, fetched the actual JS bundle a device would load (not the static export, which compiles to Hermes bytecode and can't be inspected as text), and grepped the real compiled output. `global.ErrorUtils` present (11 occurrences in each app — React Native's own internals plus this fix); zero trace of the old broken destructured pattern. `flash-driver-app` lint clean (0 errors, same 4 pre-existing warnings, unrelated lines). This fix is on `main`, committed and pushed directly — it did not wait for the returns-flow work or the on-device testing branch, since a bug that crashes the app on every real launch has nothing to do with returns specifically.
+
+### 8.4 The actual point
+
+This bug would have shipped. It passed the original full pre-launch audit. It passed every unit test in the backend suite (irrelevant file, but worth naming — "tests passed" said nothing about this). It passed every mobile bundle export check performed this entire engagement, including several run *this very session*, on *this exact file*, before tonight's device test. It would have crashed the app for every single real user, on the very first launch, in production — and nothing in this project's current verification pipeline would have caught it before a user did.
+
+**This is a strong, concrete argument for treating real on-device testing (or at minimum, a real React Native test renderer capable of executing actual component mounts — Jest with the `react-native` preset, Detox, or equivalent) as a required pre-launch gate, not an optional final step.** Static analysis, unit tests, and bundle export checks are necessary and were genuinely valuable throughout this engagement — they caught real, serious findings — but this specific class of bug (a broken import that's syntactically valid and only fails when actually executed inside a component lifecycle) is structurally invisible to all three. Only execution catches execution bugs.
