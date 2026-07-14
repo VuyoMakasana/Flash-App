@@ -53,6 +53,14 @@ const ACTIVE_ORDER_KEY = 'FLASH_DRIVER_ACTIVE_ORDER_ID';
 // function, hook, or effect). The native bridge calls this handler when a
 // new location arrives, even when the app is fully backgrounded.
 
+// CRITICAL FIX: this file's own header comment already documents
+// "Background tasks require a native build — Expo Go will not work."
+// defineTask() runs unconditionally at module load (required — see
+// comment above), so if it throws in an environment without full native
+// support, it takes the whole app down before anything else renders.
+// Guarded defensively; background location genuinely won't work under
+// Expo Go regardless, this only prevents a hard crash on load.
+try {
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   if (error) {
     console.error('[BG Location] Task error:', error.message);
@@ -106,6 +114,7 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
     console.warn('[BG Location] Storage read failed:', err.message);
   }
 });
+} catch (_) {}
 
 // ─── START ───────────────────────────────────────────────────────────────────
 

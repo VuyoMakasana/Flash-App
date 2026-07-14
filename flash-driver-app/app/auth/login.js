@@ -9,7 +9,18 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useDriver } from '../../context/DriverContext';
-import { GoogleSignin, GoogleSigninButton, statusCodes } from '@react-native-google-signin/google-signin';
+// CRITICAL FIX: @react-native-google-signin/google-signin requires native
+// code compiled into the binary. Any environment without that native
+// module present (Expo Go being the most common one) throws
+// "TurboModuleRegistry.getEnforcing(...): 'RNGoogleSignin' could not be
+// found" the moment anything touches it — found via real on-device
+// testing, where this crashed the screen on every mount. Apple Sign-In
+// below already used this exact defensive pattern; Google Sign-In never
+// did, despite an identical native-module dependency.
+let GoogleSignin = null, GoogleSigninButton = null, statusCodes = null;
+try {
+  ({ GoogleSignin, GoogleSigninButton, statusCodes } = require('@react-native-google-signin/google-signin'));
+} catch (_) {}
 
 let AppleAuth = null;
 if (Platform.OS === 'ios') {
@@ -36,6 +47,7 @@ export default function DriverLoginScreen() {
 
   // Configure Google Sign-In once on mount with real client IDs from .env
   useEffect(() => {
+    if (!GoogleSignin) return;
     GoogleSignin.configure({
       iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
       webClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID,
@@ -79,6 +91,7 @@ export default function DriverLoginScreen() {
 
   // Single, correct handleGoogleSignIn — the original file had two conflicting definitions
   const handleGoogleSignIn = async () => {
+    if (!GoogleSignin) return;
     setGoogleLoading(true);
     try {
       await GoogleSignin.hasPlayServices();
@@ -182,13 +195,15 @@ export default function DriverLoginScreen() {
           )}
 
           {/* Google Sign In */}
-          <GoogleSigninButton
-            style={{ width: '100%', height: 52, marginBottom: 4 }}
-            size={GoogleSigninButton.Size.Wide}
-            color={GoogleSigninButton.Color.Dark}
-            onPress={handleGoogleSignIn}
-            disabled={googleLoading}
-          />
+          {GoogleSigninButton && (
+            <GoogleSigninButton
+              style={{ width: '100%', height: 52, marginBottom: 4 }}
+              size={GoogleSigninButton.Size.Wide}
+              color={GoogleSigninButton.Color.Dark}
+              onPress={handleGoogleSignIn}
+              disabled={googleLoading}
+            />
+          )}
 
           <View style={styles.dividerRow}>
             <View style={styles.divider} />
