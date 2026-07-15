@@ -17,6 +17,16 @@ module.exports = () => ({
     name: 'Flash',
     slug: 'flash-user-app',
     version: '1.0.0',
+    // Required for EAS Update — added by `eas update:configure`'s own
+    // recommendation (it couldn't auto-write these into this dynamic
+    // app.config.js). runtimeVersion "appVersion" ties update compatibility
+    // to the `version` field above.
+    runtimeVersion: {
+      policy: 'appVersion',
+    },
+    updates: {
+      url: 'https://u.expo.dev/5caa686a-c2d2-491c-bc29-c2b23a12f6ce',
+    },
     orientation: 'portrait',
     icon: './assets/icon.png',
     userInterfaceStyle: 'light',

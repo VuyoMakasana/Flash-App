@@ -19,6 +19,16 @@ module.exports = () => ({
     name: 'Flash Driver',
     slug: 'flash-driver-app',
     version: '1.0.0',
+    // Required for EAS Update — added by `eas update:configure`'s own
+    // recommendation (it couldn't auto-write these into this dynamic
+    // app.config.js). runtimeVersion "appVersion" ties update compatibility
+    // to the `version` field above.
+    runtimeVersion: {
+      policy: 'appVersion',
+    },
+    updates: {
+      url: 'https://u.expo.dev/461d43ca-086d-4104-9a07-81897f2d7962',
+    },
     orientation: 'portrait',
     icon: './assets/flash-logo.png',
     userInterfaceStyle: 'light',
