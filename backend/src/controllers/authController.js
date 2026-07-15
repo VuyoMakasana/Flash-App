@@ -73,8 +73,15 @@ class AuthController {
       const { accessToken, refreshToken } = await issueTokenPair(user.id, 'user');
       const { password_hash, ...safeUser } = user;
 
-      // Send verification email (non-blocking)
-      await sendVerificationEmail(user.id, user.email);
+      // CRITICAL FIX: this was `await`ed here despite the "(non-blocking)"
+      // comment — sendVerificationEmail's own try/catch only protects
+      // against a *rejected* send, not a *slow/hanging* one. With no
+      // timeout on the SMTP transport (see emailService.js fix), a bad
+      // SMTP config left this awaited call hanging for minutes, blocking
+      // the entire registration response — confirmed live against
+      // production. Not awaiting it here makes registration itself
+      // genuinely fast regardless of email-provider health.
+      sendVerificationEmail(user.id, user.email);
 
       return res.status(201).json({
         token: accessToken,
@@ -133,7 +140,8 @@ class AuthController {
         [user.id]
       );
 
-      await sendVerificationEmail(user.id, user.email);
+      // Not awaited — see registerUser's identical fix above for why.
+      sendVerificationEmail(user.id, user.email);
       return res.json({ success: true });
     } catch (err) {
       console.error('[Auth] resendVerificationEmail:', err.message);
@@ -215,7 +223,15 @@ class AuthController {
         [user.id, token, expiresAt]
       );
 
-      await sendPasswordResetEmail(user.email, token);
+      // CRITICAL FIX: was `await`ed here — same hang risk as registerUser's
+      // identical fix above, and this call has no internal try/catch of its
+      // own (unlike sendVerificationEmail), so the .catch() below is
+      // required to avoid an unhandled promise rejection once the new SMTP
+      // timeout (see emailService.js) causes a bad config to reject instead
+      // of hanging.
+      sendPasswordResetEmail(user.email, token).catch((err) => {
+        console.error('[Auth] sendPasswordResetEmail error:', err.message);
+      });
 
       return res.json({ success: true });
     } catch (err) {

@@ -24,6 +24,14 @@ function createTransporter() {
     tls: {
       rejectUnauthorized: process.env.NODE_ENV === 'production',
     },
+    // CRITICAL FIX: nodemailer has no timeout by default, so a wrong host/port
+    // or blocked outbound connection hangs the underlying socket for minutes
+    // instead of failing fast — confirmed live: a bad SMTP config left
+    // /register and /resend-verification hanging past 170s with no response,
+    // since both awaited this send directly in the request path.
+    connectionTimeout: 10_000,
+    greetingTimeout:   10_000,
+    socketTimeout:     10_000,
   });
 }
 
