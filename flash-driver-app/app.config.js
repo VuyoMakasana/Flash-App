@@ -77,6 +77,10 @@ module.exports = () => ({
       // Expo CLI couldn't auto-add these to a dynamic app.config.js.
       'expo-splash-screen',
       'expo-web-browser',
+      // Required by expo-font and expo-router on the SDK-54-downgraded
+      // dependency set — same dynamic-config limitation as above.
+      'expo-font',
+      'expo-router',
       '@react-native-google-signin/google-signin',
       [
         'expo-build-properties',

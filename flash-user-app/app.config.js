@@ -58,6 +58,11 @@ module.exports = () => ({
       'expo-notifications',
       'expo-apple-authentication',
       'expo-secure-store',
+      // Required by @sentry/react-native on the SDK-54-downgraded
+      // dependency set — the Expo CLI couldn't auto-add this to a
+      // dynamic app.config.js (expo install --fix only writes into
+      // static app.json).
+      '@sentry/react-native',
       '@react-native-google-signin/google-signin',
       [
         'expo-build-properties',
