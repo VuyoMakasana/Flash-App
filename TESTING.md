@@ -82,14 +82,24 @@ That's a real limitation of Expo Go itself, not a bug in this project, and
 it's why this path runs off a dedicated branch, `expo-go-testing`, kept
 intentionally on the older, Expo-Go-compatible SDK rather than `main`.
 
-**Open Expo Go** (install it free from the App Store or Play Store first),
-then open one of these links on your phone (tap the link directly if you're
-reading this on your phone, or scan the QR code on the linked page if you're
-on desktop):
+**Install Expo Go first** (free, from the App Store or Play Store). Then:
 
-- **Flash (user app), Android**: https://expo.dev/accounts/vuyomakasana/projects/flash-user-app/updates/40fecd0a-2b4c-476e-abad-d4af5e7a9e2f
-- **Flash (user app), iOS**: https://expo.dev/accounts/vuyomakasana/projects/flash-user-app/updates/37a1b464-59fd-4723-81e1-35121d8ecefc
-- **Flash Driver, Android or iOS**: https://expo.dev/accounts/vuyomakasana/projects/flash-driver-app/updates/daf41305-8c4e-45a7-af6d-add68db1d513
+1. Open the Expo Go app.
+2. Look for "Enter URL manually" (usually under a "..." or "+" option on the
+   home screen) — this is the reliable way in, guaranteed to work regardless
+   of how your phone handles the link below.
+3. Paste one of these links (these are the real manifest links Expo Go reads
+   directly — confirmed publicly reachable, no login needed, verified live):
+
+   - **Flash (user app), Android**: `https://u.expo.dev/update/019f682b-59fc-7924-90f0-49f82a18a5a1`
+   - **Flash (user app), iOS**: `https://u.expo.dev/update/019f6831-62fa-71ce-8896-1fea65964c0d`
+   - **Flash Driver, Android**: `https://u.expo.dev/update/019f6822-ba27-79fc-bba4-43ae29153a52`
+   - **Flash Driver, iOS**: `https://u.expo.dev/update/019f6822-ba27-7dc6-8980-58ce0ae3e9a6`
+
+You don't need Expo Go at any particular version — install whatever the App
+Store/Play Store currently gives you. Its current public release is SDK 54,
+which is exactly what these links were published for, so it matches
+automatically with no extra steps.
 
 Each of those pages has an "Open in Expo Go" button / QR code. **This does
 not depend on anyone's computer, dev server, or tunnel being open** — the JS
