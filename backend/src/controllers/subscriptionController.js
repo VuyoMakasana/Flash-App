@@ -27,7 +27,10 @@ class SubscriptionController {
       res.json(result);
     } catch (err) {
       console.error("Subscription purchase error:", err);
-      res.status(500).json({ error: "Failed to purchase subscription" });
+      // TEMPORARY DIAGNOSTIC: surfacing err.message to trace a real,
+      // live-reproduced failure with no other log access available.
+      // Not a secret - just the thrown error text. Revert once resolved.
+      res.status(500).json({ error: "Failed to purchase subscription", debugMessage: err.message });
     }
   }
 
