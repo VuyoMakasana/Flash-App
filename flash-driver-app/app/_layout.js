@@ -22,35 +22,48 @@ import '../tasks/backgroundLocationTask';
 // ────────────────────────────────────────────────────────────────────────────
 
 import * as Sentry from '@sentry/react-native';
+// CRITICAL FIX: Sentry.init() ran unguarded at module top-level — before any
+// component ever renders. Same risk class as the Google Sign-In crash found
+// earlier this engagement (a native module not present under Expo Go's
+// fixed module set throwing via TurboModuleRegistry): if Sentry's native
+// binding isn't available in whatever runtime loads this bundle, this throws
+// synchronously and takes the entire app down to a blank screen before
+// anything renders, with no dev-mode red-screen to explain why (that
+// overlay is a local-dev-server feature, not present when loading a
+// published update). Guarded defensively; Sentry simply won't report
+// errors in an environment where init fails, same tradeoff as everywhere
+// else in this app that wraps a native module in try/catch.
 if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
-  Sentry.init({
-    dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
-    environment: 'production',
-    sendDefaultPii: false,
-    // Defensive backstop — no known live leak today, but nothing previously
-    // stopped a future captureException(err, { extra: { token } }) mistake
-    // from actually reaching Sentry. Recursive, not just top-level of each
-    // object — a single-level scrub misses a sensitive key nested one level
-    // deeper (e.g. contexts.session.cookie), silently letting it through.
-    beforeSend(event) {
-      const SENSITIVE_KEY = /token|password|authorization|cookie|secret/i;
-      const scrub = (obj, seen = new WeakSet()) => {
-        if (!obj || typeof obj !== 'object' || seen.has(obj)) return;
-        seen.add(obj);
-        for (const key of Object.keys(obj)) {
-          if (SENSITIVE_KEY.test(key)) {
-            delete obj[key];
-          } else if (obj[key] && typeof obj[key] === 'object') {
-            scrub(obj[key], seen);
+  try {
+    Sentry.init({
+      dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+      environment: 'production',
+      sendDefaultPii: false,
+      // Defensive backstop — no known live leak today, but nothing previously
+      // stopped a future captureException(err, { extra: { token } }) mistake
+      // from actually reaching Sentry. Recursive, not just top-level of each
+      // object — a single-level scrub misses a sensitive key nested one level
+      // deeper (e.g. contexts.session.cookie), silently letting it through.
+      beforeSend(event) {
+        const SENSITIVE_KEY = /token|password|authorization|cookie|secret/i;
+        const scrub = (obj, seen = new WeakSet()) => {
+          if (!obj || typeof obj !== 'object' || seen.has(obj)) return;
+          seen.add(obj);
+          for (const key of Object.keys(obj)) {
+            if (SENSITIVE_KEY.test(key)) {
+              delete obj[key];
+            } else if (obj[key] && typeof obj[key] === 'object') {
+              scrub(obj[key], seen);
+            }
           }
-        }
-      };
-      scrub(event.extra);
-      scrub(event.contexts);
-      scrub(event.request);
-      return event;
-    },
-  });
+        };
+        scrub(event.extra);
+        scrub(event.contexts);
+        scrub(event.request);
+        return event;
+      },
+    });
+  } catch (_) {}
 }
 
 function RootLayoutNav() {
