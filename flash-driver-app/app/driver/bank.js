@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  Alert, ActivityIndicator, ScrollView, FlatList,
+  Alert, ActivityIndicator, ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -134,19 +134,29 @@ export default function BankAccountScreen() {
               value={bankSearch}
               onChangeText={setBankSearch}
             />
-            <FlatList
-              data={filteredBanks}
-              keyExtractor={b => b.code}
-              style={{ maxHeight: 200 }}
-              renderItem={({ item }) => (
+            {/* CRITICAL FIX: was a FlatList nested inside this screen's own
+                outer ScrollView (same vertical orientation) — React Native's
+                own warning about this ("VirtualizedLists should never be
+                nested...") isn't just a performance note here: it correlated
+                with selectedBank silently failing to reach handleVerify
+                (confirmed live — accountNumber captured correctly in the
+                same call where selectedBank read back null, with nothing in
+                this file ever resetting it). The bank list here is short and
+                already filtered by search, so it never needed virtualization
+                — a plain ScrollView + map sidesteps the nested-list issue
+                entirely instead of working around whatever exact internal
+                mechanism was dropping the selection. */}
+            <ScrollView style={{ maxHeight: 200 }} keyboardShouldPersistTaps="handled">
+              {filteredBanks.map((item) => (
                 <TouchableOpacity
+                  key={item.code}
                   style={styles.bankItem}
                   onPress={() => { setSelectedBank(item); setShowBankList(false); setBankSearch(''); }}
                 >
                   <Text style={styles.bankItemText}>{item.name}</Text>
                 </TouchableOpacity>
-              )}
-            />
+              ))}
+            </ScrollView>
           </View>
         )}
 

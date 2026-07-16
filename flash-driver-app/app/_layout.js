@@ -7,30 +7,10 @@
 
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import { View, ActivityIndicator, Text } from 'react-native';
+import { useEffect } from 'react';
+import { View, ActivityIndicator } from 'react-native';
 import { DriverProvider, useDriver } from '../context/DriverContext';
 import { setSessionExpiredHandler } from '../services/api';
-
-// TEMPORARY DIAGNOSTIC — visible on-screen state overlay for tracing a
-// blank/stuck-screen report under Expo Go on this SDK-54 test branch only.
-// No console/device access available to read logs, so this renders actual
-// state directly instead of console.log. Remove once the real cause is found.
-function DebugOverlay({ extra = {} }) {
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return (
-    <View style={{ position: 'absolute', top: 40, left: 8, right: 8, backgroundColor: 'rgba(0,0,0,0.85)', padding: 8, borderRadius: 8, zIndex: 9999 }}>
-      <Text style={{ color: '#0f0', fontSize: 11, fontFamily: 'monospace' }}>
-        DEBUG tick={tick}{'\n'}
-        {Object.entries(extra).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join('\n')}
-      </Text>
-    </View>
-  );
-}
 
 // ── BACKGROUND LOCATION TASK REGISTRATION ───────────────────────────────────
 // This import MUST stay at module level and MUST appear before any component
@@ -158,14 +138,12 @@ function RootLayoutNav() {
     return (
       <View style={{ flex: 1, backgroundColor: '#0a0a0a', alignItems: 'center', justifyContent: 'center' }}>
         <ActivityIndicator color="#f59e0b" size="large" />
-        <DebugOverlay extra={{ where: 'loading-branch', loading, isAuthenticated, segments }} />
       </View>
     );
   }
 
   return (
     <>
-      <DebugOverlay extra={{ where: 'main-return', loading, isAuthenticated, driverStatus: driver?.status, termsAccepted: driver?.terms_accepted, segments }} />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="auth/login" />
