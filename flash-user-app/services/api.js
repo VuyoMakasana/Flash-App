@@ -229,6 +229,7 @@ const payments = {
   removeCard:    (cardId)          => request(`/payments/cards/${cardId}`, { method: 'DELETE' }),
   setDefaultCard:(cardId)          => request(`/payments/cards/${cardId}/default`, { method: 'PATCH' }),
   chargeSavedCard:(orderId, cardId)=> request('/payments/charge-saved-card', { method: 'POST', body: JSON.stringify({ orderId, cardId }) }),
+  getCashOtp:    (orderId)         => request(`/payments/cash/otp/${orderId}`),
 };
 
 // ── Nearby drivers (for "Pick a Driver" checkout mode) ──────────────────────

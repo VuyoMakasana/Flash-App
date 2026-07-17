@@ -47,9 +47,14 @@ async function generateOtp(orderId) {
   const otp = createOtpCode();
   const otpHash = hashOtp(orderId, otp);
 
+  // cash_otp_plain is stored alongside the hash, time-boxed by the same
+  // cash_otp_expires_at and cleared on verification/expiry, so the customer
+  // can fetch and view their code on demand — the hash alone is one-way and
+  // can't be turned back into the original digits for display.
   const result = await db.query(
     `UPDATE orders
      SET cash_otp_hash = $2,
+         cash_otp_plain = $3,
          cash_otp_expires_at = NOW() + INTERVAL '${OTP_TTL_MINUTES} minutes',
          cash_otp_sent_at = NOW(),
          cash_otp_verified_at = NULL,
@@ -57,7 +62,7 @@ async function generateOtp(orderId) {
          updated_at = NOW()
      WHERE id = $1
      RETURNING id, user_id, status, payment_method, payment_status, driver_id, cash_otp_expires_at`,
-    [orderId, otpHash],
+    [orderId, otpHash, otp],
   );
 
   if (!result.rows.length) {
@@ -68,6 +73,31 @@ async function generateOtp(orderId) {
     otp,
     order: result.rows[0],
   };
+}
+
+// Fetch the plaintext code for the customer-facing "view your code" screen.
+// Mirrors verifyOtp's own expiry check so a stale row is never served even
+// if it hasn't been cleared yet.
+async function getPlainOtp(orderId) {
+  const result = await db.query(
+    `SELECT cash_otp_plain, cash_otp_expires_at FROM orders WHERE id = $1`,
+    [orderId],
+  );
+
+  if (!result.rows.length) {
+    throw new Error("Order not found");
+  }
+
+  const row = result.rows[0];
+  if (!row.cash_otp_plain || !row.cash_otp_expires_at) {
+    throw new Error("No cash OTP has been requested for this order yet");
+  }
+
+  if (new Date(row.cash_otp_expires_at).getTime() < Date.now()) {
+    throw new Error("Your cash OTP has expired — ask your driver to resend it");
+  }
+
+  return { otp: row.cash_otp_plain, expiresAt: row.cash_otp_expires_at };
 }
 
 async function verifyOtp(orderId, otp) {
@@ -121,6 +151,7 @@ async function verifyOtp(orderId, otp) {
       `UPDATE orders
        SET cash_otp_verified_at = NOW(),
            cash_otp_hash = NULL,
+           cash_otp_plain = NULL,
            cash_otp_expires_at = NULL,
            cash_otp_attempts = 0,
            updated_at = NOW()
@@ -140,5 +171,6 @@ async function verifyOtp(orderId, otp) {
 
 module.exports = {
   generateOtp,
+  getPlainOtp,
   verifyOtp,
 };

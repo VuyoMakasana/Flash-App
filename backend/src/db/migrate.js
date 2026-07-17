@@ -596,6 +596,10 @@ async function migrate() {
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS cash_to_collect DECIMAL(10,2)`);
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS cash_received_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS cash_otp_hash VARCHAR(255)`);
+    // Plaintext code, time-boxed alongside cash_otp_expires_at and cleared on
+    // use/expiry — the hash alone can't be reversed to show the customer
+    // their code on demand, which is what the fetch-on-demand screen needs.
+    await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS cash_otp_plain VARCHAR(6)`);
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS cash_otp_expires_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS cash_otp_sent_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE orders   ADD COLUMN IF NOT EXISTS cash_otp_verified_at TIMESTAMPTZ`);

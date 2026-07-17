@@ -158,10 +158,11 @@ export default function DriverDashboard() {
   // ── Data loading ────────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     try {
-      const [earningsRes, subRes, activeOrderRes] = await Promise.allSettled([
+      const [earningsRes, subRes, activeOrderRes, trustRequestsRes] = await Promise.allSettled([
         driverApi.earnings.getSummary(),
         driverApi.subscription.getCurrent(),
         driverApi.orders.getActive(),
+        driverApi.trustedDrivers.getRequests(),
       ]);
 
       if (earningsRes.status === 'fulfilled') {
@@ -178,6 +179,22 @@ export default function DriverDashboard() {
 
       if (activeOrderRes.status === 'fulfilled') {
         await setActiveOrder(activeOrderRes.value.order || null);
+      }
+
+      // MEDIUM-fix: previously trustRequests only ever came from the live
+      // 'trust_request' socket event — a request sent while this app wasn't
+      // open and connected was silently missed forever, even after reopening.
+      // Backfilling from the real pending-requests endpoint on every load
+      // (mount + pull-to-refresh) closes that gap. Normalized to the same
+      // { requestId, ... } shape the socket handler already produces, since
+      // the Accept/Decline buttons read req.requestId.
+      if (trustRequestsRes.status === 'fulfilled') {
+        const pending = trustRequestsRes.value.requests || [];
+        setTrustRequests(pending.map(r => ({
+          requestId: r.id,
+          userId:    r.user_id,
+          message:   'A customer wants to add you as a trusted driver',
+        })));
       }
 
       await fetchAvailableOrders();
