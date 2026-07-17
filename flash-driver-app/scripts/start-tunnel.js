@@ -6,10 +6,18 @@
 // version is 3.20.0 for this account). @ngrok/ngrok is ngrok's own
 // current, actively-maintained SDK and doesn't hit that wall.
 //
-// This opens a real ngrok tunnel to port 8081 FIRST, then starts Metro
+// This opens a real ngrok tunnel to port 8082 FIRST, then starts Metro
 // with EXPO_PACKAGER_PROXY_URL set to that tunnel's URL, using the
 // already-saved authtoken from ~/.ngrok2/ngrok.yml (the one
 // `ngrok authtoken ...` wrote).
+//
+// Port 8082, not 8081: this app must run on a different port than
+// flash-user-app's Metro/tunnel (see flash-user-app/scripts/start-tunnel.js)
+// so the two can run simultaneously — CLAUDE.md documents 8082 as the
+// driver app's dedicated port. This file started as a byte-for-byte copy
+// of the user app's script (still hardcoded to 8081 there, correctly), and
+// the copy was never repointed — running both at once would have collided
+// on the same ngrok/Metro port.
 //
 // Order matters here. Metro/Expo CLI decides what host:port to embed in
 // the manifest (bundleUrl, etc.) at startup — without EXPO_PACKAGER_PROXY_URL
@@ -67,12 +75,12 @@ function readAuthtoken() {
 async function main() {
   const authtoken = readAuthtoken();
 
-  console.log('Opening ngrok tunnel to port 8081...');
-  const listener = await ngrok.forward({ addr: 8081, authtoken });
+  console.log('Opening ngrok tunnel to port 8082...');
+  const listener = await ngrok.forward({ addr: 8082, authtoken });
   const url = listener.url();
 
-  console.log('Starting Metro on port 8081, proxied through', url, '...');
-  const metro = spawn('npx', ['expo', 'start', '--port', '8081'], {
+  console.log('Starting Metro on port 8082, proxied through', url, '...');
+  const metro = spawn('npx', ['expo', 'start', '--port', '8082'], {
     cwd: path.join(__dirname, '..'),
     stdio: 'inherit',
     shell: true,

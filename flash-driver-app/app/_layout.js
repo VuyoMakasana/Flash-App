@@ -155,6 +155,7 @@ function RootLayoutNav() {
         <Stack.Screen name="driver/profile" />
         <Stack.Screen name="driver/subscription" />
         <Stack.Screen name="driver/bank" />
+        <Stack.Screen name="driver/chat" />
       </Stack>
       <StatusBar style="light" />
     </>

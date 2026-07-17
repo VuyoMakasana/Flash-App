@@ -91,10 +91,16 @@ intentionally on the older, Expo-Go-compatible SDK rather than `main`.
 3. Paste one of these links (these are the real manifest links Expo Go reads
    directly — confirmed publicly reachable, no login needed, verified live):
 
-   - **Flash (user app), Android**: `https://u.expo.dev/update/019f682b-59fc-7924-90f0-49f82a18a5a1`
-   - **Flash (user app), iOS**: `https://u.expo.dev/update/019f6831-62fa-71ce-8896-1fea65964c0d`
-   - **Flash Driver, Android**: `https://u.expo.dev/update/019f6822-ba27-79fc-bba4-43ae29153a52`
-   - **Flash Driver, iOS**: `https://u.expo.dev/update/019f6822-ba27-7dc6-8980-58ce0ae3e9a6`
+   - **Flash (user app), Android**: `https://u.expo.dev/update/019f6a03-f814-71bc-a379-22c864099aa3`
+   - **Flash (user app), iOS**: `https://u.expo.dev/update/019f6a04-6cdc-7582-b3e7-51a582953e63`
+   - **Flash Driver, Android**: `https://u.expo.dev/update/019f69fc-f206-736d-bd5c-2ce837ba3d8c`
+   - **Flash Driver, iOS**: `https://u.expo.dev/update/019f6a03-bab0-7b56-b7ef-43d2df1c59b4`
+
+   (Updated 2026-07-16 — the first published version had an unguarded
+   `Sentry.init()` at app startup that could crash to a blank screen before
+   anything rendered if Sentry's native module isn't available in Expo Go;
+   fixed and republished. If you see a blank screen again after this
+   update, it's a new issue — report it, don't assume it's this one.)
 
 You don't need Expo Go at any particular version — install whatever the App
 Store/Play Store currently gives you. Its current public release is SDK 54,

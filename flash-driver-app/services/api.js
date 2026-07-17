@@ -289,6 +289,12 @@ const sos = {
   trigger: (orderId, lat, lng) => request(`/sos/${orderId}/trigger`, { method: 'POST', body: JSON.stringify({ lat, lng }) }),
 };
 
+// ── Order chat ──────────────────────────────────────────────────────────
+const messages = {
+  getMessages: (orderId)          => request(`/messages/${orderId}`),
+  sendMessage: (orderId, content) => request(`/messages/${orderId}`, { method: 'POST', body: JSON.stringify({ content }) }),
+};
+
 const driverApi = {
   auth,
   orders,
@@ -299,6 +305,7 @@ const driverApi = {
   trustedDrivers,
   payments,
   sos,
+  messages,
 };
 
 export default driverApi;
