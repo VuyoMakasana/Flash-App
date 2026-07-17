@@ -61,6 +61,7 @@ export default function OrderStatusScreen() {
   const [ratingValue, setRatingValue]         = useState(0);
   const [submittingRating, setSubmittingRating] = useState(false);
   const [ratingSubmitted, setRatingSubmitted]   = useState(false);
+  const [fetchingCashOtp, setFetchingCashOtp]   = useState(false);
 
   // If we were only passed an orderId (e.g. from PaymentScreen fallback), fetch the full order
   useEffect(() => {
@@ -109,6 +110,26 @@ export default function OrderStatusScreen() {
 
   const handleReturn = () => {
     navigation.navigate('ReturnRequest', { order });
+  };
+
+  // The code itself never appears in any push notification or socket event
+  // (lock-screen visibility, consistent with how this code is handled
+  // everywhere else in the app) — this is the only place a customer can
+  // actually see it, fetched fresh on tap so it's never stale.
+  const handleViewCashCode = async () => {
+    setFetchingCashOtp(true);
+    try {
+      const data = await api.payments.getCashOtp(order.id);
+      Alert.alert(
+        'Your Cash Code',
+        `${data.otp}\n\nGive this code to your driver to confirm you received your order.`,
+      );
+    } catch (e) {
+      if (e.message === 'SESSION_EXPIRED') return;
+      Alert.alert('Not available yet', e.message || 'Could not retrieve your code.');
+    } finally {
+      setFetchingCashOtp(false);
+    }
   };
 
   const handleSubmitRating = async () => {
@@ -234,6 +255,27 @@ export default function OrderStatusScreen() {
         </Pressable>
       )}
 
+      {/* View cash confirmation code — shown whenever a driver could plausibly
+          have requested one; getCashOtp itself returns a clear "not
+          requested yet" error if not, so this doesn't need to track that
+          state separately. */}
+      {order.is_cash_delivery && order.payment_status === 'pending_cash' &&
+        ['in_transit', 'delivered'].includes(order.status) && (
+        <Pressable
+          style={[styles.trackBtn, styles.cashCodeBtn]}
+          onPress={handleViewCashCode}
+          disabled={fetchingCashOtp}
+        >
+          {fetchingCashOtp
+            ? <ActivityIndicator color="#fff" size="small" />
+            : <>
+                <Ionicons name="key" size={18} color="#fff" />
+                <Text style={styles.trackText}>View My Cash Code</Text>
+              </>
+          }
+        </Pressable>
+      )}
+
       {/* Items */}
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Items</Text>
@@ -338,6 +380,7 @@ const styles = StyleSheet.create({
   stepLabelDone: { color: '#111827', fontWeight: '700' },
   trackBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#0a0a0a', paddingVertical: 16, borderRadius: 14 },
   trackText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  cashCodeBtn: { backgroundColor: '#10b981', marginTop: 12 },
   sectionTitle: { fontWeight: '800', fontSize: 16, color: '#111827' },
   itemRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   itemName: { flex: 1, fontWeight: '700', color: '#111827' },

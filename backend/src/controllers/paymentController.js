@@ -18,7 +18,7 @@ const db                = require('../config/database');
 const { updateOrderStatus }        = require('../services/orderStateMachineService');
 const { autoAssignNearestDriver }  = require('../services/autoMatchService');
 const cashOtpService               = require('../services/cashOtpService');
-const { notifyDriversNewOrder }    = require('../services/notificationService');
+const { notifyDriversNewOrder, sendPushNotification } = require('../services/notificationService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
 const { recordCashCommission, checkCommissionBlock } = require('../services/driverCommissionService');
 
@@ -389,6 +389,26 @@ class PaymentController {
         });
       }
 
+      // Push fallback for a backgrounded customer app — deliberately does not
+      // include the code itself (lock-screen notifications aren't private),
+      // consistent with this code never appearing in a response body or log
+      // anywhere else. The customer opens the app and fetches it via
+      // getCashOtp below, same ownership check as every other cash endpoint.
+      try {
+        const userResult = await db.query('SELECT push_token FROM users WHERE id=$1', [order.user_id]);
+        const pushToken = userResult.rows[0]?.push_token;
+        if (pushToken) {
+          await sendPushNotification({
+            tokens: pushToken,
+            title:  'Cash Confirmation Code',
+            body:   'Open Flash to view your code and give it to your driver.',
+            data:   { type: 'cash_otp_requested', orderId },
+          });
+        }
+      } catch (pushErr) {
+        console.warn('[Payment] Cash OTP push notification failed:', pushErr.message);
+      }
+
       const response = {
         success:   true,
         orderId,
@@ -403,6 +423,26 @@ class PaymentController {
     } catch (err) {
       console.error('[Payment] sendCashOtp error:', err.message);
       return res.status(400).json({ error: err.message || 'Failed to send cash OTP' });
+    }
+  }
+
+  // Customer-facing fetch-on-demand for the code sendCashOtp generated —
+  // the code never appears in that endpoint's response or in the socket/push
+  // events in production, so this is the only place a customer can see it.
+  static async getCashOtp(req, res) {
+    const { orderId } = req.params;
+    try {
+      const orderResult = await db.query('SELECT user_id FROM orders WHERE id = $1', [orderId]);
+      if (!orderResult.rows.length) return res.status(404).json({ error: 'Order not found' });
+      if (String(orderResult.rows[0].user_id) !== String(req.userId)) {
+        return res.status(403).json({ error: 'Not your order' });
+      }
+
+      const { otp, expiresAt } = await cashOtpService.getPlainOtp(orderId);
+      return res.json({ otp, expiresAt });
+    } catch (err) {
+      console.error('[Payment] getCashOtp error:', err.message);
+      return res.status(400).json({ error: err.message || 'Could not retrieve cash OTP' });
     }
   }
 

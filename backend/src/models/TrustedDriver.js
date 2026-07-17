@@ -188,15 +188,40 @@ class TrustedDriver extends BaseModel {
       throw new Error('Request not found');
     }
 
+    const row = result.rows[0];
+    const message =
+      action === 'accept'
+        ? 'A driver accepted your trusted driver request!'
+        : 'A driver declined your trusted driver request.';
+
     if (io) {
-      io.to(`user:${result.rows[0].user_id}`).emit('trust_response', {
+      io.to(`user:${row.user_id}`).emit('trust_response', {
         driverId,
         status: newStatus,
-        message:
-          action === 'accept'
-            ? 'A driver accepted your trusted driver request!'
-            : 'A driver declined your trusted driver request.',
+        message,
       });
+    }
+
+    // Push notification fallback for backgrounded customer apps — mirrors
+    // the push already sent to the driver in sendTrustRequest above, which
+    // previously had no equivalent on this side of the exchange.
+    try {
+      const userResult = await this.query(
+        'SELECT push_token FROM users WHERE id=$1',
+        [row.user_id],
+      );
+      const pushToken = userResult.rows[0]?.push_token;
+      if (pushToken) {
+        const { sendPushNotification } = require('../services/notificationService');
+        await sendPushNotification({
+          tokens: pushToken,
+          title: action === 'accept' ? 'Trust Request Accepted' : 'Trust Request Declined',
+          body: message,
+          data: { type: 'trust_response', driverId, status: newStatus },
+        });
+      }
+    } catch (pushErr) {
+      console.warn('[TrustedDriver] Push notification failed:', pushErr.message);
     }
 
     return { success: true, status: newStatus };

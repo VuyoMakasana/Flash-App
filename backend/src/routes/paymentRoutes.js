@@ -78,6 +78,14 @@ router.post(
   PaymentController.sendCashOtp,
 );
 
+router.get(
+  '/cash/otp/:orderId',
+  authenticate,
+  requireRole('user'),
+  validateId,
+  PaymentController.getCashOtp,
+);
+
 router.post(
   '/cash/confirm',
   authenticate,
