@@ -283,6 +283,12 @@ export default function DriverDashboard() {
     }
   };
 
+  // ── Message customer ────────────────────────────────────────────────────
+  const handleMessage = () => {
+    if (!activeOrder) return;
+    router.push({ pathname: '/driver/chat', params: { orderId: activeOrder.id } });
+  };
+
   // ── SOS / safety button ───────────────────────────────────────────────────
   // One tap, fires immediately — a safety feature needs to work under
   // stress, not make someone confirm a dialog first. Location is
@@ -555,17 +561,28 @@ export default function DriverDashboard() {
               )}
             </View>
 
-            {/* ── MEDIUM-1 FIX: Navigation button ── */}
-            {navAddress && (
+            {/* ── MEDIUM-1 FIX: Navigation button, plus a message-customer
+                button alongside it — the driver's only way to reach the
+                customer directly previously required a phone call. ── */}
+            <View style={styles.actionRow}>
+              {navAddress && (
+                <TouchableOpacity
+                  style={[styles.navBtn, styles.navBtnFlex]}
+                  onPress={() => openNavigation(navAddress)}
+                  accessibilityLabel={navLabel}
+                >
+                  <Ionicons name="navigate-outline" size={18} color="#0a0a0a" />
+                  <Text style={styles.navBtnText}>{navLabel}</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity
-                style={styles.navBtn}
-                onPress={() => openNavigation(navAddress)}
-                accessibilityLabel={navLabel}
+                style={styles.messageBtn}
+                onPress={handleMessage}
+                accessibilityLabel="Message customer"
               >
-                <Ionicons name="navigate-outline" size={18} color="#0a0a0a" />
-                <Text style={styles.navBtnText}>{navLabel}</Text>
+                <Ionicons name="chatbubble-ellipses" size={20} color="#f59e0b" />
               </TouchableOpacity>
-            )}
+            </View>
 
             {/* Status advance button — hidden at 'delivered' only for cash
                 orders, where the OTP block below takes over that step. A
@@ -818,8 +835,11 @@ const styles = StyleSheet.create({
   returnBadge:        { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#3b82f6', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   returnBadgeText:    { color: '#fff', fontSize: 11, fontWeight: '800' },
   // MEDIUM-1 FIX: Navigation button
-  navBtn:             { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#f59e0b', borderRadius: 12, padding: 14, marginTop: 4 },
+  actionRow:          { flexDirection: 'row', gap: 8, marginTop: 4 },
+  navBtn:             { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#f59e0b', borderRadius: 12, padding: 14 },
+  navBtnFlex:         { flex: 1 },
   navBtnText:         { color: '#0a0a0a', fontWeight: '800', fontSize: 15 },
+  messageBtn:         { width: 48, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1a1a1a', borderRadius: 12, borderWidth: 1, borderColor: '#f59e0b' },
   acceptBtn:          { backgroundColor: '#f59e0b', borderRadius: 12, padding: 14, alignItems: 'center' },
   acceptBtnText:      { color: '#0a0a0a', fontWeight: '800', fontSize: 15 },
   actionBtn:          { backgroundColor: '#3b82f6', borderRadius: 12, padding: 14, alignItems: 'center' },
