@@ -91,16 +91,17 @@ intentionally on the older, Expo-Go-compatible SDK rather than `main`.
 3. Paste one of these links (these are the real manifest links Expo Go reads
    directly — confirmed publicly reachable, no login needed, verified live):
 
-   - **Flash (user app), Android**: `https://u.expo.dev/update/019f6a03-f814-71bc-a379-22c864099aa3`
-   - **Flash (user app), iOS**: `https://u.expo.dev/update/019f6a04-6cdc-7582-b3e7-51a582953e63`
-   - **Flash Driver, Android**: `https://u.expo.dev/update/019f69fc-f206-736d-bd5c-2ce837ba3d8c`
-   - **Flash Driver, iOS**: `https://u.expo.dev/update/019f6a03-bab0-7b56-b7ef-43d2df1c59b4`
+   - **Flash (user app), Android**: `https://u.expo.dev/update/019f706c-a4d4-7a4d-b335-28fc517b92b5`
+   - **Flash (user app), iOS**: `https://u.expo.dev/update/019f7077-4c4d-7468-8fcf-e27fb4ff21f4`
+   - **Flash Driver, Android**: `https://u.expo.dev/update/019f7076-9f00-7bc0-88fb-b660eaf0ddae`
+   - **Flash Driver, iOS**: `https://u.expo.dev/update/019f7077-0bb4-7dca-bc7d-4f94395a36d0`
 
-   (Updated 2026-07-16 — the first published version had an unguarded
-   `Sentry.init()` at app startup that could crash to a blank screen before
-   anything rendered if Sentry's native module isn't available in Expo Go;
-   fixed and republished. If you see a blank screen again after this
-   update, it's a new issue — report it, don't assume it's this one.)
+   (Updated 2026-07-17 — synced `main`'s latest fixes into `expo-go-testing`
+   and republished, including the driver app's new order-chat screen. All
+   four links re-verified live: HTTP 200, no login wall. Previous links
+   above are now stale — they served the pre-chat build. If a link above
+   ever 404s or hangs, it means a newer publish superseded it; check with
+   the project owner for the current one rather than assuming it's broken.)
 
 You don't need Expo Go at any particular version — install whatever the App
 Store/Play Store currently gives you. Its current public release is SDK 54,
@@ -174,6 +175,18 @@ trust — it's just how this project is run.
   live (registration now responds in ~6 seconds). If you see this again on
   current `main`, it's a new issue, not the same one — report it, don't
   assume it's already known.
+- **Verification email never arrives, even though registration itself
+  succeeds fast**: as of 2026-07-17, this is a known, live, **unresolved**
+  gap — not fixed, don't assume otherwise. Registration returns
+  `emailVerificationSent: true` regardless of whether an email actually
+  sent, because `emailService.js` silently no-ops in a "DEV MODE" fallback
+  whenever `SMTP_HOST`/`SMTP_USER` aren't set in production — no error, no
+  warning, nothing visible outside Render's raw logs. Confirmed live by
+  running real registrations against production and checking Resend's own
+  send log directly: zero new sends appeared. If you hit this, it's the
+  same known issue — report it to the project owner, they know it needs a
+  Render-side fix (or a different SMTP relay's own delivery log, if it's
+  no longer Resend).
 - **"Cannot read property 'getGlobalHandler' of undefined" or similar crash on
   launch**: this was a real bug, already fixed on `main` — make sure you're
   on the latest `main` and ran `npm install` after pulling.
