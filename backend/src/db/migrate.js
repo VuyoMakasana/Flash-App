@@ -920,6 +920,19 @@ async function migrateV10(client) {
       `CREATE INDEX IF NOT EXISTS idx_driver_ratings_driver_id ON driver_ratings(driver_id)`
     );
 
+    // Separate from driver_ratings — rating Flash itself, not a specific
+    // delivery. No UNIQUE constraint (kept simple; the client only prompts
+    // once per device via AsyncStorage, this doesn't need to enforce it).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS app_ratings (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        rating     SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+        comment    TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     await client.query('COMMIT');
     console.log('Flash database migration v10 completed: driver_ratings table');
   } catch (err) {

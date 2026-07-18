@@ -83,6 +83,13 @@ class User extends BaseModel {
   // every refresh token so no existing session can keep acting as this
   // user (their short-lived access token still expires within 15 minutes
   // regardless).
+  static async rateApp(userId, rating, comment) {
+    await this.query(
+      `INSERT INTO app_ratings (user_id, rating, comment) VALUES ($1, $2, $3)`,
+      [userId, rating, comment ? String(comment).trim() || null : null],
+    );
+  }
+
   static async deleteAccount(userId) {
     const anonymizedEmail = `deleted-${userId}@flash.invalid`;
     const password_hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
@@ -114,6 +121,7 @@ class User extends BaseModel {
              d.vehicle_type as driver_vehicle, d.profile_photo_url as driver_photo,
              d.rating as driver_rating,
              d.current_lat as driver_lat, d.current_lng as driver_lng,
+             EXISTS(SELECT 1 FROM driver_ratings dr WHERE dr.order_id = o.id) as has_rating,
              json_agg(json_build_object(
                'id', oi.id, 'product_id', oi.product_id, 'product_name', oi.product_name,
                'size', oi.size, 'quantity', oi.quantity, 'unit_price', oi.unit_price, 

@@ -245,6 +245,10 @@ const user = {
     method: 'POST',
     body:   JSON.stringify({ push_token: pushToken }),
   }),
+  rateApp: (rating, comment) => request('/users/app-rating', {
+    method: 'POST',
+    body:   JSON.stringify({ rating, comment }),
+  }),
 
   // NOTE: none of the four methods below have a real backend route today —
   // there is no addressRoutes.js and no address table wired into the API,

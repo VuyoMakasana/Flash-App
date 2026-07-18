@@ -26,6 +26,13 @@ router.post(
   UserController.registerPushToken,
 );
 
+router.post(
+  "/app-rating",
+  authenticate,
+  requireRole("user"),
+  UserController.rateApp,
+);
+
 // H8 FIX: previously no backend route existed for this at all.
 router.delete(
   "/account",
