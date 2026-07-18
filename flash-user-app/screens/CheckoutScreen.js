@@ -278,7 +278,7 @@ export default function CheckoutScreen() {
               onPress={() => setDeliveryMode(mode)}
             >
               <Text style={[styles.toggleText, deliveryMode === mode && styles.toggleTextActive]}>
-                {mode === 'fleet' ? '⚡ Any Available Driver' : '🚗 Pick a Driver'}
+                {mode === 'fleet' ? 'Any Available Driver' : 'Pick a Driver'}
               </Text>
             </Pressable>
           ))}

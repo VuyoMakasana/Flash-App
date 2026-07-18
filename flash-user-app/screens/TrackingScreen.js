@@ -411,7 +411,7 @@ export default function TrackingScreen() {
         {isCompleted && (
           <View style={styles.completedBanner}>
             <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
-            <Text style={styles.completedText}>Your order has been delivered! Enjoy 🎉</Text>
+            <Text style={styles.completedText}>Your order has been delivered! Enjoy.</Text>
           </View>
         )}
       </View>

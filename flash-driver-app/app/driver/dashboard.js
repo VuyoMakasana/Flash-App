@@ -418,9 +418,9 @@ export default function DriverDashboard() {
       {/* ── HEADER ── */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.greeting}>Hey, {driver?.name?.split(' ')[0]} 👋</Text>
+          <Text style={styles.greeting}>Hey, {driver?.name?.split(' ')[0]}</Text>
           <Text style={styles.subGreeting}>
-            {isOnline ? '🟢 You are online' : '⚫ You are offline'}
+            {isOnline ? 'You are online' : 'You are offline'}
           </Text>
         </View>
         <View style={styles.headerActions}>
@@ -440,7 +440,7 @@ export default function DriverDashboard() {
       <View style={[styles.card, isOnline && styles.cardOnline]}>
         <View style={styles.row}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.cardTitle}>{isOnline ? '🟢 Online — Taking Orders' : '⚫ Offline'}</Text>
+            <Text style={styles.cardTitle}>{isOnline ? 'Online — Taking Orders' : 'Offline'}</Text>
             <Text style={styles.cardSub}>
               {subscriptionExpired
                 ? 'Buy a plan to go online'
@@ -617,7 +617,7 @@ export default function DriverDashboard() {
             {/* Cash OTP flow */}
             {activeOrder.is_cash_delivery && activeOrder.status === 'delivered' && (
               <View style={styles.otpContainer}>
-                <Text style={styles.otpTitle}>💵 Collect Cash Payment</Text>
+                <Text style={styles.otpTitle}>Collect Cash Payment</Text>
                 <Text style={styles.otpSubtitle}>Send the customer a one-time code, then enter it here to confirm you received cash.</Text>
 
                 {!otpRequested ? (
