@@ -21,6 +21,15 @@ class Driver extends BaseModel {
       driverData;
     const password_hash = await bcrypt.hash(password, 12);
 
+    // TEMPORARY TEST-MODE BYPASS — remove before real launch. Mirrors the
+    // flag in subscriptionService.js. When DRIVER_TEST_MODE=true, every new
+    // driver registration skips document review entirely and starts
+    // 'approved', so a real tester can accept orders immediately without
+    // uploading real documents. Revert to always "pending_documents" before
+    // going live.
+    const initialStatus =
+      process.env.DRIVER_TEST_MODE === "true" ? "approved" : "pending_documents";
+
     return await super.create(this.tableName, {
       name,
       email,
@@ -28,7 +37,7 @@ class Driver extends BaseModel {
       phone,
       vehicle_type: vehicle_type || null,
       vehicle_plate: vehicle_plate || null,
-      status: "pending_documents",
+      status: initialStatus,
       date_of_birth: date_of_birth || null,
     });
   }
