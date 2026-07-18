@@ -21,10 +21,16 @@
  * surrounding urban area. Tighter than the original draft box (which also
  * reached out to Kariega/Despatch/Coega); replace/widen if delivery needs to
  * extend beyond urban Gqeberha.
+ *
+ * 2026-07-18: north bound widened -33.83 -> -33.76 to include Motherwell
+ * (a real, requested delivery destination that fell just outside the
+ * original box). Estimated from general knowledge of the area, not a
+ * verified geocode of a specific address — worth sanity-checking against
+ * a real order to that suburb rather than trusting this margin blindly.
  */
 const NMB_BOUNDS = {
   minLat: -34.03,
-  maxLat: -33.83,
+  maxLat: -33.76,
   minLng: 25.55,
   maxLng: 25.68,
 };
