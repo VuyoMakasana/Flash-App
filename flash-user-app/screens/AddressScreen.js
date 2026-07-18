@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
+import * as Location from 'expo-location';
 import api from '../services/api';
 
 const LABEL_OPTIONS = ['Home', 'Work', 'Other'];
@@ -94,6 +95,31 @@ export default function AddressScreen() {
 
     setSaving(true);
     try {
+      const full_address = [
+        form.street, form.apartment, form.suburb, form.city,
+      ].filter(Boolean).join(', ');
+
+      // Geocode on save so checkout can send the driver to this address's
+      // real coordinates instead of always falling back to wherever the
+      // customer's device happens to be at checkout time. Best-effort —
+      // a failed/denied lookup must never block saving the address itself,
+      // it just means this one falls back to live-GPS at checkout, same as
+      // before this existed.
+      let lat = null;
+      let lng = null;
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const results = await Location.geocodeAsync(full_address);
+          if (results?.length) {
+            lat = results[0].latitude;
+            lng = results[0].longitude;
+          }
+        }
+      } catch (_) {
+        // Geocoding is a best-effort enhancement, not a save requirement.
+      }
+
       const payload = {
         label:      form.label,
         street:     form.street.trim(),
@@ -103,9 +129,9 @@ export default function AddressScreen() {
         gate_code:  form.gate_code.trim(),
         landmark:   form.landmark.trim(),
         is_default: form.is_default,
-        full_address: [
-          form.street, form.apartment, form.suburb, form.city,
-        ].filter(Boolean).join(', '),
+        full_address,
+        lat,
+        lng,
       };
 
       if (editId) {

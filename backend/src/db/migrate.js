@@ -992,6 +992,10 @@ async function migrateV12(client) {
         updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // Nullable — existing addresses saved before this fix just fall back to
+    // live GPS at checkout, same as they always have, until re-saved.
+    await client.query(`ALTER TABLE addresses ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`);
+    await client.query(`ALTER TABLE addresses ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`);
 
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_addresses_user ON addresses(user_id)`
