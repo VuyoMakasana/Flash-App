@@ -42,11 +42,11 @@ const corsOptions = {
         "http://127.0.0.1:8081",
         "http://127.0.0.1:19002",
       );
-      console.log("[CORS] ℹ️  Using development defaults. Set ALLOWED_ORIGINS to control.");
+      console.log("[CORS] Using development defaults. Set ALLOWED_ORIGINS to control.");
     } else {
       // Production: no defaults - must be explicitly configured
       console.warn(
-        "[CORS] ⚠️  ALLOWED_ORIGINS not configured. CORS will block all requests.",
+        "[CORS] ALLOWED_ORIGINS not configured. CORS will block all requests.",
       );
     }
 

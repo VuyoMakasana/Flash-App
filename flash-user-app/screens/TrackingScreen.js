@@ -371,9 +371,13 @@ export default function TrackingScreen() {
                   </View>
                 )}
               </View>
-              <Text style={styles.driverMeta}>
-                {driver.vehicle}{driver.plate ? ` (${driver.plate})` : ''}  •  {parseFloat(driver.rating || 5).toFixed(1)}★  •  {driver.total_deliveries || 0} trips
-              </Text>
+              <View style={styles.driverMetaRow}>
+                <Text style={styles.driverMeta}>
+                  {driver.vehicle}{driver.plate ? ` (${driver.plate})` : ''}  •  {parseFloat(driver.rating || 5).toFixed(1)}
+                </Text>
+                <Ionicons name="star" size={12} color="#f59e0b" style={{ marginHorizontal: 2 }} />
+                <Text style={styles.driverMeta}>  •  {driver.total_deliveries || 0} trips</Text>
+              </View>
             </View>
             {/* ── Part 2: Call button (masked dialler) ─────────────────── */}
             <Pressable style={styles.iconActionBtn} onPress={handleCall}>
@@ -486,6 +490,7 @@ const styles = StyleSheet.create({
   driverNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   driverName:    { fontWeight: '800', color: '#111827' },
   driverMeta:    { color: '#6b7280', fontSize: 12, marginTop: 2 },
+  driverMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   verifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#ecfdf5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
   verifiedBadgeText: { color: '#10b981', fontSize: 10, fontWeight: '700' },
   iconActionBtn: {

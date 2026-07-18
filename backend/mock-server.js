@@ -267,8 +267,8 @@ app.put('/api/orders/:id/status', (req, res) => {
 const PORT = 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log('');
-  console.log('⚡ Flash Mock Server running on port ' + PORT);
-  console.log('📱 Apps can connect at http://10.0.0.32:' + PORT);
+  console.log('Flash Mock Server running on port ' + PORT);
+  console.log('Apps can connect at http://10.0.0.32:' + PORT);
   console.log('');
   console.log('Routes ready:');
   console.log('  POST /api/auth/user/register');
