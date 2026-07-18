@@ -72,10 +72,14 @@ export default function TrackingScreen() {
     ]).start(() => setArrivalBanner(null));
   }, [bannerOpacity]);
 
-  // ── Dial button — opens phone dialler with masked number ──────────────────
+  // ── Dial button — opens phone dialler ──────────────────────────────────────
+  // Calls the actual assigned driver's real number (already returned by the
+  // backend as driver.phone, required at driver registration). Falls back to
+  // the support line only in the unlikely case it's ever missing — matches
+  // the earlier fix's intent (reaching nothing was worse than reaching support).
   const handleCall = () => {
-    // FIXED: Replaced fake placeholder number with real support number — customers tapping Call during a live delivery were reaching nothing
-    Linking.openURL('tel:+27730849837').catch(() => {});
+    const number = driver?.phone || '+27730849837';
+    Linking.openURL(`tel:${number}`).catch(() => {});
   };
 
   // ── Message button ────────────────────────────────────────────────────────

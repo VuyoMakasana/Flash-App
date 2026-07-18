@@ -306,6 +306,14 @@ export default function DriverDashboard() {
     router.push({ pathname: '/driver/chat', params: { orderId: activeOrder.id } });
   };
 
+  // ── Call customer ────────────────────────────────────────────────────────
+  // customer_phone is already returned by getActiveOrder — only ever exposed
+  // here, tied to a real active order, not a general customer lookup.
+  const handleCallCustomer = () => {
+    if (!activeOrder?.customer_phone) return;
+    Linking.openURL(`tel:${activeOrder.customer_phone}`).catch(() => {});
+  };
+
   // ── SOS / safety button ───────────────────────────────────────────────────
   // One tap, fires immediately — a safety feature needs to work under
   // stress, not make someone confirm a dialog first. Location is
@@ -578,9 +586,9 @@ export default function DriverDashboard() {
               )}
             </View>
 
-            {/* ── MEDIUM-1 FIX: Navigation button, plus a message-customer
-                button alongside it — the driver's only way to reach the
-                customer directly previously required a phone call. ── */}
+            {/* ── MEDIUM-1 FIX: Navigation button, plus message/call buttons
+                alongside it — the driver previously had no in-app way to
+                reach the customer at all. ── */}
             <View style={styles.actionRow}>
               {navAddress && (
                 <TouchableOpacity
@@ -590,6 +598,15 @@ export default function DriverDashboard() {
                 >
                   <Ionicons name="navigate-outline" size={18} color="#0a0a0a" />
                   <Text style={styles.navBtnText}>{navLabel}</Text>
+                </TouchableOpacity>
+              )}
+              {activeOrder.customer_phone && (
+                <TouchableOpacity
+                  style={styles.messageBtn}
+                  onPress={handleCallCustomer}
+                  accessibilityLabel="Call customer"
+                >
+                  <Ionicons name="call" size={20} color="#f59e0b" />
                 </TouchableOpacity>
               )}
               <TouchableOpacity
