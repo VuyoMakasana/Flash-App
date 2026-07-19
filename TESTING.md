@@ -128,6 +128,38 @@ never meant to run on web anyway.) `expo-go-testing` is a **persistent**
 branch, not a throwaway — it's meant to be periodically re-synced with
 `main` like this, not recreated from scratch each time.
 
+### Also live: `multi-tester-readiness` branch (newer work, Expo Go only)
+
+A second EAS Update branch, `multi-tester-readiness`, carries work newer than
+`expo-go-testing` above — mandatory post-delivery ratings, real tap-to-call,
+a saved-address coordinate fix, and an emoji cleanup pass. It's published
+from the `multi-tester-readiness` git branch's current HEAD (also on SDK 54,
+inherited from `expo-go-testing`, so it's Expo-Go-compatible the same way).
+
+Same distribution model as the links above — Expo Go via "Enter URL
+manually," nothing else to install or run:
+
+- **Flash (user app), Android**: `https://u.expo.dev/update/019f77a7-1d21-7485-b4a7-acffba2d9868`
+- **Flash (user app), iOS**: `https://u.expo.dev/update/019f77a7-184c-705e-beb0-62d1b61ea74d`
+- **Flash Driver, Android**: `https://u.expo.dev/update/019f77a6-cb09-702e-be7b-b1388261fef3`
+- **Flash Driver, iOS**: `https://u.expo.dev/update/019f77a6-be4e-79c5-8e6b-4444d4256433`
+
+(Published 2026-07-18, from commit `06a5439`. Same staleness caveat as
+above: if a link 404s or hangs, a newer publish superseded it — check with
+the project owner rather than assuming it's broken.)
+
+**Important — these are Expo-Go-only, exactly like the `expo-go-testing`
+links above, and are NOT wired to the section 2 APK builds in any way.**
+Installing the section 2 APK and opening it will **not** pick up anything
+published to this branch. Neither app's `eas.json` declares an EAS Update
+`channel` on any build profile, so no installed standalone build currently
+auto-tracks *any* update branch by channel — the only way to reach either
+Expo Go branch today is the manual "Enter URL manually" flow described
+above. Wiring real channel-based auto-updates (declaring a `channel` in
+`eas.json`'s `preview` profile, then a fresh APK build to actually pick it
+up) is real, separate work. **Flagged here as a known future item — not
+built, not started.**
+
 **The one thing with no free solution today**: a real, installable iOS
 `.ipa` a tester could install without Expo Go at all (the iOS equivalent of
 section 2's Android APK). That requires an Apple Developer Program account
