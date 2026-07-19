@@ -8,7 +8,7 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, Text, ScrollView } from 'react-native';
 import { DriverProvider, useDriver } from '../context/DriverContext';
 import { setSessionExpiredHandler } from '../services/api';
 
@@ -64,6 +64,39 @@ if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
       },
     });
   } catch (_) {}
+}
+
+// FIX: expo-router wraps a route's default export with a real React Error
+// Boundary when that route file also exports a named `ErrorBoundary`
+// (receives { error, retry }) — this was never present anywhere in this
+// app. Closes a real, previously-documented gap: a render-phase crash while
+// loading a published EAS Update shows nothing (no dev-mode red-screen —
+// that overlay is a local-dev-server feature only, see the Sentry.init()
+// guard above) — just a silent blank screen, unrecoverable without
+// reinstalling/reopening the app. This makes any future crash of that class
+// visible and reportable instead of invisible.
+export function ErrorBoundary({ error, retry }) {
+  if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
+    try { Sentry.captureException(error); } catch (_) {}
+  }
+  return (
+    <ScrollView
+      contentContainerStyle={{ flexGrow: 1, backgroundColor: '#0a0a0a', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+    >
+      <Text style={{ color: '#f59e0b', fontSize: 16, fontWeight: '800', marginBottom: 12 }}>
+        Something went wrong
+      </Text>
+      <Text style={{ color: '#fff', fontSize: 12, fontFamily: 'monospace', marginBottom: 16, textAlign: 'center' }}>
+        {error?.message}
+      </Text>
+      <Text style={{ color: '#9ca3af', fontSize: 10, fontFamily: 'monospace' }}>
+        {error?.stack}
+      </Text>
+      <Text onPress={retry} style={{ color: '#f59e0b', marginTop: 20, fontWeight: '700' }}>
+        Tap to retry
+      </Text>
+    </ScrollView>
+  );
 }
 
 function RootLayoutNav() {
