@@ -53,13 +53,27 @@ skip straight to section 2 or 3 — no local setup required at all.
 
 ## 2. Android — real installable app (recommended, no Expo Go needed)
 
-This is a real, standalone build of the actual current app (from `main`) —
-not a dev-client shell, not dependent on anything running on anyone's
-computer. Install once, open it like any other app, forever.
+This is a real, standalone build — not a dev-client shell, not dependent on
+anything running on anyone's computer. Install once, open it like any other
+app, forever.
 
 1. Download the APK on your Android phone:
+   - **Flash Driver** (built 2026-07-20 from `multi-tester-readiness`,
+     commit `39a0745` — includes tonight's ErrorBoundary and tap-to-call
+     work; verified by unzipping the actual APK and confirming both
+     features' real code is compiled into the bundle, not just a
+     commit-hash label): https://expo.dev/artifacts/eas/TsAQcgZBS8G9yp3ljHJXD156LVutm-XsWMoGI651Ymg.apk
    - **Flash (user app)**: https://expo.dev/artifacts/eas/v70CtR77mk6Dt3f-tCHnwCvdFKT5mbYe1vyFZExNmfg.apk
-   - **Flash Driver**: https://expo.dev/artifacts/eas/0CGfkA8cBjkedrejluK-dPp1I7kJO34xHI551Aqwk3I.apk
+     — **still a snapshot of `main` as of 2026-07-16, NOT
+     `multi-tester-readiness`.** A rebuild was attempted 2026-07-20 and
+     failed (Sentry source-map upload had no org configured — fixed in
+     `eas.json`, committed), then the retry hit a hard wall: this EAS
+     account's free-tier Android build quota is fully used for this
+     billing period (15/15, confirmed via `eas account:usage` — resets
+     2026-08-01). A new user-app APK cannot be built until either the
+     quota resets or the EAS plan is upgraded — this is a real account
+     limit, not something fixable in code. Android testers can use the
+     Expo Go link in section 3 for the user app in the meantime.
 2. Android will warn about "installing from unknown sources" the first time
    — this is normal for an app not yet published on the Play Store, not a
    sign anything is wrong. Tap through and allow it.
@@ -67,11 +81,10 @@ computer. Install once, open it like any other app, forever.
    published, talking to the live backend already.
 
 **These links don't expire and don't need anyone's computer running** — they're
-served directly from Expo's own infrastructure. If the project owner pushes
-new fixes to `main` later, ask them to rebuild (`npx eas-cli build --profile
-preview --platform android`, from `flash-user-app/` or `flash-driver-app/`)
-and share a fresh link — the ones above are a snapshot of `main` as of
-2026-07-16, not auto-updating.
+served directly from Expo's own infrastructure. To rebuild either app later
+(`npx eas-cli build --profile preview --platform android`, from
+`flash-user-app/` or `flash-driver-app/`), check remaining quota first with
+`npx eas-cli account:usage vuyomakasana`.
 
 ## 3. Expo Go — iOS, or Android without installing an APK
 
