@@ -141,12 +141,35 @@ manually," nothing else to install or run:
 
 - **Flash (user app), Android**: `https://u.expo.dev/update/019f77a7-1d21-7485-b4a7-acffba2d9868`
 - **Flash (user app), iOS**: `https://u.expo.dev/update/019f77a7-184c-705e-beb0-62d1b61ea74d`
-- **Flash Driver, Android**: `https://u.expo.dev/update/019f77a6-cb09-702e-be7b-b1388261fef3`
-- **Flash Driver, iOS**: `https://u.expo.dev/update/019f77a6-be4e-79c5-8e6b-4444d4256433`
+- **Flash Driver, Android**: `https://u.expo.dev/update/019f7b6e-c9d5-7718-84a4-78776e39f574`
+- **Flash Driver, iOS**: `https://u.expo.dev/update/019f7b6e-c9d5-77cf-ae19-daa42eb02564`
 
-(Published 2026-07-18, from commit `06a5439`. Same staleness caveat as
-above: if a link 404s or hangs, a newer publish superseded it — check with
-the project owner rather than assuming it's broken.)
+(User-app links published 2026-07-18, from commit `06a5439`. Driver-app
+links republished 2026-07-19, from commit `2c9d268`, superseding the
+2026-07-18 driver build. Same staleness caveat as above: if a link 404s
+or hangs, a newer publish superseded it — check with the project owner
+rather than assuming it's broken.)
+
+**Driver app, status as of 2026-07-20 — read before testing:** the
+driver app was stuck on a blank/gray screen in Expo Go through
+2026-07-19. Two real, separate things were found and fixed since:
+
+1. A local dev-tooling bug (Metro's file watcher trying and failing to
+   connect to Watchman, which isn't installed on the founder's machine)
+   was crashing the *local dev tunnel* used to debug this — unrelated to
+   what's actually published to testers, but it blocked getting any real
+   diagnostic signal for a while. Fixed in `flash-driver-app/metro.config.js`.
+2. With that fixed, live debugging via the tunnel showed the app
+   actually reaching the dashboard and responding to a real "Go Online"
+   tap — it hit an expected, non-fatal Expo-Go-only limitation
+   (`NSLocation*UsageDescription` / background location isn't fully
+   supported for Expo Go on a real iOS device), not a hang.
+
+Net: real progress, not yet a from-scratch confirmed "fully working"
+sign-off — if you hit a blank/gray screen again on either link above,
+report it plainly rather than assuming it's the same already-explained
+issue, since the underlying local-tooling problem is now fixed and a
+fresh report would be new information.
 
 **Important — these are Expo-Go-only, exactly like the `expo-go-testing`
 links above, and are NOT wired to the section 2 APK builds in any way.**
