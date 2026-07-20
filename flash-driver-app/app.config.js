@@ -18,6 +18,7 @@ module.exports = () => ({
   expo: {
     name: 'Flash Driver',
     slug: 'flash-driver-app',
+    owner: 'vuyomakasana',
     version: '1.0.0',
     // Required for EAS Update — added by `eas update:configure`'s own
     // recommendation (it couldn't auto-write these into this dynamic
