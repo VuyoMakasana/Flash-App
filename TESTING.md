@@ -82,14 +82,30 @@ That's a real limitation of Expo Go itself, not a bug in this project, and
 it's why this path runs off a dedicated branch, `expo-go-testing`, kept
 intentionally on the older, Expo-Go-compatible SDK rather than `main`.
 
+**You need an Expo account invited as a Viewer first — this is not
+optional.** Confirmed live tonight: a tester signed into a *different*
+Expo account (or no account) gets a real `403 "... is not viewable in
+Expo Go: the signed-in Expo account does not have access to the account
+that owns this project"` — the link being reachable by a plain HTTP
+request (e.g. `curl`) does **not** mean Expo Go can actually open it; that
+was learned the hard way. Ask the project owner to invite your Expo
+account email as a **Viewer** under the `vuyomakasana` organization on
+expo.dev (Organization settings → Members → Invite), then sign into
+*that* account in the Expo Go app before opening any link below. **This
+requirement doesn't exist for the Android APK in section 2** — that's a
+real standalone install with no Expo account involved at all; it only
+applies to this Expo Go path.
+
 **Install Expo Go first** (free, from the App Store or Play Store). Then:
 
-1. Open the Expo Go app.
+1. Open the Expo Go app and sign in with the Expo account the project
+   owner invited (top-left profile icon → Sign In).
 2. Look for "Enter URL manually" (usually under a "..." or "+" option on the
    home screen) — this is the reliable way in, guaranteed to work regardless
    of how your phone handles the link below.
 3. Paste one of these links (these are the real manifest links Expo Go reads
-   directly — confirmed publicly reachable, no login needed, verified live):
+   directly — confirmed publicly reachable at the network level; actually
+   opening them in Expo Go additionally requires the Viewer access above):
 
    - **Flash (user app), Android**: `https://u.expo.dev/update/019f706c-a4d4-7a4d-b335-28fc517b92b5`
    - **Flash (user app), iOS**: `https://u.expo.dev/update/019f7077-4c4d-7468-8fcf-e27fb4ff21f4`
@@ -139,16 +155,37 @@ inherited from `expo-go-testing`, so it's Expo-Go-compatible the same way).
 Same distribution model as the links above — Expo Go via "Enter URL
 manually," nothing else to install or run:
 
-- **Flash (user app), Android**: `https://u.expo.dev/update/019f77a7-1d21-7485-b4a7-acffba2d9868`
-- **Flash (user app), iOS**: `https://u.expo.dev/update/019f77a7-184c-705e-beb0-62d1b61ea74d`
+- **Flash (user app), Android**: `https://u.expo.dev/update/019f819b-03e1-7fab-bdee-e67b1eef8542`
+- **Flash (user app), iOS**: `https://u.expo.dev/update/019f819f-0248-7071-aff1-3d4fa9cf7a5f`
 - **Flash Driver, Android**: `https://u.expo.dev/update/019f7b6e-c9d5-7718-84a4-78776e39f574`
 - **Flash Driver, iOS**: `https://u.expo.dev/update/019f7b6e-c9d5-77cf-ae19-daa42eb02564`
 
-(User-app links published 2026-07-18, from commit `06a5439`. Driver-app
-links republished 2026-07-19, from commit `2c9d268`, superseding the
-2026-07-18 driver build. Same staleness caveat as above: if a link 404s
-or hangs, a newer publish superseded it — check with the project owner
-rather than assuming it's broken.)
+(User-app links republished 2026-07-20, from commit `20864d1` — cash-only
+checkout for this testing period, see below. Driver-app links republished
+2026-07-19, from commit `2c9d268`. Same staleness caveat as above: if a
+link 404s or hangs, a newer publish superseded it — check with the
+project owner rather than assuming it's broken.)
+
+**Test-mode signup, both apps, read before testing:**
+- **User app**: every new signup uses their own real email/password and
+  can place a real order immediately — checkout only shows "Pay on
+  Delivery" right now (Card is hidden, not just de-prioritized, because
+  real card payments are confirmed not configured in production tonight
+  — see `docs/audits/PRODUCTION_SECRETS_CHECKLIST.md`). No real money is
+  ever involved.
+- **Driver app**: this only takes effect once the project owner sets
+  `DRIVER_TEST_MODE=true` on Render and that's actually deployed — ask
+  before assuming it's live. When it is: every new driver signup starts
+  pre-approved with placeholder documents and a real 30-day subscription
+  already active, so a tester can go online and receive orders
+  immediately, no document upload or plan purchase needed. This only
+  ever applies at the moment of signup — logging into an existing test
+  account later just shows its real, persisted state, it never re-runs.
+- **Push notifications do not work in Expo Go** (Android: not at all;
+  iOS: degraded) — this is a real Expo Go platform limitation, not a
+  Flash bug, and won't be "fixed" for Expo Go testing. In-app/socket-driven
+  updates (chat, order status, live tracking) are not push-dependent and
+  should work normally regardless of platform.
 
 **Driver app, status as of 2026-07-20 — read before testing:** the
 driver app was stuck on a blank/gray screen in Expo Go through
