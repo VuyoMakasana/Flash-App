@@ -7,18 +7,32 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import api from '../services/api';
 
-const PAYMENT_METHODS = [
+// TEMPORARY TEST-MODE — remove before real launch. Card payments are
+// confirmed broken in production right now (PAYSTACK_SECRET_KEY not
+// configured on Render — see docs/audits/PRODUCTION_SECRETS_CHECKLIST.md),
+// so a non-technical tester tapping "Card" would hit a genuine dead end,
+// not a test-mode simulation of one. Rather than leave a broken option
+// visible, Card is hidden entirely during this testing period and Cash on
+// Delivery — already a real, fully working order flow, no new code
+// needed — is the only method shown. To restore Card once real payments
+// are configured, delete this filter and the ALL_PAYMENT_METHODS alias
+// below, and change PAYMENT_METHODS back to the full array directly.
+const ALL_PAYMENT_METHODS = [
   { id: 'card',     label: 'Card / EFT / Capitec Pay', icon: 'card-outline',     description: 'Visa, Mastercard, Instant EFT, Capitec Pay', supported: true },
   // Payflex (BNPL) removed — integration not yet complete. Re-add when live.
   { id: 'cash',     label: 'Pay on Delivery',           icon: 'cash-outline',     description: 'Pay the driver face-to-face',                supported: true },
 ];
+const PAYMENT_METHODS = ALL_PAYMENT_METHODS.filter(m => m.id === 'cash');
 
 export default function PaymentScreen() {
   const navigation = useNavigation();
   const route      = useRoute();
   const { orderId, total: estimatedTotal, requestedDriverId } = route.params || {};
 
-  const [selected, setSelected] = useState('card');
+  // TEMPORARY TEST-MODE — defaults to the only method currently shown
+  // (see PAYMENT_METHODS above). Change back to 'card' when Card is
+  // restored.
+  const [selected, setSelected] = useState('cash');
   const [loading,  setLoading]  = useState(false);
   const [savedCards, setSavedCards] = useState([]);
   const [selectedCardId, setSelectedCardId] = useState(null);
