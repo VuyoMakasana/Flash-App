@@ -42,6 +42,24 @@ module.exports = () => ({
       supportsTablet: false,
       bundleIdentifier: 'co.za.flash.driverapp',
       usesAppleSignIn: true,
+      // DIAGNOSTIC — testing period only, revert once resolved. Every
+      // published EAS Update (Hermes bytecode) blank-screens in Expo Go on
+      // a real iPhone 11 — no error, no crash, confirmed reproducible on
+      // every publish tonight — while the exact same source served as
+      // plain JS through a live Metro tunnel works correctly every time.
+      // Per Expo's own docs/changelog: Hermes-bytecode-over-EAS-Update
+      // support requires "the latest version of Expo Go," and an
+      // incompatible Hermes VM version between the bytecode and the
+      // installed Expo Go binary causes exactly this failure mode (native
+      // bytecode-format mismatch, below the JS layer — nothing for our
+      // ErrorBoundary or Sentry to ever catch). Expo Go's SDK 55 build has
+      // been stuck in Apple App Store review since at least May 2026
+      // (confirmed via Expo's changelog), so the installed client is
+      // plausibly not current. Forcing jsc (JavaScriptCore, not Hermes)
+      // for iOS makes this publish plain JS instead of Hermes bytecode —
+      // sidesteps the failure class entirely if this diagnosis is right.
+      // Not yet confirmed on-device — this is the test.
+      jsEngine: 'jsc',
       config: {
         googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
       },
