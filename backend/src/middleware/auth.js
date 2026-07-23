@@ -6,30 +6,16 @@ const { getRequired } = require("../config/env");
 // Verifies the short-lived access token (15 min).
 // If expired the client must use the refresh endpoint to get a new one.
 const authenticate = async (req, res, next) => {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer "))
+    return res.status(401).json({ error: "No token provided" });
+
+  const token = header.replace("Bearer ", "");
+
+  let decoded;
   try {
-    const header = req.headers.authorization;
-    if (!header?.startsWith("Bearer "))
-      return res.status(401).json({ error: "No token provided" });
-
-    const token     = header.replace("Bearer ", "");
     const jwtSecret = getRequired("JWT_SECRET", "auth");
-
-    const decoded = jwt.verify(token, jwtSecret);
-
-    // Check token is not revoked (logout invalidation)
-    if (decoded.jti) {
-      const revoked = await pool.query(
-        "SELECT 1 FROM revoked_tokens WHERE jti = $1",
-        [decoded.jti]
-      );
-      if (revoked.rows.length)
-        return res.status(401).json({ error: "Token revoked" });
-    }
-
-    req.userId   = decoded.id;
-    req.userRole = decoded.role;
-    if (decoded.status === "approved") req.driverStatus = "approved";
-    next();
+    decoded = jwt.verify(token, jwtSecret);
   } catch (err) {
     if (err.name === "TokenExpiredError")
       return res.status(401).json({ error: "TOKEN_EXPIRED" });
@@ -37,6 +23,34 @@ const authenticate = async (req, res, next) => {
       return res.status(401).json({ error: "Invalid token" });
     return res.status(401).json({ error: "Authentication failed" });
   }
+
+  // CRITICAL FIX: the revocation check below used to share the try/catch
+  // above with jwt.verify(), so a DB failure here (e.g. pool exhaustion)
+  // fell into the same catch and returned the same 401 a genuinely bad or
+  // expired token gets. Confirmed live under load testing: pool timeouts on
+  // this exact query surfaced to the client as "Authentication failed" for
+  // otherwise perfectly valid, currently-logged-in sessions — client apps
+  // generally react to 401 by logging the user out, which is the wrong
+  // response to a transient capacity problem. next(err) routes a DB failure
+  // to the central errorHandler instead, which defaults to a real 500 —
+  // same convention requireApprovedDriver below already uses.
+  if (decoded.jti) {
+    try {
+      const revoked = await pool.query(
+        "SELECT 1 FROM revoked_tokens WHERE jti = $1",
+        [decoded.jti]
+      );
+      if (revoked.rows.length)
+        return res.status(401).json({ error: "Token revoked" });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  req.userId   = decoded.id;
+  req.userRole = decoded.role;
+  if (decoded.status === "approved") req.driverStatus = "approved";
+  next();
 };
 
 // ─── ROLE GUARD ──────────────────────────────────────────────────────────────
