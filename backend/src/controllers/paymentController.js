@@ -15,7 +15,7 @@ const Payment           = require('../models/Payment');
 const Order             = require('../models/Order');
 const paystackService   = require('../services/paystackService');
 const db                = require('../config/database');
-const { updateOrderStatus }        = require('../services/orderStateMachineService');
+const { updateOrderStatus, emitOrderUpdate, notifyOrderStatusChange } = require('../services/orderStateMachineService');
 const { autoAssignNearestDriver }  = require('../services/autoMatchService');
 const cashOtpService               = require('../services/cashOtpService');
 const { notifyDriversNewOrder, sendPushNotification } = require('../services/notificationService');
@@ -57,49 +57,84 @@ class PaymentController {
       return res.status(400).json({ error: 'orderId is required' });
     }
 
+    // CRITICAL FIX: this used to run as three-to-four independently
+    // committed DB round trips (Payment.cashOnDelivery's own transaction,
+    // then a separate updateOrderStatus('paid') transaction, then a third
+    // updateOrderStatus('scheduled_for_morning' | 'waiting_for_driver')
+    // transaction). A failure partway through — confirmed live under load
+    // testing, where DB pool exhaustion threw mid-sequence — left orders
+    // permanently stuck in 'paid' with cash_to_collect set: no driver could
+    // ever see or accept them, and no cron/recovery job revisits an order
+    // stuck at 'paid'. Wrapping the whole sequence in one transaction means
+    // any failure rolls everything back to 'payment_pending' instead, which
+    // the existing paymentReconciliationJob (every 5 min) and the customer's
+    // own retry can both still act on.
+    const client = await db.connect();
+    let result;
+    let finalOrder;
+    let scheduled = false;
+    let openAt = null;
+
     try {
-      const result = await Payment.cashOnDelivery(orderId, req.userId, io);
+      await client.query('BEGIN');
+
+      result = await Payment.cashOnDelivery(orderId, req.userId, io, client);
 
       await updateOrderStatus(orderId, 'paid', {
-        actorId:   req.userId,
-        actorRole: 'user',
-        io,
+        actorId:       req.userId,
+        actorRole:     'user',
+        externalClient: client,
       });
 
       if (isClosedNow()) {
-        const openAt = getNextOpenTime();
-        await db.query(
+        scheduled = true;
+        openAt = getNextOpenTime();
+        await client.query(
           `UPDATE orders SET scheduled_for = $1, updated_at = NOW() WHERE id = $2`,
           [openAt, orderId],
         );
-        await updateOrderStatus(orderId, 'scheduled_for_morning', {
-          actorId:   req.userId,
-          actorRole: 'user',
-          io,
+        finalOrder = await updateOrderStatus(orderId, 'scheduled_for_morning', {
+          actorId:       req.userId,
+          actorRole:     'user',
+          externalClient: client,
         });
-        if (io) {
-          io.to(`user:${req.userId}`).emit('order_scheduled', {
-            orderId,
-            openAt: openAt.toISOString(),
-            message: `Flash opens at 07:00. Your order will be assigned to a driver then.`,
-          });
-        }
-        return res.json({ ...result, scheduled: true, openAt });
+      } else {
+        finalOrder = await updateOrderStatus(orderId, 'waiting_for_driver', {
+          actorId:       req.userId,
+          actorRole:     'user',
+          externalClient: client,
+        });
       }
 
-      await updateOrderStatus(orderId, 'waiting_for_driver', {
-        actorId:   req.userId,
-        actorRole: 'user',
-        io,
-      });
-
-      await autoAssignNearestDriver(orderId, io).catch(() => null);
-      notifyDriversNewOrder(orderId, true).catch(() => null);
-      res.json(result);
+      await client.query('COMMIT');
     } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
       console.error('[Payment] cashOnDelivery error:', err.message);
-      res.status(500).json({ error: 'Failed to set cash delivery' });
+      return res.status(500).json({ error: 'Failed to set cash delivery' });
+    } finally {
+      client.release();
     }
+
+    // Side effects only fire after the transaction above has actually
+    // committed — same convention updateOrderStatus itself uses for its own
+    // externalClient callers (see orderController.cancelOrder).
+    emitOrderUpdate(io, orderId, finalOrder.user_id, finalOrder.status);
+    await notifyOrderStatusChange(finalOrder, finalOrder.status);
+
+    if (scheduled) {
+      if (io) {
+        io.to(`user:${req.userId}`).emit('order_scheduled', {
+          orderId,
+          openAt: openAt.toISOString(),
+          message: `Flash opens at 07:00. Your order will be assigned to a driver then.`,
+        });
+      }
+      return res.json({ ...result, scheduled: true, openAt });
+    }
+
+    autoAssignNearestDriver(orderId, io).catch(() => null);
+    notifyDriversNewOrder(orderId, true).catch(() => null);
+    return res.json(result);
   }
 
   static async getPaymentStatus(req, res) {
