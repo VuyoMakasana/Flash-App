@@ -14,9 +14,10 @@ export default function HomeScreen() {
   const { products, cart, user } = useFlash();
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
-  // ADDED: Store filter for multi-shop support — shows products from all shops by default
-  // WHY: Backend supports store_id per product. Without this UI filter, two shops'
-  // products appear in one undifferentiated list with no way to browse by shop.
+  // Store filter for future multi-shop support — the row below only renders once
+  // `stores` (below) has more than one real entry. flash_inventory has no store_id
+  // column today, so every product's storeId is null and this stays hidden until
+  // the backend actually supports multiple stores.
   const [activeStore, setActiveStore] = useState('all');
 
   const cartCount = cart.reduce((sum, i) => sum + i.quantity, 0);
