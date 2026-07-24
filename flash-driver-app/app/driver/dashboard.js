@@ -58,17 +58,28 @@ const NEXT_LABEL = {
 // ── Navigation helpers (MEDIUM-1) ──────────────────────────────────────────
 /**
  * Open Google Maps (Android) or Apple Maps (iOS) with turn-by-turn directions
- * to the given address string. Falls back to a web Google Maps URL if the
+ * to the given coordinates. Falls back to a web Google Maps URL if the
  * native apps are unavailable.
+ *
+ * NAVIGATION FIX: this used to take a free-text address string
+ * (order.pickup_address / order.dropoff_address). order.pickup_address is
+ * never actually populated by the backend (Order.create() only ever sets
+ * pickup_lat/pickup_lng from the fixed FLASH_STORE_LOCATION, never a pickup
+ * address string) — confirmed live: every real order's pickup_address is
+ * null. Since the whole nav button was gated on `navAddress && (...)`, this
+ * meant "Navigate to Store" never actually appeared for a real order. Using
+ * lat/lng instead is also strictly more precise for the customer leg —
+ * dropoff_lat/dropoff_lng is the exact pin the customer dropped, whereas
+ * dropoff_address is free text that may not geocode to the same point.
  */
-function openNavigation(address) {
-  if (!address) return;
-  const encoded = encodeURIComponent(address);
+function openNavigation(lat, lng) {
+  if (lat == null || lng == null) return;
+  const destination = `${lat},${lng}`;
 
   // Google Maps deep link works on Android and iOS (if Google Maps installed)
-  const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=driving`;
+  const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
   // Apple Maps URL scheme (iOS only)
-  const appleUrl  = `maps:0,0?daddr=${encoded}`;
+  const appleUrl  = `maps:0,0?daddr=${destination}`;
 
   if (Platform.OS === 'ios') {
     // Try Apple Maps first on iOS
@@ -466,11 +477,16 @@ export default function DriverDashboard() {
     .filter(o => new Date(o.created_at).toDateString() === new Date().toDateString())
     .reduce((sum, o) => sum + toNumber(o.driver_payout, 0), 0);
 
-  // Determine which address to show for navigation based on current status
-  const navAddress = activeOrder
+  // Determine which coordinates to navigate to based on current status —
+  // see openNavigation's comment for why this is lat/lng, not the
+  // (unreliable) address strings.
+  const navDestination = activeOrder
     ? ['driver_assigned', 'driver_arrived_store'].includes(activeOrder.status)
-      ? activeOrder.pickup_address
-      : activeOrder.dropoff_address
+      ? { lat: activeOrder.pickup_lat,  lng: activeOrder.pickup_lng }
+      : { lat: activeOrder.dropoff_lat, lng: activeOrder.dropoff_lng }
+    : null;
+  const navAddress = navDestination && navDestination.lat != null && navDestination.lng != null
+    ? navDestination
     : null;
 
   const navLabel = activeOrder
@@ -655,7 +671,7 @@ export default function DriverDashboard() {
               {navAddress && (
                 <TouchableOpacity
                   style={[styles.navBtn, styles.navBtnFlex]}
-                  onPress={() => openNavigation(navAddress)}
+                  onPress={() => openNavigation(navAddress.lat, navAddress.lng)}
                   accessibilityLabel={navLabel}
                 >
                   <Ionicons name="navigate-outline" size={18} color="#0a0a0a" />
