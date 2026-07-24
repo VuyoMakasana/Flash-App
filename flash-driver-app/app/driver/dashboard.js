@@ -19,7 +19,15 @@ import driverApi, { BASE_URL } from '../../services/api';
 import { io } from 'socket.io-client';
 import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
-import * as ImagePicker from 'expo-image-picker';
+// CRITICAL FIX: expo-image-picker's useCameraPermissions/useMediaLibraryPermissions
+// hooks are built via expo-modules-core's createPermissionHook. A version
+// mismatch between expo-image-picker and the SDK's expo-modules-core (found via
+// real device crash: "_expo.createPermissionHook is not a function") throws the
+// moment this module is evaluated. Guarding the require the same way login.js
+// guards Google/Apple Sign-In means a resolution failure degrades the camera
+// feature instead of crashing the whole dashboard on mount.
+let ImagePicker = null;
+try { ImagePicker = require('expo-image-picker'); } catch (_) {}
 
 const STATUS_COLORS = {
   waiting_for_driver:  '#f59e0b',
@@ -338,6 +346,11 @@ export default function DriverDashboard() {
   // in that same request, so there's no separate "confirm" step.
   const handleCapturePhoto = async (type) => {
     if (!activeOrder || photoUploading) return;
+
+    if (!ImagePicker) {
+      Alert.alert('Camera unavailable', 'The camera module failed to load on this device. Please restart the app and try again.');
+      return;
+    }
 
     const { status: permStatus } = await ImagePicker.requestCameraPermissionsAsync();
     if (permStatus !== 'granted') {
