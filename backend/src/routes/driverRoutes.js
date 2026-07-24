@@ -150,7 +150,20 @@ router.get(
   requireRole("driver"),
   DriverController.getActiveOrder,
 );
-router.get("/nearby", DriverController.getNearbyDrivers);
+// SECURITY FIX: this had no auth middleware at all — unlike every other
+// route in this file — so anyone, unauthenticated, could pull every online
+// driver's real name, vehicle plate, and profile photo, plus a live
+// distance_km computed against any attacker-supplied lat/lng (real
+// haversine, Driver.getNearby). Querying from 3+ points lets an attacker
+// triangulate a specific driver's live location with zero login required.
+// Only called from CheckoutScreen.js, where the user is already
+// authenticated, so this closes the hole with no client-side impact.
+router.get(
+  "/nearby",
+  authenticate,
+  requireRole("user"),
+  DriverController.getNearbyDrivers,
+);
 
 // ── Bank Account / Payout setup ────────────────────────────────────────────
 // Drivers must register a bank account before they can request payouts.
