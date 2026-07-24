@@ -105,7 +105,14 @@ export const FlashProvider = ({ children }) => {
             image:       p.image_url   || 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=800',
             badge:       p.brand       || null,
             description: p.description || '',
-            storeId:     p.store_id    || 'flash_closet',
+            // No default here: flash_inventory has no store_id column today (it's a
+            // single-store table), so the backend never actually returns one. A
+            // 'flash_closet' fallback previously masqueraded as a real per-product
+            // store id, which defeated HomeScreen's own `stores.length > 1` check
+            // meant to hide the shop-filter row until real multi-store data exists
+            // — it always evaluated to a fake 2-store list ['all', 'flash_closet']
+            // and rendered a redundant filter pill showing the raw slug.
+            storeId:     p.store_id    || null,
           }));
           setProducts(normalised);
         }
