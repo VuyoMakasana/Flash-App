@@ -213,6 +213,7 @@ const orders = {
   create:      (body)         => request('/orders', { method: 'POST', body: JSON.stringify(body) }),
   getAll:      ()              => request('/orders/my-orders'),
   getOrder:    (id)            => request(`/orders/${id}`),
+  getPhotos:   (id)             => request(`/orders/${id}/photos`),
   cancel:      (id)             => request(`/orders/${id}/cancel`, { method: 'POST' }),
   return:      (id, body)       => request(`/orders/${id}/return`, { method: 'POST', body: JSON.stringify(body) }),
   selectDriver:(id, driverId)   => request(`/orders/${id}/select-driver`, { method: 'POST', body: JSON.stringify({ driverId }) }),

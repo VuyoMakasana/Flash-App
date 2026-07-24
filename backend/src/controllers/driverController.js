@@ -7,11 +7,14 @@ const { isWithinNelsonMandelaBay, OUTSIDE_SERVICE_AREA_MESSAGE } = require('../u
 const { detectRealMimeType } = require('../utils/fileSignature');
 const DriverWallet = require('../models/DriverWallet');
 const db = require('../config/database');
+const s3Service = require('../services/s3Service');
 const {
   assignDriver,
   normalizeState,
   requeueOrderForDriverSearch,
   emitOrderUpdate,
+  updateOrderStatus,
+  notifyOrderStatusChange,
 } = require('../services/orderStateMachineService');
 const { autoAssignNearestDriver } = require('../services/autoMatchService');
 const PayoutService = require('../services/payoutService');
@@ -354,6 +357,91 @@ class DriverController {
     } catch (err) {
       console.error('[Driver] cancelAssignedOrder error:', err.message);
       return res.status(400).json({ error: err.message || 'Failed to cancel assignment' });
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Package protection: a driver-taken photo is required to advance past
+  // driver_arrived_store (proof of pickup) and past in_transit (proof of
+  // delivery). One request does both the upload and the status transition —
+  // a one-tap flow, not a separate "upload then advance" pair of steps.
+  // Photos are stored the same way driver documents already are (Cloudinary,
+  // private/authenticated, public_id + resource_type only — never a
+  // permanent URL); see GET /api/orders/:orderId/photos for how they're
+  // actually viewed later, via a short-lived signed URL generated on demand.
+  // ─────────────────────────────────────────────────────────────────────────
+  static async submitPickupPhoto(req, res) {
+    return DriverController._submitProofPhoto(req, res, {
+      requiredState: 'driver_arrived_store',
+      targetState: 'picked_up',
+      columnPrefix: 'pickup_photo',
+    });
+  }
+
+  static async submitDropoffPhoto(req, res) {
+    return DriverController._submitProofPhoto(req, res, {
+      requiredState: 'in_transit',
+      targetState: 'delivered',
+      columnPrefix: 'dropoff_photo',
+    });
+  }
+
+  static async _submitProofPhoto(req, res, { requiredState, targetState, columnPrefix }) {
+    const { orderId } = req.params;
+    const io = req.app.get('io');
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'A photo is required' });
+    }
+    const realType = detectRealMimeType(req.file.buffer);
+    if (!['image/jpeg', 'image/png'].includes(realType)) {
+      return res.status(400).json({ error: 'File content does not match an allowed image type (JPG or PNG).' });
+    }
+
+    try {
+      const result = await db.query(`SELECT id, driver_id, status FROM orders WHERE id = $1`, [orderId]);
+      if (!result.rows.length) return res.status(404).json({ error: 'Order not found' });
+
+      const order = result.rows[0];
+      if (String(order.driver_id) !== String(req.userId)) {
+        return res.status(403).json({ error: 'Not your order' });
+      }
+      if (normalizeState(order.status) !== requiredState) {
+        return res.status(409).json({ error: `A photo can only be submitted while the order is at ${requiredState}` });
+      }
+
+      const uploadResult = await s3Service.uploadFile(req.file, 'flash-order-proof');
+
+      const client = await db.connect();
+      let updatedOrder;
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE orders
+           SET ${columnPrefix}_public_id = $1, ${columnPrefix}_resource_type = $2, ${columnPrefix}_at = NOW(), updated_at = NOW()
+           WHERE id = $3`,
+          [uploadResult.publicId, uploadResult.resourceType, orderId],
+        );
+        updatedOrder = await updateOrderStatus(orderId, targetState, {
+          actorId:        req.userId,
+          actorRole:      'driver',
+          externalClient: client,
+        });
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      emitOrderUpdate(io, orderId, updatedOrder.user_id, updatedOrder.status);
+      await notifyOrderStatusChange(updatedOrder, targetState);
+
+      return res.json({ success: true, status: normalizeState(updatedOrder.status) });
+    } catch (err) {
+      console.error('[Driver] submitProofPhoto error:', err.message);
+      return res.status(400).json({ error: err.message || 'Failed to submit photo' });
     }
   }
 

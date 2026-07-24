@@ -20,6 +20,7 @@ const {
   notifyOrderStatusChange,
 } = require('../services/orderStateMachineService');
 const RefundService = require('../services/refundService');
+const s3Service = require('../services/s3Service');
 const { isWithinNelsonMandelaBay, OUTSIDE_SERVICE_AREA_MESSAGE, FLASH_STORE_LOCATION } = require('../utils/geoBoundary');
 
 // Errors thrown by validateExternalItemPrice() and inventory stock checks
@@ -126,6 +127,51 @@ class OrderController {
     }
   }
 
+  // Package protection: pickup/drop-off photos are never returned as
+  // permanent URLs — only public_id/resource_type are ever stored (see
+  // driverController.submitPickupPhoto/submitDropoffPhoto), and a
+  // short-lived signed URL is generated here on demand, same pattern
+  // Admin.getDriverById already uses for driver documents.
+  static async getOrderPhotos(req, res) {
+    try {
+      const result = await db.query(
+        `SELECT user_id, driver_id,
+                pickup_photo_public_id, pickup_photo_resource_type, pickup_photo_at,
+                dropoff_photo_public_id, dropoff_photo_resource_type, dropoff_photo_at
+         FROM orders WHERE id = $1`,
+        [req.params.orderId],
+      );
+      if (!result.rows.length) return res.status(404).json({ error: 'Order not found' });
+
+      const order = result.rows[0];
+      if (req.userRole === 'user' && order.user_id !== req.userId) {
+        return res.status(403).json({ error: 'Not your order' });
+      }
+      if (req.userRole === 'driver' && order.driver_id !== req.userId) {
+        return res.status(403).json({ error: 'Not your order' });
+      }
+
+      const [pickupPhotoUrl, dropoffPhotoUrl] = await Promise.all([
+        order.pickup_photo_public_id
+          ? s3Service.getSignedUrl(order.pickup_photo_public_id, order.pickup_photo_resource_type || 'image')
+          : null,
+        order.dropoff_photo_public_id
+          ? s3Service.getSignedUrl(order.dropoff_photo_public_id, order.dropoff_photo_resource_type || 'image')
+          : null,
+      ]);
+
+      res.json({
+        pickupPhotoUrl,
+        pickupPhotoAt:  order.pickup_photo_at,
+        dropoffPhotoUrl,
+        dropoffPhotoAt: order.dropoff_photo_at,
+      });
+    } catch (err) {
+      console.error('[Order] getOrderPhotos error:', err.message);
+      res.status(500).json({ error: 'Failed to fetch order photos' });
+    }
+  }
+
   static async getUserOrders(req, res) {
     const page  = Math.max(1, parseInt(req.query.page  || '1'));
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '20')));
@@ -150,6 +196,22 @@ class OrderController {
 
       if (order.driver_id !== req.userId) {
         return res.status(403).json({ error: 'Not your order' });
+      }
+
+      // PACKAGE PROTECTION FIX: a driver could reach 'completed' directly
+      // through this generic endpoint, bypassing the OTP-based delivery
+      // confirmation entirely for card orders — confirmed live, this exact
+      // bypass worked before this fix. Cash orders already had their own
+      // block for this (updateOrderStatus's 'completed' branch throws
+      // unless payment_status is already 'paid'), but nothing equivalent
+      // existed for card. Reverse-delivery return orders are excluded —
+      // they're dropped off at Flash's own store, not a customer, so there
+      // is no OTP participant on the receiving end and this is still their
+      // only legitimate way to complete.
+      if (normalizeState(status) === 'completed' && !order.is_return_order) {
+        return res.status(409).json({
+          error: 'Use the delivery confirmation OTP to complete this order.',
+        });
       }
 
       const updated = await updateOrderStatus(req.params.orderId, status, {

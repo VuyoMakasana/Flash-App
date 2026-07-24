@@ -23,6 +23,20 @@ const upload = multer({
   },
 });
 
+// Package-protection pickup/drop-off photos — images only, no PDF.
+const uploadPhoto = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ["image/jpeg", "image/png", "image/jpg"];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only JPG and PNG photos are allowed"));
+    }
+  },
+});
+
 router.get(
   "/me",
   authenticate,
@@ -89,6 +103,28 @@ router.post(
   requireApprovedDriver,
   validateId,
   DriverController.cancelAssignedOrder,
+);
+// Package protection: a photo is required to advance past these two
+// points — the upload and the status transition happen together in one
+// call, matching a real one-tap driver flow rather than a separate
+// "upload, then advance" pair of steps.
+router.post(
+  "/orders/:orderId/pickup-photo",
+  authenticate,
+  requireRole("driver"),
+  requireApprovedDriver,
+  validateId,
+  uploadPhoto.single("photo"),
+  DriverController.submitPickupPhoto,
+);
+router.post(
+  "/orders/:orderId/dropoff-photo",
+  authenticate,
+  requireRole("driver"),
+  requireApprovedDriver,
+  validateId,
+  uploadPhoto.single("photo"),
+  DriverController.submitDropoffPhoto,
 );
 router.get(
   "/earnings",

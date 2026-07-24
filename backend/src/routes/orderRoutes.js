@@ -17,6 +17,7 @@ router.get(
   OrderController.getUserOrders,
 );
 router.get("/:orderId", authenticate, validateId, OrderController.getOrder);
+router.get("/:orderId/photos", authenticate, validateId, OrderController.getOrderPhotos);
 router.put(
   "/:orderId/status",
   authenticate,
