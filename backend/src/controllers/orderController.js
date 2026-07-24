@@ -39,6 +39,40 @@ function isClientError(message) {
   return CLIENT_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix));
 }
 
+// Pre-pickup, post-assignment cancellation split — confirmed with the
+// founder (not guessed): 10% of item value to the store, 5% to the assigned
+// driver as compensation for the trip already started, the remainder (85%)
+// plus the FULL delivery fee back to the customer. The 85% is computed as a
+// remainder rather than an independent 0.85 multiplication so the three
+// shares always add up to exactly itemValue, with no rounding gap.
+//
+// Cash orders haven't collected any payment yet (that happens at delivery),
+// so there is nothing to withhold from the store or refund to the customer —
+// only the driver's 5% is real there, paid directly by Flash as compensation
+// for the wasted trip. Shared by cancelOrder and its own read-only preview
+// endpoint so the two can never drift apart on the math.
+function computeCancellationSplit(order) {
+  const itemValue    = parseFloat(order.subtotal) || 0;
+  const deliveryFee  = parseFloat(order.delivery_fee) || 0;
+  const isCash       = order.payment_method === 'cash';
+
+  const storeAmount        = isCash ? 0 : Math.round(itemValue * 0.10 * 100) / 100;
+  const driverAmount       = Math.round(itemValue * 0.05 * 100) / 100;
+  const customerItemRefund = isCash ? 0 : Math.round((itemValue - storeAmount - driverAmount) * 100) / 100;
+  const deliveryFeeRefund  = isCash ? 0 : deliveryFee;
+
+  return {
+    itemValue,
+    deliveryFee,
+    isCash,
+    storeAmount,
+    driverAmount,
+    customerItemRefund,
+    deliveryFeeRefund,
+    totalCustomerRefund: customerItemRefund + deliveryFeeRefund,
+  };
+}
+
 class OrderController {
   static async createOrder(req, res) {
     const {
@@ -172,6 +206,35 @@ class OrderController {
     }
   }
 
+  // Read-only — computes the exact split cancelOrder would apply, without
+  // changing anything, so the customer sees real numbers before confirming.
+  static async getCancellationPreview(req, res) {
+    try {
+      const result = await db.query(
+        `SELECT * FROM orders WHERE id = $1 AND user_id = $2`,
+        [req.params.orderId, req.userId],
+      );
+      if (!result.rows.length) return res.status(404).json({ error: 'Order not found' });
+
+      const order = result.rows[0];
+      const state = normalizeState(order.status);
+
+      if (['picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'].includes(state)) {
+        return res.status(409).json({ error: 'Order cannot be cancelled at this stage' });
+      }
+
+      if (!order.driver_id) {
+        return res.json({ hasDriverAssigned: false, fullRefund: true });
+      }
+
+      const split = computeCancellationSplit(order);
+      return res.json({ hasDriverAssigned: true, fullRefund: false, ...split });
+    } catch (err) {
+      console.error('[Order] getCancellationPreview error:', err.message);
+      res.status(500).json({ error: 'Failed to compute cancellation preview' });
+    }
+  }
+
   static async getUserOrders(req, res) {
     const page  = Math.max(1, parseInt(req.query.page  || '1'));
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '20')));
@@ -245,41 +308,28 @@ class OrderController {
         return res.status(409).json({ error: 'Order cannot be cancelled at this stage' });
       }
 
+      // Pre-pickup cancellation split — confirmed formula (see
+      // computeCancellationSplit above): 10% of item value to the store,
+      // 5% to the assigned driver, the remainder + full delivery fee back
+      // to the customer. Replaces the old 25%-of-delivery-fee penalty,
+      // which never actually issued a real refund for card orders — it
+      // only recorded a penalty amount nothing ever deducted from.
       let refundMode = 'none';
+      let split = null;
       if (['payment_pending', 'paid', 'waiting_for_driver'].includes(state)) {
         refundMode = 'full_refund';
       } else if (state === 'driver_assigned') {
-        refundMode = 'store_refund_keep_delivery';
-        const deliveryFee = parseFloat(order.delivery_fee || 0);
-        const penalty     = Math.round(deliveryFee * 0.25 * 100) / 100;
-        if (penalty > 0 && order.payment_method === 'card' && order.payment_status === 'paid') {
-          await db.query(
-            `INSERT INTO payments (order_id, user_id, amount, method, provider, status, type, metadata)
-             VALUES ($1, $2, $3, $4, $5, 'paid', 'penalty', $6::jsonb)`,
-            [
-              orderId,
-              req.userId,
-              penalty,
-              order.payment_method,
-              'paystack',
-              JSON.stringify({ reason: 'late_cancellation_penalty', penalty_percent: 25 }),
-            ],
-          );
-          await db.query(
-            `UPDATE orders SET cancellation_penalty = $1, updated_at = NOW() WHERE id = $2`,
-            [penalty, orderId],
-          );
-        }
+        refundMode = 'pre_pickup_split';
+        split = computeCancellationSplit(order);
       } else if (state === 'driver_arrived_store') {
         refundMode = 'store_refund_no_delivery_refund';
       }
 
-      // Wallet reversal (if any) and the order-status transition to
-      // 'cancelled' now share a single transaction. Previously these were
-      // two separate transactions (DriverWallet.transaction(...), then a
-      // second independent BEGIN/COMMIT inside updateOrderStatus) — a crash
-      // between them could reverse the driver's pending payout while the
-      // order stayed in its prior in-flight status, or vice versa.
+      // Wallet reversal, the driver's split compensation (if any), the
+      // order_cancellations record, and the order-status transition to
+      // 'cancelled' all share a single transaction — a crash partway
+      // through must never leave the driver compensated without a record
+      // of why, or the order cancelled without the compensation it implies.
       const client = await db.connect();
       let cancelledOrder;
       try {
@@ -292,11 +342,44 @@ class OrderController {
           }
         }
 
+        if (split && order.driver_id && split.driverAmount > 0) {
+          await DriverWallet.creditAvailable(
+            client, order.driver_id, split.driverAmount, order.id, 'pre_pickup_cancellation_compensation',
+          );
+        }
+
         cancelledOrder = await updateOrderStatus(orderId, 'cancelled', {
           actorId: req.userId,
           actorRole: 'user',
           externalClient: client,
         });
+
+        const cancellationRow = await client.query(
+          `INSERT INTO order_cancellations (
+             order_id, cancelled_by_id, cancelled_by_role, reason, refund_mode,
+             item_value_at_cancellation, store_amount, driver_amount, customer_item_refund, delivery_fee_refunded
+           ) VALUES ($1, $2, 'user', $3, $4, $5, $6, $7, $8, $9)
+           RETURNING id`,
+          [
+            orderId,
+            req.userId,
+            req.body?.reason || null,
+            refundMode,
+            split?.itemValue          || 0,
+            split?.storeAmount        || 0,
+            split?.driverAmount       || 0,
+            split?.customerItemRefund || 0,
+            split?.deliveryFeeRefund  || 0,
+          ],
+        );
+
+        if (split && split.storeAmount > 0) {
+          await client.query(
+            `INSERT INTO order_cancellation_store_shares (order_cancellation_id, store_id, amount)
+             VALUES ($1, $2, $3)`,
+            [cancellationRow.rows[0].id, order.store_id || null, split.storeAmount],
+          );
+        }
 
         await client.query('COMMIT');
       } catch (err) {
@@ -306,41 +389,54 @@ class OrderController {
         client.release();
       }
 
-      // Side effects (socket emit, push notification) only fire after the
-      // transaction above has actually committed.
+      // Side effects (socket emit, push notification, and the actual
+      // payment-provider refund call) only fire after the transaction
+      // above has actually committed.
       emitOrderUpdate(req.app.get('io'), orderId, cancelledOrder.user_id, cancelledOrder.status);
       await notifyOrderStatusChange(cancelledOrder, 'cancelled');
 
-      await db.query(
-        `INSERT INTO order_cancellations (order_id, cancelled_by_id, cancelled_by_role, reason, refund_mode)
-         VALUES ($1, $2, 'user', $3, $4)`,
-        [orderId, req.userId, req.body?.reason || null, refundMode],
-      );
-
+      // CRITICAL FIX: the cancellation itself (status, wallet credit, split
+      // record) has already committed by this point — a failure submitting
+      // the refund to Paystack (e.g. locally with no PAYSTACK_SECRET_KEY
+      // configured, confirmed live) must not make the response look like
+      // the whole cancellation failed. It didn't: the order is genuinely
+      // cancelled and the driver genuinely compensated regardless of
+      // whether the refund submission itself succeeds. This wraps only the
+      // refund attempt so its failure surfaces as a degraded but still-
+      // successful response, not a 400 that contradicts what the database
+      // already committed. Pre-existing gap, not unique to the new split
+      // path — 'full_refund' had the exact same unguarded call before this.
       let refund = null;
-      if (
-        refundMode === 'full_refund' &&
-        order.payment_method === 'card' &&
-        order.payment_status === 'paid'
-      ) {
-        refund = await RefundService.refundOrderPayment(
-          orderId,
-          req.userId,
-          req.body?.reason || 'customer_cancellation',
-        );
+      let refundError = null;
+      const isCardPaid = order.payment_method === 'card' && order.payment_status === 'paid';
+      try {
+        if (refundMode === 'full_refund' && isCardPaid) {
+          refund = await RefundService.refundOrderPayment(
+            orderId,
+            req.userId,
+            req.body?.reason || 'customer_cancellation',
+          );
+        } else if (refundMode === 'pre_pickup_split' && isCardPaid && split.totalCustomerRefund > 0) {
+          refund = await RefundService.refundOrderPayment(
+            orderId,
+            req.userId,
+            req.body?.reason || 'customer_cancellation',
+            split.totalCustomerRefund,
+          );
+        }
+      } catch (err) {
+        console.error('[Order] cancelOrder refund submission failed (order already cancelled):', err.message);
+        refundError = err.message;
       }
 
-      const finalOrder = await db.query(
-        `SELECT cancellation_penalty FROM orders WHERE id = $1`,
-        [orderId],
-      );
       return res.json({
         success: true,
         status: 'cancelled',
         refundMode,
-        refundStatus:        refund?.status            || null,
-        refundReference:     refund?.refund_reference  || null,
-        cancellationPenalty: parseFloat(finalOrder.rows[0]?.cancellation_penalty || 0),
+        refundStatus:    refund?.status           || null,
+        refundReference: refund?.refund_reference || null,
+        refundError,
+        split,
       });
     } catch (err) {
       return res.status(400).json({ error: err.message || 'Failed to cancel order' });

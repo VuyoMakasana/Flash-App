@@ -67,6 +67,7 @@ import PaymentScreen            from './screens/PaymentScreen';
 import OrdersScreen             from './screens/OrdersScreen';
 import OrderStatusScreen        from './screens/OrderStatusScreen';
 import ReturnRequestScreen      from './screens/ReturnRequestScreen';
+import CancelOrderScreen        from './screens/CancelOrderScreen';
 import TrackingScreen           from './screens/TrackingScreen';
 import SplashScreen             from './screens/SplashScreen';
 import LoginScreen              from './screens/LoginScreen';
@@ -107,6 +108,7 @@ function ShopStack() {
       <Stack.Screen name="Payment"     component={PaymentScreen}     options={{ title: 'Payment' }} />
       <Stack.Screen name="OrderStatus" component={OrderStatusScreen} options={{ title: 'Order Status' }} />
       <Stack.Screen name="ReturnRequest" component={ReturnRequestScreen} options={{ title: 'Request Return' }} />
+      <Stack.Screen name="CancelOrder" component={CancelOrderScreen} options={{ title: 'Cancel Order' }} />
       <Stack.Screen name="Tracking"    component={TrackingScreen}    options={{ title: 'Track Order' }} />
       <Stack.Screen name="Chat"        component={ChatScreen}        options={{ title: 'Message Driver' }} />
       {/* PaymentScreen's "Manage" saved-cards link navigates here — SavedCards
@@ -130,6 +132,7 @@ function OrdersStack() {
       <Stack.Screen name="Orders"      component={OrdersScreen}      options={{ title: 'Orders & Returns' }} />
       <Stack.Screen name="OrderStatus" component={OrderStatusScreen} options={{ title: 'Order Status' }} />
       <Stack.Screen name="ReturnRequest" component={ReturnRequestScreen} options={{ title: 'Request Return' }} />
+      <Stack.Screen name="CancelOrder" component={CancelOrderScreen} options={{ title: 'Cancel Order' }} />
       <Stack.Screen name="Tracking"    component={TrackingScreen}    options={{ title: 'Track Order' }} />
       <Stack.Screen name="Chat"        component={ChatScreen}        options={{ title: 'Message Driver' }} />
     </Stack.Navigator>
@@ -149,6 +152,7 @@ function ProfileStack() {
           Profile > Order History silently did nothing. */}
       <Stack.Screen name="OrderStatus"    component={OrderStatusScreen}    options={{ title: 'Order Status' }} />
       <Stack.Screen name="ReturnRequest"  component={ReturnRequestScreen}  options={{ title: 'Request Return' }} />
+      <Stack.Screen name="CancelOrder"    component={CancelOrderScreen}    options={{ title: 'Cancel Order' }} />
       <Stack.Screen name="Tracking"       component={TrackingScreen}       options={{ title: 'Track Order' }} />
       <Stack.Screen name="Chat"           component={ChatScreen}           options={{ title: 'Message Driver' }} />
       <Stack.Screen name="SavedCards"     component={SavedCardsScreen}     options={{ title: 'Saved Cards' }} />

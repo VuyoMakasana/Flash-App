@@ -80,11 +80,21 @@ jest.mock("../../src/models/Return", () => ({
 jest.mock("../../src/models/DriverWallet", () => ({
   transaction: jest.fn(async (fn) => fn({ query: jest.fn() })),
   reversePending: jest.fn(),
+  creditAvailable: jest.fn(),
   getWallet: jest.fn(),
   createPayoutRequest: jest.fn(),
 }));
 
+// cancelOrder's pre-pickup split path calls this for real for a paid card
+// order — mocked at the service boundary so the test never reaches
+// paystackService.refundTransaction (a real external call).
+jest.mock("../../src/services/refundService", () => ({
+  refundOrderPayment: jest.fn(),
+}));
+
 const db = require("../../src/config/database");
+const DriverWallet = require("../../src/models/DriverWallet");
+const RefundService = require("../../src/services/refundService");
 const Order = require("../../src/models/Order");
 const Return = require("../../src/models/Return");
 const cashOtpService = require("../../src/services/cashOtpService");
@@ -191,35 +201,45 @@ describe("Production state machine API integration", () => {
 
   const ORDER_2_ID = "22222222-2222-2222-2222-222222222222";
 
-  test("customer cancellation after assignment keeps delivery fee mode", async () => {
-    db.query
-      .mockResolvedValueOnce({
-        rows: [
-          {
-            id: ORDER_2_ID,
-            user_id: "user-1",
-            driver_id: "driver-2",
-            status: "driver_assigned",
-            delivery_payment_status: "assigned",
-            driver_paid: false,
-            payment_method: "card",
-            payment_status: "paid",
-            driver_payout: 90,
-            delivery_fee: 90,
-          },
-        ],
-      })
-      // Late-cancellation penalty insert + cancellation_penalty update — added
-      // to cancelOrder since this test was originally written (25% of the
-      // R90 delivery fee = R22.50 for a driver_assigned/card/paid order).
-      .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [] })
-      // order_cancellations insert
-      .mockResolvedValueOnce({ rows: [] })
-      // Final SELECT cancellation_penalty, read back for the response body
-      .mockResolvedValueOnce({ rows: [{ cancellation_penalty: "22.50" }] });
+  test("customer cancellation after assignment applies the confirmed 10/5/85 split", async () => {
+    // Item value (subtotal) 500, delivery fee 90 →
+    //   store 10% = 50, driver 5% = 25, customer = 425 (items) + 90 (delivery, in full) = 515.
+    db.query.mockResolvedValueOnce({
+      rows: [
+        {
+          id: ORDER_2_ID,
+          user_id: "user-1",
+          driver_id: "driver-2",
+          status: "driver_assigned",
+          delivery_payment_status: "assigned",
+          driver_paid: false,
+          payment_method: "card",
+          payment_status: "paid",
+          driver_payout: 90,
+          delivery_fee: 90,
+          subtotal: 500,
+        },
+      ],
+    });
+
+    // The pre-pickup split writes the order_cancellations row (RETURNING id)
+    // and the order_cancellation_store_shares row inside the same
+    // transaction as the wallet credit and status update — both of those
+    // are mocked at the service/model boundary (updateOrderStatus,
+    // DriverWallet.reversePending/creditAvailable), so only the two real
+    // client.query calls need mocking here.
+    const mockClient = {
+      query: jest.fn()
+        .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: "cancellation-1" }] }) // INSERT order_cancellations RETURNING id
+        .mockResolvedValueOnce({}) // INSERT order_cancellation_store_shares
+        .mockResolvedValueOnce({}), // COMMIT
+      release: jest.fn(),
+    };
+    db.connect.mockResolvedValueOnce(mockClient);
 
     updateOrderStatus.mockResolvedValue({ status: "cancelled", user_id: "user-1" });
+    RefundService.refundOrderPayment.mockResolvedValue({ status: "processing", refund_reference: "rf_1" });
 
     const res = await request(app)
       .post(`/api/orders/${ORDER_2_ID}/cancel`)
@@ -229,8 +249,26 @@ describe("Production state machine API integration", () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.refundMode).toBe("store_refund_keep_delivery");
-    expect(res.body.cancellationPenalty).toBe(22.5);
+    expect(res.body.refundMode).toBe("pre_pickup_split");
+    expect(res.body.split).toEqual(
+      expect.objectContaining({
+        itemValue: 500,
+        deliveryFee: 90,
+        isCash: false,
+        storeAmount: 50,
+        driverAmount: 25,
+        customerItemRefund: 425,
+        deliveryFeeRefund: 90,
+        totalCustomerRefund: 515,
+      }),
+    );
+    expect(DriverWallet.creditAvailable).toHaveBeenCalledWith(
+      mockClient, "driver-2", 25, ORDER_2_ID, "pre_pickup_cancellation_compensation",
+    );
+    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith(
+      ORDER_2_ID, "user-1", "Need to cancel", 515,
+    );
+    expect(res.body.refundStatus).toBe("processing");
   });
 
   const RETURN_1_ID = "33333333-3333-3333-3333-333333333333";

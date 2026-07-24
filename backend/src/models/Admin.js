@@ -61,6 +61,32 @@ class Admin extends BaseModel {
     return result.rows;
   }
 
+  // Pre-pickup cancellation split breakdown — one row per cancellation,
+  // with the store's share pulled from order_cancellation_store_shares
+  // (today always exactly one row per cancellation; the extension point for
+  // a future multi-store split into several rows per cancellation).
+  static async getCancellations() {
+    const result = await this.query(
+      `SELECT oc.id, oc.order_id, oc.reason, oc.refund_mode, oc.created_at,
+              oc.item_value_at_cancellation, oc.store_amount, oc.driver_amount,
+              oc.customer_item_refund, oc.delivery_fee_refunded,
+              o.order_number, o.payment_method,
+              u.name as customer_name, d.name as driver_name,
+              COALESCE(
+                json_agg(json_build_object('storeId', s.store_id, 'amount', s.amount)) FILTER (WHERE s.id IS NOT NULL),
+                '[]'
+              ) as store_shares
+       FROM order_cancellations oc
+       JOIN orders o ON o.id = oc.order_id
+       LEFT JOIN users u ON u.id = o.user_id
+       LEFT JOIN drivers d ON d.id = o.driver_id
+       LEFT JOIN order_cancellation_store_shares s ON s.order_cancellation_id = oc.id
+       GROUP BY oc.id, o.order_number, o.payment_method, u.name, d.name
+       ORDER BY oc.created_at DESC LIMIT 100`,
+    );
+    return result.rows;
+  }
+
   static async getStats() {
     const [users, drivers, orders, revenue] = await Promise.all([
       this.query("SELECT COUNT(*) FROM users"),

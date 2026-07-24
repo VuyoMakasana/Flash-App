@@ -177,6 +177,18 @@ class AdminController {
       res.status(500).json({ error: "Failed to fetch stats" });
     }
   }
+
+  // Package protection / pre-pickup cancellation split visibility — the
+  // exact breakdown recorded by orderController.cancelOrder, traceable per
+  // order rather than buried in a generic order list.
+  static async getCancellations(req, res) {
+    try {
+      const cancellations = await Admin.getCancellations();
+      res.json({ cancellations });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch cancellations" });
+    }
+  }
 }
 
 module.exports = AdminController;

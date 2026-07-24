@@ -13,6 +13,7 @@ const loginForm  = document.getElementById('loginForm');
 const loginBtn   = document.getElementById('loginBtn');
 const loginError = document.getElementById('loginError');
 const tableWrap  = document.getElementById('tableWrap');
+const cancellationsTableWrap = document.getElementById('cancellationsTableWrap');
 const toast      = document.getElementById('toast');
 const refreshBtn = document.getElementById('refreshBtn');
 const logoutBtn  = document.getElementById('logoutBtn');
@@ -76,6 +77,7 @@ function showDashboard() {
   loginCard.style.display = 'none';
   dashboard.style.display = 'block';
   loadReturns();
+  loadCancellations();
 }
 
 async function apiCall(path, options = {}) {
@@ -139,7 +141,10 @@ logoutBtn.addEventListener('click', async () => {
   showLogin();
 });
 
-refreshBtn.addEventListener('click', loadReturns);
+refreshBtn.addEventListener('click', () => {
+  loadReturns();
+  loadCancellations();
+});
 
 // ─── Returns queue ──────────────────────────────────────────────────────────
 
@@ -209,6 +214,55 @@ async function loadReturns() {
     renderReturns(data.returns || []);
   } catch (err) {
     tableWrap.innerHTML = `<div id="empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// ─── Pre-pickup cancellation splits ─────────────────────────────────────────
+
+function renderCancellations(cancellations) {
+  if (!cancellations.length) {
+    cancellationsTableWrap.innerHTML = '<div id="empty">No pre-pickup cancellations yet.</div>';
+    return;
+  }
+
+  const rows = cancellations.map((row) => {
+    const isSplit = row.refund_mode === 'pre_pickup_split';
+    const rand = (n) => `R${parseFloat(n || 0).toFixed(2)}`;
+    return `
+    <tr>
+      <td>${row.order_number}</td>
+      <td>${row.payment_method === 'cash' ? 'Cash' : 'Card'}</td>
+      <td>${escapeHtml(row.customer_name || '—')}</td>
+      <td>${escapeHtml(row.driver_name || '—')}</td>
+      <td>${isSplit ? rand(row.item_value_at_cancellation) : '—'}</td>
+      <td>${isSplit ? rand(row.store_amount) : '—'}</td>
+      <td>${isSplit ? rand(row.driver_amount) : '—'}</td>
+      <td>${isSplit ? `${rand(row.customer_item_refund)} + ${rand(row.delivery_fee_refunded)} delivery` : '—'}</td>
+      <td>${new Date(row.created_at).toLocaleString()}</td>
+    </tr>
+  `;
+  }).join('');
+
+  cancellationsTableWrap.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Order</th><th>Payment</th><th>Customer</th><th>Driver</th>
+          <th>Item value</th><th>Store (10%)</th><th>Driver (5%)</th><th>Customer refund</th><th>When</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function loadCancellations() {
+  cancellationsTableWrap.innerHTML = '<div id="empty">Loading…</div>';
+  try {
+    const data = await apiCall('/api/admin/cancellations');
+    renderCancellations(data.cancellations || []);
+  } catch (err) {
+    cancellationsTableWrap.innerHTML = `<div id="empty">${escapeHtml(err.message)}</div>`;
   }
 }
 

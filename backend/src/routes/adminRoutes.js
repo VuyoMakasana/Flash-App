@@ -49,4 +49,11 @@ router.get(
   AdminController.getStats,
 );
 
+router.get(
+  '/cancellations',
+  authenticate,
+  requireRole('admin'),
+  AdminController.getCancellations,
+);
+
 module.exports = router;

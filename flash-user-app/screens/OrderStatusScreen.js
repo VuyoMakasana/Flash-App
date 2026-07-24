@@ -123,6 +123,18 @@ export default function OrderStatusScreen() {
     navigation.navigate('ReturnRequest', { order });
   };
 
+  // Mirrors the backend's own boundary in orderController.cancelOrder — a
+  // UX convenience only, the server is the real, authoritative check.
+  // There was no cancel entry point anywhere in the app before this; the
+  // backend route and API wrapper already existed but nothing ever called
+  // them.
+  const canCancel = !!order.status
+    && !['picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'].includes(order.status);
+
+  const handleCancel = () => {
+    navigation.navigate('CancelOrder', { order });
+  };
+
   // The code itself never appears in any push notification or socket event
   // (lock-screen visibility, consistent with how this code is handled
   // everywhere else in the app) — this is the only place a customer can
@@ -351,6 +363,14 @@ export default function OrderStatusScreen() {
         </View>
       )}
 
+      {/* Cancel */}
+      {canCancel && (
+        <Pressable style={styles.cancelOrderBtn} onPress={handleCancel}>
+          <Ionicons name="close-circle-outline" size={16} color="#dc2626" />
+          <Text style={styles.cancelOrderText}>Cancel Order</Text>
+        </Pressable>
+      )}
+
       {/* Return */}
       {order.status === 'completed' && !order.return_requested && (() => {
         const { canRequest, message } = getReturnEligibility(order);
@@ -424,6 +444,8 @@ const styles = StyleSheet.create({
   returnBtnDisabled: { borderColor: '#e5e7eb' },
   returnTextDisabled: { color: '#9ca3af' },
   returnHint: { textAlign: 'center', color: '#9ca3af', fontSize: 12, marginTop: 8 },
+  cancelOrderBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: '#fecaca', paddingVertical: 14, borderRadius: 14, marginTop: 8 },
+  cancelOrderText: { color: '#dc2626', fontWeight: '700' },
   photosCard: { backgroundColor: '#fff', borderRadius: 16, padding: 14, gap: 10, marginTop: 8, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 },
   photosTitle: { fontWeight: '700', color: '#111827', fontSize: 13 },
   photosRow: { flexDirection: 'row', gap: 12 },
