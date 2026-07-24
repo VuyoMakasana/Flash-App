@@ -275,6 +275,20 @@ async function assignDriver(orderId, driverId, context = {}) {
   try {
     await client.query('BEGIN');
 
+    // CRITICAL FIX: SELECT ... FOR UPDATE below only locks the drivers row —
+    // it does NOT lock the orders table the NOT EXISTS subquery reads. Under
+    // READ COMMITTED, a transaction blocked waiting for that row lock resumes
+    // using the snapshot it already took at the start of THIS statement, so
+    // it can still see zero matching orders even after the other transaction
+    // has committed one. Confirmed live: two orders fired at a single driver
+    // at the exact same instant were BOTH assigned to that driver. A Postgres
+    // advisory lock (a separate primitive from row locks, released only on
+    // commit/rollback) forces a second concurrent call for the same driver to
+    // fully block until the first transaction ends, so its subsequent query
+    // is a fresh statement with a fresh snapshot that correctly sees the
+    // first assignment.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1::text))', [driverId]);
+
     // HIGH-3: Lock driver row AND verify they are still free — all in one
     // atomic operation. If another transaction already assigned this driver,
     // the lock means we'll see the updated is_online / active order state.

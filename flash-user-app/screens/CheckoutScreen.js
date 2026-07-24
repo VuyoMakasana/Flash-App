@@ -140,11 +140,12 @@ export default function CheckoutScreen() {
     try {
       // Flash only delivers within Nelson Mandela Bay — the backend rejects
       // orders outside the service area, but it needs a real dropoff
-      // coordinate to check against, not the typed address text alone
-      // (there's no address-to-coordinate geocoding in this app). Uses the
-      // customer's current device position as that coordinate, so this
-      // assumes delivery to roughly where the customer is right now rather
-      // than validating the specific typed address.
+      // coordinate to check against, not the typed address text alone.
+      // A selected saved address now carries its own geocoded lat/lng (set
+      // at save time on AddressScreen) and that's used when one's picked —
+      // otherwise falls back to the device's current position, same as
+      // before this fix (previously used live GPS unconditionally, even
+      // when a saved address had been tapped, silently ignoring which one).
       const { status: existingStatus } = await Location.getForegroundPermissionsAsync();
       let permStatus = existingStatus;
       if (permStatus !== 'granted') {
@@ -157,6 +158,9 @@ export default function CheckoutScreen() {
         return;
       }
       const position = await Location.getCurrentPositionAsync({});
+      const selectedAddr = savedAddresses.find(a => a.id === selectedAddressId);
+      const dropoffLat = selectedAddr?.lat  != null ? selectedAddr.lat  : position.coords.latitude;
+      const dropoffLng = selectedAddr?.lng  != null ? selectedAddr.lng  : position.coords.longitude;
 
       await updateProfile({
         name: name.trim(),
@@ -172,8 +176,8 @@ export default function CheckoutScreen() {
         deliveryFee,
         total,
         dropoffAddress: address.trim(),
-        dropoffLat: position.coords.latitude,
-        dropoffLng: position.coords.longitude,
+        dropoffLat,
+        dropoffLng,
         requestedDriverId: deliveryMode === 'pick' ? selectedDriverId : null,
       });
       // Clear checkout draft after successful order — no longer needed
@@ -278,7 +282,7 @@ export default function CheckoutScreen() {
               onPress={() => setDeliveryMode(mode)}
             >
               <Text style={[styles.toggleText, deliveryMode === mode && styles.toggleTextActive]}>
-                {mode === 'fleet' ? '⚡ Any Available Driver' : '🚗 Pick a Driver'}
+                {mode === 'fleet' ? 'Any Available Driver' : 'Pick a Driver'}
               </Text>
             </Pressable>
           ))}

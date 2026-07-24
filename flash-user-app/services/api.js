@@ -213,7 +213,9 @@ const orders = {
   create:      (body)         => request('/orders', { method: 'POST', body: JSON.stringify(body) }),
   getAll:      ()              => request('/orders/my-orders'),
   getOrder:    (id)            => request(`/orders/${id}`),
-  cancel:      (id)             => request(`/orders/${id}/cancel`, { method: 'POST' }),
+  cancel:      (id, body)       => request(`/orders/${id}/cancel`, { method: 'POST', body: JSON.stringify(body || {}) }),
+  getCancellationPreview: (id)  => request(`/orders/${id}/cancellation-preview`),
+  getPhotos:   (id)             => request(`/orders/${id}/photos`),
   return:      (id, body)       => request(`/orders/${id}/return`, { method: 'POST', body: JSON.stringify(body) }),
   selectDriver:(id, driverId)   => request(`/orders/${id}/select-driver`, { method: 'POST', body: JSON.stringify({ driverId }) }),
   rateDriver:  (id, rating, comment) => request(`/orders/${id}/rate-driver`, { method: 'POST', body: JSON.stringify({ rating, comment }) }),
@@ -244,6 +246,10 @@ const user = {
   registerPushToken: (pushToken) => request('/users/push-token', {
     method: 'POST',
     body:   JSON.stringify({ push_token: pushToken }),
+  }),
+  rateApp: (rating, comment) => request('/users/app-rating', {
+    method: 'POST',
+    body:   JSON.stringify({ rating, comment }),
   }),
 
   // NOTE: none of the four methods below have a real backend route today —

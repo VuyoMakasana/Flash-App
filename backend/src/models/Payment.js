@@ -168,8 +168,14 @@ class Payment extends BaseModel {
     });
   }
 
-  static async cashOnDelivery(orderId, userId, io) {
-    return await this.transaction(async (client) => {
+  // CRITICAL FIX: accepts an optional externalClient so paymentController's
+  // cashOnDelivery can run this alongside its subsequent status transitions
+  // inside ONE transaction instead of several independently-committed ones —
+  // see paymentController.js for why that matters. Falls back to its own
+  // transaction when called with no externalClient, unchanged for any other
+  // caller.
+  static async cashOnDelivery(orderId, userId, io, externalClient = null) {
+    const run = async (client) => {
       const orderResult = await client.query(
         "SELECT id, delivery_fee, driver_payout, total, user_id, status FROM orders WHERE id=$1",
         [orderId],
@@ -238,7 +244,12 @@ class Payment extends BaseModel {
         isCashDelivery: true,
         deliveryFee: order.delivery_fee,
       };
-    });
+    };
+
+    if (externalClient) {
+      return await run(externalClient);
+    }
+    return await this.transaction(run);
   }
 
 }

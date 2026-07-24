@@ -65,6 +65,23 @@ class UserController {
       }
     }
 
+  // Rates Flash itself, not a specific driver/delivery — the separate,
+  // simple app-rating prompt shown alongside the mandatory driver rating.
+  static async rateApp(req, res) {
+    const { rating, comment } = req.body;
+    const n = Number(rating);
+    if (!Number.isInteger(n) || n < 1 || n > 5) {
+      return res.status(400).json({ error: "rating must be an integer 1-5" });
+    }
+    try {
+      await User.rateApp(req.userId, n, comment);
+      res.status(201).json({ success: true });
+    } catch (err) {
+      console.error("[User] rateApp error:", err.message);
+      res.status(500).json({ error: "Failed to save rating" });
+    }
+  }
+
   // H8 FIX: account deletion had no backend endpoint at all — the client
   // stub (services/api.js) called DELETE /users/account against a route
   // that never existed.

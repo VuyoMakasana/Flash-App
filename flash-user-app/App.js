@@ -9,8 +9,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { StatusBar } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { FlashProvider, useFlash } from './context/FlashContext';
-import { setSessionExpiredHandler } from './services/api';
-import { View, ActivityIndicator } from 'react-native';
+import api, { setSessionExpiredHandler } from './services/api';
+import { View, ActivityIndicator, AppState } from 'react-native';
+import RatingGateModal from './components/RatingGateModal';
 
 import * as Sentry from '@sentry/react-native';
 // CRITICAL FIX: Sentry.init() ran unguarded at module top-level — before any
@@ -66,6 +67,7 @@ import PaymentScreen            from './screens/PaymentScreen';
 import OrdersScreen             from './screens/OrdersScreen';
 import OrderStatusScreen        from './screens/OrderStatusScreen';
 import ReturnRequestScreen      from './screens/ReturnRequestScreen';
+import CancelOrderScreen        from './screens/CancelOrderScreen';
 import TrackingScreen           from './screens/TrackingScreen';
 import SplashScreen             from './screens/SplashScreen';
 import LoginScreen              from './screens/LoginScreen';
@@ -106,6 +108,7 @@ function ShopStack() {
       <Stack.Screen name="Payment"     component={PaymentScreen}     options={{ title: 'Payment' }} />
       <Stack.Screen name="OrderStatus" component={OrderStatusScreen} options={{ title: 'Order Status' }} />
       <Stack.Screen name="ReturnRequest" component={ReturnRequestScreen} options={{ title: 'Request Return' }} />
+      <Stack.Screen name="CancelOrder" component={CancelOrderScreen} options={{ title: 'Cancel Order' }} />
       <Stack.Screen name="Tracking"    component={TrackingScreen}    options={{ title: 'Track Order' }} />
       <Stack.Screen name="Chat"        component={ChatScreen}        options={{ title: 'Message Driver' }} />
       {/* PaymentScreen's "Manage" saved-cards link navigates here — SavedCards
@@ -129,6 +132,7 @@ function OrdersStack() {
       <Stack.Screen name="Orders"      component={OrdersScreen}      options={{ title: 'Orders & Returns' }} />
       <Stack.Screen name="OrderStatus" component={OrderStatusScreen} options={{ title: 'Order Status' }} />
       <Stack.Screen name="ReturnRequest" component={ReturnRequestScreen} options={{ title: 'Request Return' }} />
+      <Stack.Screen name="CancelOrder" component={CancelOrderScreen} options={{ title: 'Cancel Order' }} />
       <Stack.Screen name="Tracking"    component={TrackingScreen}    options={{ title: 'Track Order' }} />
       <Stack.Screen name="Chat"        component={ChatScreen}        options={{ title: 'Message Driver' }} />
     </Stack.Navigator>
@@ -148,6 +152,7 @@ function ProfileStack() {
           Profile > Order History silently did nothing. */}
       <Stack.Screen name="OrderStatus"    component={OrderStatusScreen}    options={{ title: 'Order Status' }} />
       <Stack.Screen name="ReturnRequest"  component={ReturnRequestScreen}  options={{ title: 'Request Return' }} />
+      <Stack.Screen name="CancelOrder"    component={CancelOrderScreen}    options={{ title: 'Cancel Order' }} />
       <Stack.Screen name="Tracking"       component={TrackingScreen}       options={{ title: 'Track Order' }} />
       <Stack.Screen name="Chat"           component={ChatScreen}           options={{ title: 'Message Driver' }} />
       <Stack.Screen name="SavedCards"     component={SavedCardsScreen}     options={{ title: 'Saved Cards' }} />
@@ -204,6 +209,34 @@ function TermsGateStack() {
 function AppNavigator() {
   const { isAuthenticated, loading, handleSessionExpired, user } = useFlash();
   const needsTerms = isAuthenticated && !user?.terms_accepted;
+
+  // Mandatory post-delivery rating (persistent, non-dismissible prompt —
+  // not a hard navigation block: "Not now" always lets the rest of the app
+  // stay reachable, it just checks again on every launch/foreground while
+  // an unrated completed order exists).
+  const [unratedOrder, setUnratedOrder] = React.useState(null);
+
+  const checkUnratedOrder = React.useCallback(async () => {
+    if (!isAuthenticated || needsTerms) return;
+    try {
+      const data = await api.orders.getAll();
+      const found = (data.orders || []).find(
+        o => ['delivered', 'completed'].includes(o.status) && o.driver_id && !o.has_rating,
+      );
+      setUnratedOrder(found || null);
+    } catch (_e) {
+      // Best-effort — never block the app on this check failing.
+    }
+  }, [isAuthenticated, needsTerms]);
+
+  React.useEffect(() => { checkUnratedOrder(); }, [checkUnratedOrder]);
+
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') checkUnratedOrder();
+    });
+    return () => sub.remove();
+  }, [checkUnratedOrder]);
 
   // H-8 FIX: setSessionExpiredHandler is invoked directly by api.js's
   // request() the instant it detects an expired/revoked token —
@@ -279,6 +312,12 @@ function AppNavigator() {
         <AuthStack />
       )}
       <StatusBar style={isAuthenticated ? 'light' : 'dark'} />
+      <RatingGateModal
+        visible={!!unratedOrder && !needsTerms}
+        order={unratedOrder}
+        onDismiss={() => setUnratedOrder(null)}
+        onRated={() => setUnratedOrder(null)}
+      />
     </NavigationContainer>
   );
 }

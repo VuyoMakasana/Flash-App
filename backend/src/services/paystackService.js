@@ -12,7 +12,7 @@ class PaystackService {
       );
     } else if (!secretKey) {
       console.warn(
-        "[Paystack] ℹ️  PAYSTACK_SECRET_KEY not configured. Payment features will be unavailable.",
+        "[Paystack] PAYSTACK_SECRET_KEY not configured. Payment features will be unavailable.",
       );
     }
   }
@@ -108,7 +108,7 @@ class PaystackService {
       }
       callbackUrl = "http://localhost:8081/payment/callback"; // Safe dev fallback
       console.warn(
-        "[Paystack] ℹ️  APP_URL not set. Using development default.",
+        "[Paystack] APP_URL not set. Using development default.",
       );
     }
 
@@ -156,7 +156,7 @@ class PaystackService {
       }
       callbackUrl = "http://localhost:8081/payment/callback"; // Safe dev fallback
       console.warn(
-        "[Paystack] ℹ️  APP_URL not set. Using development default.",
+        "[Paystack] APP_URL not set. Using development default.",
       );
     }
 

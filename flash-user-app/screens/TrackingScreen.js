@@ -72,10 +72,14 @@ export default function TrackingScreen() {
     ]).start(() => setArrivalBanner(null));
   }, [bannerOpacity]);
 
-  // ── Dial button — opens phone dialler with masked number ──────────────────
+  // ── Dial button — opens phone dialler ──────────────────────────────────────
+  // Calls the actual assigned driver's real number (already returned by the
+  // backend as driver.phone, required at driver registration). Falls back to
+  // the support line only in the unlikely case it's ever missing — matches
+  // the earlier fix's intent (reaching nothing was worse than reaching support).
   const handleCall = () => {
-    // FIXED: Replaced fake placeholder number with real support number — customers tapping Call during a live delivery were reaching nothing
-    Linking.openURL('tel:+27730849837').catch(() => {});
+    const number = driver?.phone || '+27730849837';
+    Linking.openURL(`tel:${number}`).catch(() => {});
   };
 
   // ── Message button ────────────────────────────────────────────────────────
@@ -367,9 +371,13 @@ export default function TrackingScreen() {
                   </View>
                 )}
               </View>
-              <Text style={styles.driverMeta}>
-                {driver.vehicle}{driver.plate ? ` (${driver.plate})` : ''}  •  {parseFloat(driver.rating || 5).toFixed(1)}★  •  {driver.total_deliveries || 0} trips
-              </Text>
+              <View style={styles.driverMetaRow}>
+                <Text style={styles.driverMeta}>
+                  {driver.vehicle}{driver.plate ? ` (${driver.plate})` : ''}  •  {parseFloat(driver.rating || 5).toFixed(1)}
+                </Text>
+                <Ionicons name="star" size={12} color="#f59e0b" style={{ marginHorizontal: 2 }} />
+                <Text style={styles.driverMeta}>  •  {driver.total_deliveries || 0} trips</Text>
+              </View>
             </View>
             {/* ── Part 2: Call button (masked dialler) ─────────────────── */}
             <Pressable style={styles.iconActionBtn} onPress={handleCall}>
@@ -411,7 +419,7 @@ export default function TrackingScreen() {
         {isCompleted && (
           <View style={styles.completedBanner}>
             <Ionicons name="checkmark-circle" size={20} color="#16a34a" />
-            <Text style={styles.completedText}>Your order has been delivered! Enjoy 🎉</Text>
+            <Text style={styles.completedText}>Your order has been delivered! Enjoy.</Text>
           </View>
         )}
       </View>
@@ -482,6 +490,7 @@ const styles = StyleSheet.create({
   driverNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   driverName:    { fontWeight: '800', color: '#111827' },
   driverMeta:    { color: '#6b7280', fontSize: 12, marginTop: 2 },
+  driverMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   verifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#ecfdf5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
   verifiedBadgeText: { color: '#10b981', fontSize: 10, fontWeight: '700' },
   iconActionBtn: {

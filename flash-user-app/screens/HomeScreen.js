@@ -39,7 +39,7 @@ export default function HomeScreen() {
       {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.greeting}>Hey {user?.name?.split(' ')[0] || 'there'} 👋</Text>
+          <Text style={styles.greeting}>Hey {user?.name?.split(' ')[0] || 'there'}</Text>
           <Text style={styles.sub}>What are we wearing today?</Text>
         </View>
         <Pressable style={styles.cartBtn} onPress={() => navigation.navigate('Cart')}>
@@ -79,7 +79,7 @@ export default function HomeScreen() {
               onPress={() => setActiveStore(store)}
             >
               <Text style={[styles.catText, activeStore === store && styles.catTextActive]}>
-                {store === 'all' ? '🏪 All Shops' : store}
+                {store === 'all' ? 'All Shops' : store}
               </Text>
             </Pressable>
           ))}

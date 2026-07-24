@@ -32,10 +32,10 @@ pool.on("error", (err) => {
 pool
   .query("SELECT 1")
   .then(() => {
-    console.log("[Database] ✅ Connection pool initialized successfully");
+    console.log("[Database] Connection pool initialized successfully");
   })
   .catch((err) => {
-    const msg = `[Database] ⚠️  Failed to verify connection: ${err.message}`;
+    const msg = `[Database] Failed to verify connection: ${err.message}`;
     if (process.env.NODE_ENV === "production") {
       console.error(msg);
     } else {

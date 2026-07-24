@@ -15,7 +15,7 @@ const Payment           = require('../models/Payment');
 const Order             = require('../models/Order');
 const paystackService   = require('../services/paystackService');
 const db                = require('../config/database');
-const { updateOrderStatus }        = require('../services/orderStateMachineService');
+const { updateOrderStatus, emitOrderUpdate, notifyOrderStatusChange } = require('../services/orderStateMachineService');
 const { autoAssignNearestDriver }  = require('../services/autoMatchService');
 const cashOtpService               = require('../services/cashOtpService');
 const { notifyDriversNewOrder, sendPushNotification } = require('../services/notificationService');
@@ -57,49 +57,84 @@ class PaymentController {
       return res.status(400).json({ error: 'orderId is required' });
     }
 
+    // CRITICAL FIX: this used to run as three-to-four independently
+    // committed DB round trips (Payment.cashOnDelivery's own transaction,
+    // then a separate updateOrderStatus('paid') transaction, then a third
+    // updateOrderStatus('scheduled_for_morning' | 'waiting_for_driver')
+    // transaction). A failure partway through — confirmed live under load
+    // testing, where DB pool exhaustion threw mid-sequence — left orders
+    // permanently stuck in 'paid' with cash_to_collect set: no driver could
+    // ever see or accept them, and no cron/recovery job revisits an order
+    // stuck at 'paid'. Wrapping the whole sequence in one transaction means
+    // any failure rolls everything back to 'payment_pending' instead, which
+    // the existing paymentReconciliationJob (every 5 min) and the customer's
+    // own retry can both still act on.
+    const client = await db.connect();
+    let result;
+    let finalOrder;
+    let scheduled = false;
+    let openAt = null;
+
     try {
-      const result = await Payment.cashOnDelivery(orderId, req.userId, io);
+      await client.query('BEGIN');
+
+      result = await Payment.cashOnDelivery(orderId, req.userId, io, client);
 
       await updateOrderStatus(orderId, 'paid', {
-        actorId:   req.userId,
-        actorRole: 'user',
-        io,
+        actorId:       req.userId,
+        actorRole:     'user',
+        externalClient: client,
       });
 
       if (isClosedNow()) {
-        const openAt = getNextOpenTime();
-        await db.query(
+        scheduled = true;
+        openAt = getNextOpenTime();
+        await client.query(
           `UPDATE orders SET scheduled_for = $1, updated_at = NOW() WHERE id = $2`,
           [openAt, orderId],
         );
-        await updateOrderStatus(orderId, 'scheduled_for_morning', {
-          actorId:   req.userId,
-          actorRole: 'user',
-          io,
+        finalOrder = await updateOrderStatus(orderId, 'scheduled_for_morning', {
+          actorId:       req.userId,
+          actorRole:     'user',
+          externalClient: client,
         });
-        if (io) {
-          io.to(`user:${req.userId}`).emit('order_scheduled', {
-            orderId,
-            openAt: openAt.toISOString(),
-            message: `Flash opens at 07:00. Your order will be assigned to a driver then.`,
-          });
-        }
-        return res.json({ ...result, scheduled: true, openAt });
+      } else {
+        finalOrder = await updateOrderStatus(orderId, 'waiting_for_driver', {
+          actorId:       req.userId,
+          actorRole:     'user',
+          externalClient: client,
+        });
       }
 
-      await updateOrderStatus(orderId, 'waiting_for_driver', {
-        actorId:   req.userId,
-        actorRole: 'user',
-        io,
-      });
-
-      await autoAssignNearestDriver(orderId, io).catch(() => null);
-      notifyDriversNewOrder(orderId, true).catch(() => null);
-      res.json(result);
+      await client.query('COMMIT');
     } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
       console.error('[Payment] cashOnDelivery error:', err.message);
-      res.status(500).json({ error: 'Failed to set cash delivery' });
+      return res.status(500).json({ error: 'Failed to set cash delivery' });
+    } finally {
+      client.release();
     }
+
+    // Side effects only fire after the transaction above has actually
+    // committed — same convention updateOrderStatus itself uses for its own
+    // externalClient callers (see orderController.cancelOrder).
+    emitOrderUpdate(io, orderId, finalOrder.user_id, finalOrder.status);
+    await notifyOrderStatusChange(finalOrder, finalOrder.status);
+
+    if (scheduled) {
+      if (io) {
+        io.to(`user:${req.userId}`).emit('order_scheduled', {
+          orderId,
+          openAt: openAt.toISOString(),
+          message: `Flash opens at 07:00. Your order will be assigned to a driver then.`,
+        });
+      }
+      return res.json({ ...result, scheduled: true, openAt });
+    }
+
+    autoAssignNearestDriver(orderId, io).catch(() => null);
+    notifyDriversNewOrder(orderId, true).catch(() => null);
+    return res.json(result);
   }
 
   static async getPaymentStatus(req, res) {
@@ -266,8 +301,16 @@ class PaymentController {
   // ─────────────────────────────────────────────────────────────────────────
   // confirmCashReceived
   //
-  // Records R20 Flash commission inside the SAME transaction that marks the
-  // order paid + completed. This is the revenue capture step.
+  // PACKAGE PROTECTION FIX: this is now the shared delivery-confirmation
+  // endpoint for BOTH cash and card orders, not cash-only. Previously, a
+  // card order had no equivalent to this OTP gate at all — a driver could
+  // call the generic PUT /orders/:id/status with status:'completed' directly
+  // once 'delivered', with zero customer confirmation, and their payout
+  // released immediately. Cash keeps its existing behavior (mark paid,
+  // record the R20 commission) inside the same transaction that marks the
+  // order paid + completed; card orders are already paid, so this only
+  // verifies the OTP and completes the order — updateOrderStatus's existing
+  // 'completed' branch already releases the full payout for non-cash orders.
   // ─────────────────────────────────────────────────────────────────────────
   static async confirmCashReceived(req, res) {
     const { orderId, otp } = req.body;
@@ -277,6 +320,7 @@ class PaymentController {
     if (!otp)     return res.status(400).json({ error: 'OTP confirmation is required' });
 
     const client = await db.connect();
+    let isCash;
     try {
       await cashOtpService.verifyOtp(orderId, otp);
 
@@ -294,28 +338,34 @@ class PaymentController {
       }
 
       const order = result.rows[0];
+      isCash = order.payment_method === 'cash';
 
       if (order.driver_id !== req.userId) {
         await client.query('ROLLBACK');
         return res.status(403).json({ error: 'Not your order' });
       }
-      if (order.payment_method !== 'cash' || order.payment_status !== 'pending_cash') {
+      if (isCash && order.payment_status !== 'pending_cash') {
         await client.query('ROLLBACK');
         return res.status(409).json({ error: 'Order is not awaiting cash confirmation' });
       }
+      if (!isCash && order.payment_status !== 'paid') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Order is not in a confirmable paid state' });
+      }
       if (order.status !== 'delivered') {
         await client.query('ROLLBACK');
-        return res.status(409).json({ error: 'Cash can only be confirmed after delivery' });
+        return res.status(409).json({ error: 'Delivery can only be confirmed after the order is marked delivered' });
       }
 
-      await client.query(
-        `UPDATE orders
-         SET payment_status = 'paid', cash_received_at = NOW(), updated_at = NOW()
-         WHERE id = $1`,
-        [orderId],
-      );
-
-      await recordCashCommission(client, order.driver_id, orderId);
+      if (isCash) {
+        await client.query(
+          `UPDATE orders
+           SET payment_status = 'paid', cash_received_at = NOW(), updated_at = NOW()
+           WHERE id = $1`,
+          [orderId],
+        );
+        await recordCashCommission(client, order.driver_id, orderId);
+      }
 
       await client.query('COMMIT');
 
@@ -324,6 +374,10 @@ class PaymentController {
         actorRole: 'driver',
         io,
       });
+
+      if (!isCash) {
+        return res.json({ success: true, payment_status: 'paid', status: 'completed' });
+      }
 
       const commissionStatus = await checkCommissionBlock(order.driver_id);
       if (commissionStatus.blocked && io) {
@@ -369,14 +423,22 @@ class PaymentController {
       if (!orderResult.rows.length) return res.status(404).json({ error: 'Order not found' });
 
       const order = orderResult.rows[0];
+      const isCash = order.payment_method === 'cash';
       if (String(order.driver_id) !== String(req.userId)) {
         return res.status(403).json({ error: 'Not your order' });
       }
-      if (order.payment_method !== 'cash' || order.payment_status !== 'pending_cash') {
+      // PACKAGE PROTECTION FIX: this OTP is now the shared delivery-
+      // confirmation gate for cash AND card orders (see confirmCashReceived).
+      // Cash orders are awaiting collection (pending_cash); card orders are
+      // already paid and just need a real customer confirmation of receipt.
+      if (isCash && order.payment_status !== 'pending_cash') {
         return res.status(409).json({ error: 'Order is not awaiting cash payment' });
       }
+      if (!isCash && order.payment_status !== 'paid') {
+        return res.status(409).json({ error: 'Order is not in a confirmable paid state' });
+      }
       if (!['in_transit', 'delivered'].includes(order.status)) {
-        return res.status(409).json({ error: 'Cash OTP can only be sent once the order is in transit or delivered' });
+        return res.status(409).json({ error: 'Delivery confirmation OTP can only be sent once the order is in transit or delivered' });
       }
 
       const otpResult = await cashOtpService.generateOtp(orderId);

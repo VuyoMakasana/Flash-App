@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, ScrollView, Pressable, StyleSheet, Alert, ActivityIndicator, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import api from '../services/api';
@@ -62,6 +62,17 @@ export default function OrderStatusScreen() {
   const [submittingRating, setSubmittingRating] = useState(false);
   const [ratingSubmitted, setRatingSubmitted]   = useState(false);
   const [fetchingCashOtp, setFetchingCashOtp]   = useState(false);
+  const [photos, setPhotos] = useState(null);
+
+  // Package protection — pickup/drop-off proof photos. Fetched once the
+  // order has actually reached a status where a photo could exist; signed
+  // URLs are short-lived, so this always fetches fresh rather than caching.
+  useEffect(() => {
+    const id = order?.id;
+    const hasPhotos = ['picked_up', 'in_transit', 'delivered', 'completed'].includes(order?.status);
+    if (!id || !hasPhotos) return;
+    api.orders.getPhotos(id).then(setPhotos).catch(() => {});
+  }, [order?.id, order?.status]);
 
   // If we were only passed an orderId (e.g. from PaymentScreen fallback), fetch the full order
   useEffect(() => {
@@ -110,6 +121,18 @@ export default function OrderStatusScreen() {
 
   const handleReturn = () => {
     navigation.navigate('ReturnRequest', { order });
+  };
+
+  // Mirrors the backend's own boundary in orderController.cancelOrder — a
+  // UX convenience only, the server is the real, authoritative check.
+  // There was no cancel entry point anywhere in the app before this; the
+  // backend route and API wrapper already existed but nothing ever called
+  // them.
+  const canCancel = !!order.status
+    && !['picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'].includes(order.status);
+
+  const handleCancel = () => {
+    navigation.navigate('CancelOrder', { order });
   };
 
   // The code itself never appears in any push notification or socket event
@@ -318,6 +341,36 @@ export default function OrderStatusScreen() {
         </View>
       )}
 
+      {/* Package protection — pickup/drop-off proof photos, for dispute
+          resolution. Never a permanent URL — fetched fresh each time. */}
+      {(photos?.pickupPhotoUrl || photos?.dropoffPhotoUrl) && (
+        <View style={styles.photosCard}>
+          <Text style={styles.photosTitle}>Delivery proof photos</Text>
+          <View style={styles.photosRow}>
+            {photos.pickupPhotoUrl && (
+              <View style={styles.photoBox}>
+                <Image source={{ uri: photos.pickupPhotoUrl }} style={styles.photoImg} />
+                <Text style={styles.photoLabel}>Pickup</Text>
+              </View>
+            )}
+            {photos.dropoffPhotoUrl && (
+              <View style={styles.photoBox}>
+                <Image source={{ uri: photos.dropoffPhotoUrl }} style={styles.photoImg} />
+                <Text style={styles.photoLabel}>Delivered</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Cancel */}
+      {canCancel && (
+        <Pressable style={styles.cancelOrderBtn} onPress={handleCancel}>
+          <Ionicons name="close-circle-outline" size={16} color="#dc2626" />
+          <Text style={styles.cancelOrderText}>Cancel Order</Text>
+        </Pressable>
+      )}
+
       {/* Return */}
       {order.status === 'completed' && !order.return_requested && (() => {
         const { canRequest, message } = getReturnEligibility(order);
@@ -391,6 +444,14 @@ const styles = StyleSheet.create({
   returnBtnDisabled: { borderColor: '#e5e7eb' },
   returnTextDisabled: { color: '#9ca3af' },
   returnHint: { textAlign: 'center', color: '#9ca3af', fontSize: 12, marginTop: 8 },
+  cancelOrderBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: '#fecaca', paddingVertical: 14, borderRadius: 14, marginTop: 8 },
+  cancelOrderText: { color: '#dc2626', fontWeight: '700' },
+  photosCard: { backgroundColor: '#fff', borderRadius: 16, padding: 14, gap: 10, marginTop: 8, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 },
+  photosTitle: { fontWeight: '700', color: '#111827', fontSize: 13 },
+  photosRow: { flexDirection: 'row', gap: 12 },
+  photoBox: { alignItems: 'center', gap: 4 },
+  photoImg: { width: 110, height: 110, borderRadius: 12, backgroundColor: '#f3f4f6' },
+  photoLabel: { color: '#6b7280', fontSize: 11, fontWeight: '600' },
   starRow: { flexDirection: 'row', gap: 8, justifyContent: 'center' },
   submitRatingBtn: { backgroundColor: '#0a0a0a', borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
   submitRatingText: { color: '#fff', fontWeight: '700' },

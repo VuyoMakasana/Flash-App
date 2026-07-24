@@ -194,6 +194,7 @@ const orders = {
   cancelActive:  (id)         => request(`/drivers/orders/${id}/cancel`, { method: 'POST' }),
   updateStatus:  (id, status) => request(`/orders/${id}/status`, { method: 'PUT', body: JSON.stringify({ status }) }),
   getById:       (id)         => request(`/orders/${id}`),
+  getPhotos:     (id)         => request(`/orders/${id}/photos`),
 };
 
 // ── Driver profile ─────────────────────────────────────────────────────────
@@ -212,6 +213,18 @@ const driver = {
   // formData must contain a `document_type` field and a `document` file field —
   // matches upload.single('document') + req.body.document_type on the backend.
   uploadDocument: (formData) => request('/drivers/documents/upload', {
+    method: 'POST',
+    body:   formData,
+  }),
+  // Package protection — formData must contain a `photo` file field. Each
+  // upload also transitions the order's status in the same request (see
+  // driverController.submitPickupPhoto/submitDropoffPhoto), so there's no
+  // separate "advance status" call needed after these succeed.
+  submitPickupPhoto: (orderId, formData) => request(`/drivers/orders/${orderId}/pickup-photo`, {
+    method: 'POST',
+    body:   formData,
+  }),
+  submitDropoffPhoto: (orderId, formData) => request(`/drivers/orders/${orderId}/dropoff-photo`, {
     method: 'POST',
     body:   formData,
   }),

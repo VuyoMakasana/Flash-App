@@ -19,8 +19,8 @@ class Address extends BaseModel {
       }
       const result = await client.query(
         `INSERT INTO addresses
-           (user_id, label, street, apartment, suburb, city, gate_code, landmark, full_address, is_default)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+           (user_id, label, street, apartment, suburb, city, gate_code, landmark, full_address, is_default, lat, lng)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          RETURNING *`,
         [
           userId,
@@ -33,6 +33,8 @@ class Address extends BaseModel {
           data.landmark || null,
           data.full_address || null,
           !!data.is_default,
+          data.lat ?? null,
+          data.lng ?? null,
         ],
       );
       return result.rows[0];
@@ -56,7 +58,7 @@ class Address extends BaseModel {
         );
       }
 
-      const fields = ["label", "street", "apartment", "suburb", "city", "gate_code", "landmark", "full_address", "is_default"];
+      const fields = ["label", "street", "apartment", "suburb", "city", "gate_code", "landmark", "full_address", "is_default", "lat", "lng"];
       const sets = [];
       const values = [];
       let i = 1;

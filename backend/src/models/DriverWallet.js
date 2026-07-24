@@ -46,6 +46,26 @@ class DriverWallet extends BaseModel {
     );
   }
 
+  // Immediate credit with no pending stage — used for compensation that
+  // isn't tied to a future delivery-completion event (e.g. the driver's
+  // pre-pickup cancellation share), where there's nothing left to "release"
+  // later. Mirrors releasePending's wallet_balance credit exactly, minus the
+  // pending_balance subtraction since nothing was ever added to pending for it.
+  static async creditAvailable(client, driverId, amount, orderId, note = 'available_credit') {
+    await this.ensureWallet(client, driverId);
+    await client.query(
+      `UPDATE driver_wallets
+       SET wallet_balance = wallet_balance + $1, updated_at = NOW()
+       WHERE driver_id = $2`,
+      [amount, driverId],
+    );
+    await client.query(
+      `INSERT INTO driver_wallet_ledger (driver_id, order_id, amount, entry_type, note)
+       VALUES ($1, $2, $3, 'available_credit', $4)`,
+      [driverId, orderId, amount, note],
+    );
+  }
+
   static async reversePending(client, driverId, amount, orderId, note = 'assignment_cancelled') {
     await this.ensureWallet(client, driverId);
     await client.query(

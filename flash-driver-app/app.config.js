@@ -18,7 +18,18 @@ module.exports = () => ({
   expo: {
     name: 'Flash Driver',
     slug: 'flash-driver-app',
+    owner: 'vuyomakasana',
     version: '1.0.0',
+    // Required for EAS Update — added by `eas update:configure`'s own
+    // recommendation (it couldn't auto-write these into this dynamic
+    // app.config.js). runtimeVersion "appVersion" ties update compatibility
+    // to the `version` field above.
+    runtimeVersion: {
+      policy: 'appVersion',
+    },
+    updates: {
+      url: 'https://u.expo.dev/461d43ca-086d-4104-9a07-81897f2d7962',
+    },
     orientation: 'portrait',
     icon: './assets/flash-logo.png',
     userInterfaceStyle: 'light',
@@ -31,11 +42,29 @@ module.exports = () => ({
       supportsTablet: false,
       bundleIdentifier: 'co.za.flash.driverapp',
       usesAppleSignIn: true,
+      // DIAGNOSTIC — testing period only, revert once resolved. Every
+      // published EAS Update (Hermes bytecode) blank-screens in Expo Go on
+      // a real iPhone 11 — no error, no crash, confirmed reproducible on
+      // every publish tonight — while the exact same source served as
+      // plain JS through a live Metro tunnel works correctly every time.
+      // Per Expo's own docs/changelog: Hermes-bytecode-over-EAS-Update
+      // support requires "the latest version of Expo Go," and an
+      // incompatible Hermes VM version between the bytecode and the
+      // installed Expo Go binary causes exactly this failure mode (native
+      // bytecode-format mismatch, below the JS layer — nothing for our
+      // ErrorBoundary or Sentry to ever catch). Expo Go's SDK 55 build has
+      // been stuck in Apple App Store review since at least May 2026
+      // (confirmed via Expo's changelog), so the installed client is
+      // plausibly not current. Forcing jsc (JavaScriptCore, not Hermes)
+      // for iOS makes this publish plain JS instead of Hermes bytecode —
+      // sidesteps the failure class entirely if this diagnosis is right.
+      // Not yet confirmed on-device — this is the test.
+      jsEngine: 'jsc',
       config: {
         googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
       },
       infoPlist: {
-        NSCameraUsageDescription: 'Flash Driver needs camera access to photograph documents for account verification.',
+        NSCameraUsageDescription: 'Flash Driver needs camera access to photograph documents for account verification, and to take pickup/drop-off proof photos for each delivery.',
         NSPhotoLibraryUsageDescription: 'Flash Driver needs photo library access to upload profile and document photos.',
         NSLocationWhenInUseUsageDescription: 'Flash Driver uses your location so customers can track their deliveries.',
         NSLocationAlwaysAndWhenInUseUsageDescription: 'Flash Driver uses your location in the background to update your delivery position while on a job.',
@@ -55,6 +84,7 @@ module.exports = () => ({
         'ACCESS_BACKGROUND_LOCATION',
         'RECEIVE_BOOT_COMPLETED',
         'VIBRATE',
+        'CAMERA',
         'android.permission.ACCESS_COARSE_LOCATION',
         'android.permission.ACCESS_FINE_LOCATION',
       ],
@@ -68,6 +98,7 @@ module.exports = () => ({
       'expo-location',
       'expo-notifications',
       'expo-document-picker',
+      'expo-image-picker',
       'expo-apple-authentication',
       'expo-task-manager',
       'expo-secure-store',
@@ -77,6 +108,10 @@ module.exports = () => ({
       // Expo CLI couldn't auto-add these to a dynamic app.config.js.
       'expo-splash-screen',
       'expo-web-browser',
+      // Required by expo-font and expo-router on the SDK-54-downgraded
+      // dependency set — same dynamic-config limitation as above.
+      'expo-font',
+      'expo-router',
       '@react-native-google-signin/google-signin',
       [
         'expo-build-properties',

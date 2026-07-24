@@ -834,6 +834,17 @@ async function migrate() {
     throw err;
   } finally {
     client16.release();
+  }
+
+  // ── v17 ────────────────────────────────────────────────────────────────────
+  const client17 = await pool.connect();
+  try {
+    await migrateV17(client17);
+  } catch (err) {
+    console.error('Migration v17 failed:', err.message);
+    throw err;
+  } finally {
+    client17.release();
     await pool.end();
   }
 
@@ -920,6 +931,19 @@ async function migrateV10(client) {
       `CREATE INDEX IF NOT EXISTS idx_driver_ratings_driver_id ON driver_ratings(driver_id)`
     );
 
+    // Separate from driver_ratings — rating Flash itself, not a specific
+    // delivery. No UNIQUE constraint (kept simple; the client only prompts
+    // once per device via AsyncStorage, this doesn't need to enforce it).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS app_ratings (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        rating     SMALLINT NOT NULL CHECK (rating BETWEEN 1 AND 5),
+        comment    TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     await client.query('COMMIT');
     console.log('Flash database migration v10 completed: driver_ratings table');
   } catch (err) {
@@ -992,6 +1016,10 @@ async function migrateV12(client) {
         updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    // Nullable — existing addresses saved before this fix just fall back to
+    // live GPS at checkout, same as they always have, until re-saved.
+    await client.query(`ALTER TABLE addresses ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION`);
+    await client.query(`ALTER TABLE addresses ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION`);
 
     await client.query(
       `CREATE INDEX IF NOT EXISTS idx_addresses_user ON addresses(user_id)`
@@ -1100,4 +1128,45 @@ async function migrateV16(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16 };
+// ─── v17: pickup/drop-off photo proof, and the pre-pickup cancellation
+// split's own audit columns. order_cancellation_store_shares is the explicit
+// multi-store extension point — one row per store today (store_id is always
+// NULL until multi-store orders exist), one row per store later, without
+// changing how a cancellation is recorded. ────────────────────────────────
+async function migrateV17(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_photo_public_id VARCHAR(255)`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_photo_resource_type VARCHAR(20)`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_photo_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS dropoff_photo_public_id VARCHAR(255)`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS dropoff_photo_resource_type VARCHAR(20)`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS dropoff_photo_at TIMESTAMPTZ`);
+
+    await client.query(`ALTER TABLE order_cancellations ADD COLUMN IF NOT EXISTS item_value_at_cancellation DECIMAL(10,2) NOT NULL DEFAULT 0`);
+    await client.query(`ALTER TABLE order_cancellations ADD COLUMN IF NOT EXISTS store_amount DECIMAL(10,2) NOT NULL DEFAULT 0`);
+    await client.query(`ALTER TABLE order_cancellations ADD COLUMN IF NOT EXISTS driver_amount DECIMAL(10,2) NOT NULL DEFAULT 0`);
+    await client.query(`ALTER TABLE order_cancellations ADD COLUMN IF NOT EXISTS customer_item_refund DECIMAL(10,2) NOT NULL DEFAULT 0`);
+    await client.query(`ALTER TABLE order_cancellations ADD COLUMN IF NOT EXISTS delivery_fee_refunded DECIMAL(10,2) NOT NULL DEFAULT 0`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS order_cancellation_store_shares (
+        id                     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        order_cancellation_id  UUID NOT NULL REFERENCES order_cancellations(id) ON DELETE CASCADE,
+        store_id               UUID,
+        amount                 DECIMAL(10,2) NOT NULL,
+        created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_cancellation_store_shares_cancellation_id ON order_cancellation_store_shares(order_cancellation_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v17 completed: pickup/dropoff photo columns, cancellation split columns + order_cancellation_store_shares');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v17 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17 };

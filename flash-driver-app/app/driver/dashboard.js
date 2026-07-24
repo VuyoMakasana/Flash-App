@@ -10,7 +10,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   Switch, Alert, RefreshControl, ActivityIndicator,
-  Vibration, TextInput, Platform, Linking,
+  Vibration, TextInput, Platform, Linking, Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -19,6 +19,7 @@ import driverApi, { BASE_URL } from '../../services/api';
 import { io } from 'socket.io-client';
 import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
+import * as ImagePicker from 'expo-image-picker';
 
 const STATUS_COLORS = {
   waiting_for_driver:  '#f59e0b',
@@ -57,17 +58,28 @@ const NEXT_LABEL = {
 // ── Navigation helpers (MEDIUM-1) ──────────────────────────────────────────
 /**
  * Open Google Maps (Android) or Apple Maps (iOS) with turn-by-turn directions
- * to the given address string. Falls back to a web Google Maps URL if the
+ * to the given coordinates. Falls back to a web Google Maps URL if the
  * native apps are unavailable.
+ *
+ * NAVIGATION FIX: this used to take a free-text address string
+ * (order.pickup_address / order.dropoff_address). order.pickup_address is
+ * never actually populated by the backend (Order.create() only ever sets
+ * pickup_lat/pickup_lng from the fixed FLASH_STORE_LOCATION, never a pickup
+ * address string) — confirmed live: every real order's pickup_address is
+ * null. Since the whole nav button was gated on `navAddress && (...)`, this
+ * meant "Navigate to Store" never actually appeared for a real order. Using
+ * lat/lng instead is also strictly more precise for the customer leg —
+ * dropoff_lat/dropoff_lng is the exact pin the customer dropped, whereas
+ * dropoff_address is free text that may not geocode to the same point.
  */
-function openNavigation(address) {
-  if (!address) return;
-  const encoded = encodeURIComponent(address);
+function openNavigation(lat, lng) {
+  if (lat == null || lng == null) return;
+  const destination = `${lat},${lng}`;
 
   // Google Maps deep link works on Android and iOS (if Google Maps installed)
-  const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=driving`;
+  const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
   // Apple Maps URL scheme (iOS only)
-  const appleUrl  = `maps:0,0?daddr=${encoded}`;
+  const appleUrl  = `maps:0,0?daddr=${destination}`;
 
   if (Platform.OS === 'ios') {
     // Try Apple Maps first on iOS
@@ -102,6 +114,8 @@ export default function DriverDashboard() {
   const [refreshing, setRefreshing]       = useState(false);
   const [togglingOnline, setTogglingOnline] = useState(false);
   const [otpLoading, setOtpLoading]       = useState(false);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [proofPhotos, setProofPhotos]       = useState(null);
   const [otpRequested, setOtpRequested]   = useState(false);
   const [otpValue, setOtpValue]           = useState('');
   const [sosSending, setSosSending]       = useState(false);
@@ -207,6 +221,16 @@ export default function DriverDashboard() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // Package protection — the driver's own reference/dispute protection for
+  // the photos they've already submitted on this order. Signed URLs are
+  // short-lived, so this always fetches fresh rather than caching.
+  useEffect(() => {
+    const id = activeOrder?.id;
+    const hasPhotos = ['picked_up', 'in_transit', 'delivered', 'completed'].includes(activeOrder?.status);
+    if (!id || !hasPhotos) { setProofPhotos(null); return; }
+    driverApi.orders.getPhotos(id).then(setProofPhotos).catch(() => {});
+  }, [activeOrder?.id, activeOrder?.status]);
+
   useEffect(() => {
     if (!token) return;
     (async () => {
@@ -285,6 +309,13 @@ export default function DriverDashboard() {
     if (!activeOrder) return;
     const nextStatus = NEXT_STATUS[activeOrder.status];
     if (!nextStatus) return;
+
+    // Package protection: advancing past driver_arrived_store (pickup) or
+    // in_transit (drop-off) requires a photo — handled by handleCapturePhoto,
+    // which uploads the photo and transitions the status in one request.
+    if (nextStatus === 'picked_up')  return handleCapturePhoto('pickup');
+    if (nextStatus === 'delivered')  return handleCapturePhoto('dropoff');
+
     try {
       await driverApi.orders.updateStatus(activeOrder.id, nextStatus);
       if (nextStatus === 'completed') {
@@ -300,10 +331,60 @@ export default function DriverDashboard() {
     }
   };
 
+  // ── Package protection: pickup/drop-off proof photo ─────────────────────
+  // One tap opens the live camera (never the photo library — an old photo
+  // would defeat the whole point of proof-of-pickup/delivery), and on
+  // capture immediately uploads it; the backend advances the order's status
+  // in that same request, so there's no separate "confirm" step.
+  const handleCapturePhoto = async (type) => {
+    if (!activeOrder || photoUploading) return;
+
+    const { status: permStatus } = await ImagePicker.requestCameraPermissionsAsync();
+    if (permStatus !== 'granted') {
+      Alert.alert('Camera access needed', 'Flash Driver needs camera access to take a pickup/drop-off proof photo.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 0.6,
+      exif: false,
+    });
+    if (result.canceled || !result.assets?.length) return;
+
+    const asset = result.assets[0];
+    const formData = new FormData();
+    formData.append('photo', {
+      uri:  asset.uri,
+      name: `${type}-${activeOrder.id}.jpg`,
+      type: 'image/jpeg',
+    });
+
+    setPhotoUploading(true);
+    try {
+      const submit = type === 'pickup'
+        ? driverApi.driver.submitPickupPhoto
+        : driverApi.driver.submitDropoffPhoto;
+      const data = await submit(activeOrder.id, formData);
+      await setActiveOrder({ ...activeOrder, status: data.status });
+    } catch (e) {
+      Alert.alert('Upload failed', e.message || 'Could not submit the photo. Please try again.');
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
   // ── Message customer ────────────────────────────────────────────────────
   const handleMessage = () => {
     if (!activeOrder) return;
     router.push({ pathname: '/driver/chat', params: { orderId: activeOrder.id } });
+  };
+
+  // ── Call customer ────────────────────────────────────────────────────────
+  // customer_phone is already returned by getActiveOrder — only ever exposed
+  // here, tied to a real active order, not a general customer lookup.
+  const handleCallCustomer = () => {
+    if (!activeOrder?.customer_phone) return;
+    Linking.openURL(`tel:${activeOrder.customer_phone}`).catch(() => {});
   };
 
   // ── SOS / safety button ───────────────────────────────────────────────────
@@ -396,11 +477,16 @@ export default function DriverDashboard() {
     .filter(o => new Date(o.created_at).toDateString() === new Date().toDateString())
     .reduce((sum, o) => sum + toNumber(o.driver_payout, 0), 0);
 
-  // Determine which address to show for navigation based on current status
-  const navAddress = activeOrder
+  // Determine which coordinates to navigate to based on current status —
+  // see openNavigation's comment for why this is lat/lng, not the
+  // (unreliable) address strings.
+  const navDestination = activeOrder
     ? ['driver_assigned', 'driver_arrived_store'].includes(activeOrder.status)
-      ? activeOrder.pickup_address
-      : activeOrder.dropoff_address
+      ? { lat: activeOrder.pickup_lat,  lng: activeOrder.pickup_lng }
+      : { lat: activeOrder.dropoff_lat, lng: activeOrder.dropoff_lng }
+    : null;
+  const navAddress = navDestination && navDestination.lat != null && navDestination.lng != null
+    ? navDestination
     : null;
 
   const navLabel = activeOrder
@@ -418,9 +504,9 @@ export default function DriverDashboard() {
       {/* ── HEADER ── */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.greeting}>Hey, {driver?.name?.split(' ')[0]} 👋</Text>
+          <Text style={styles.greeting}>Hey, {driver?.name?.split(' ')[0]}</Text>
           <Text style={styles.subGreeting}>
-            {isOnline ? '🟢 You are online' : '⚫ You are offline'}
+            {isOnline ? 'You are online' : 'You are offline'}
           </Text>
         </View>
         <View style={styles.headerActions}>
@@ -440,7 +526,7 @@ export default function DriverDashboard() {
       <View style={[styles.card, isOnline && styles.cardOnline]}>
         <View style={styles.row}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.cardTitle}>{isOnline ? '🟢 Online — Taking Orders' : '⚫ Offline'}</Text>
+            <Text style={styles.cardTitle}>{isOnline ? 'Online — Taking Orders' : 'Offline'}</Text>
             <Text style={styles.cardSub}>
               {subscriptionExpired
                 ? 'Buy a plan to go online'
@@ -578,18 +664,27 @@ export default function DriverDashboard() {
               )}
             </View>
 
-            {/* ── MEDIUM-1 FIX: Navigation button, plus a message-customer
-                button alongside it — the driver's only way to reach the
-                customer directly previously required a phone call. ── */}
+            {/* ── MEDIUM-1 FIX: Navigation button, plus message/call buttons
+                alongside it — the driver previously had no in-app way to
+                reach the customer at all. ── */}
             <View style={styles.actionRow}>
               {navAddress && (
                 <TouchableOpacity
                   style={[styles.navBtn, styles.navBtnFlex]}
-                  onPress={() => openNavigation(navAddress)}
+                  onPress={() => openNavigation(navAddress.lat, navAddress.lng)}
                   accessibilityLabel={navLabel}
                 >
                   <Ionicons name="navigate-outline" size={18} color="#0a0a0a" />
                   <Text style={styles.navBtnText}>{navLabel}</Text>
+                </TouchableOpacity>
+              )}
+              {activeOrder.customer_phone && (
+                <TouchableOpacity
+                  style={styles.messageBtn}
+                  onPress={handleCallCustomer}
+                  accessibilityLabel="Call customer"
+                >
+                  <Ionicons name="call" size={20} color="#f59e0b" />
                 </TouchableOpacity>
               )}
               <TouchableOpacity
@@ -601,24 +696,56 @@ export default function DriverDashboard() {
               </TouchableOpacity>
             </View>
 
-            {/* Status advance button — hidden at 'delivered' only for cash
-                orders, where the OTP block below takes over that step. A
-                blanket `!== 'delivered'` here previously hid this button for
-                EVERY order once delivered, including non-cash ones, which
-                have no other way to reach 'completed' — a dead end for the
-                majority of orders. */}
-            {NEXT_STATUS[activeOrder.status] &&
-              !(activeOrder.is_cash_delivery && activeOrder.status === 'delivered') && (
-              <TouchableOpacity style={styles.actionBtn} onPress={handleStatusUpdate}>
-                <Text style={styles.actionBtnText}>{NEXT_LABEL[activeOrder.status]}</Text>
+            {(proofPhotos?.pickupPhotoUrl || proofPhotos?.dropoffPhotoUrl) && (
+              <View style={styles.proofPhotosRow}>
+                {proofPhotos.pickupPhotoUrl && (
+                  <View style={styles.proofPhotoBox}>
+                    <Image source={{ uri: proofPhotos.pickupPhotoUrl }} style={styles.proofPhotoImg} />
+                    <Text style={styles.proofPhotoLabel}>Pickup proof</Text>
+                  </View>
+                )}
+                {proofPhotos.dropoffPhotoUrl && (
+                  <View style={styles.proofPhotoBox}>
+                    <Image source={{ uri: proofPhotos.dropoffPhotoUrl }} style={styles.proofPhotoImg} />
+                    <Text style={styles.proofPhotoLabel}>Drop-off proof</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {/* Status advance button — hidden at 'delivered' for EVERY order
+                now, not just cash. PACKAGE PROTECTION FIX: card orders used
+                to have no equivalent to the cash OTP step at all — a driver
+                could tap straight through to 'completed' with zero customer
+                confirmation. The OTP block below now handles delivered ->
+                completed for both payment methods. Also disabled while a
+                pickup/drop-off photo is uploading (driver_arrived_store /
+                in_transit steps route through handleCapturePhoto instead of
+                calling this directly — see handleStatusUpdate). */}
+            {NEXT_STATUS[activeOrder.status] && activeOrder.status !== 'delivered' && (
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={handleStatusUpdate}
+                disabled={photoUploading}
+              >
+                {photoUploading
+                  ? <ActivityIndicator color="#0a0a0a" />
+                  : <Text style={styles.actionBtnText}>{NEXT_LABEL[activeOrder.status]}</Text>
+                }
               </TouchableOpacity>
             )}
 
-            {/* Cash OTP flow */}
-            {activeOrder.is_cash_delivery && activeOrder.status === 'delivered' && (
+            {/* Delivery confirmation OTP — shared by cash and card orders */}
+            {activeOrder.status === 'delivered' && (
               <View style={styles.otpContainer}>
-                <Text style={styles.otpTitle}>💵 Collect Cash Payment</Text>
-                <Text style={styles.otpSubtitle}>Send the customer a one-time code, then enter it here to confirm you received cash.</Text>
+                <Text style={styles.otpTitle}>
+                  {activeOrder.is_cash_delivery ? 'Collect Cash Payment' : 'Confirm Delivery'}
+                </Text>
+                <Text style={styles.otpSubtitle}>
+                  {activeOrder.is_cash_delivery
+                    ? 'Send the customer a one-time code, then enter it here to confirm you received cash.'
+                    : 'Send the customer a one-time code, then enter it here once they confirm they received their order.'}
+                </Text>
 
                 {!otpRequested ? (
                   <TouchableOpacity
@@ -628,7 +755,9 @@ export default function DriverDashboard() {
                   >
                     {otpLoading
                       ? <ActivityIndicator color="#0a0a0a" />
-                      : <Text style={styles.otpBtnText}>Send Cash OTP to Customer</Text>
+                      : <Text style={styles.otpBtnText}>
+                          {activeOrder.is_cash_delivery ? 'Send Cash OTP to Customer' : 'Send Delivery OTP to Customer'}
+                        </Text>
                     }
                   </TouchableOpacity>
                 ) : (
@@ -657,7 +786,9 @@ export default function DriverDashboard() {
                       >
                         {otpLoading
                           ? <ActivityIndicator color="#fff" />
-                          : <Text style={styles.otpConfirmBtnText}>Confirm Cash Received</Text>
+                          : <Text style={styles.otpConfirmBtnText}>
+                              {activeOrder.is_cash_delivery ? 'Confirm Cash Received' : 'Confirm Delivery'}
+                            </Text>
                         }
                       </TouchableOpacity>
                     </View>
@@ -870,6 +1001,10 @@ const styles = StyleSheet.create({
   quickActions:       { flexDirection: 'row', marginHorizontal: 16, gap: 10 },
   quickBtn:           { flex: 1, backgroundColor: '#1a1a1a', borderRadius: 14, padding: 14, alignItems: 'center', gap: 6 },
   quickBtnText:       { color: '#9ca3af', fontSize: 11, fontWeight: '500' },
+  proofPhotosRow:     { flexDirection: 'row', gap: 12, marginTop: 8 },
+  proofPhotoBox:      { alignItems: 'center', gap: 4 },
+  proofPhotoImg:      { width: 90, height: 90, borderRadius: 10, backgroundColor: '#1a1a1a' },
+  proofPhotoLabel:    { color: '#9ca3af', fontSize: 10, fontWeight: '600' },
   otpContainer:       { marginTop: 8, backgroundColor: '#0d1e0d', borderRadius: 12, padding: 14, borderColor: '#10b981', borderWidth: 1, gap: 10 },
   otpTitle:           { color: '#10b981', fontWeight: '700', fontSize: 14 },
   otpSubtitle:        { color: '#6b7280', fontSize: 12 },
