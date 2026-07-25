@@ -1,4 +1,5 @@
 const Boost = require("../models/Boost");
+const AdminAction = require("../models/AdminAction");
 
 class BoostController {
   static async getActiveBoosts(req, res) {
@@ -25,6 +26,7 @@ class BoostController {
     const { storeId, storeName, boostType } = req.body;
     try {
       const boost = await Boost.purchaseBoost(storeId, storeName, boostType);
+      AdminAction.log(req.userId, "boost_purchase", "store_boosts", boost.boost?.id, { storeId, storeName, boostType });
       res.status(201).json(boost);
     } catch (err) {
       if (err.message === "Invalid boost type") {
@@ -50,6 +52,7 @@ class BoostController {
         discountPercent,
         durationDays,
       );
+      AdminAction.log(req.userId, "promotion_create", "store_promotions", promotion.id, { storeId, title, discountPercent });
       res.status(201).json({ promotion });
     } catch (err) {
       console.error("[Boost] createPromotion error:", err.message);

@@ -1,6 +1,6 @@
 const jwt   = require("jsonwebtoken");
 const pool  = require("../config/database");
-const { getRequired } = require("../config/env");
+const { getRequired, getOptional } = require("../config/env");
 
 // ─── AUTHENTICATE ────────────────────────────────────────────────────────────
 // Verifies the short-lived access token (15 min).
@@ -17,11 +17,32 @@ const authenticate = async (req, res, next) => {
     const jwtSecret = getRequired("JWT_SECRET", "auth");
     decoded = jwt.verify(token, jwtSecret);
   } catch (err) {
-    if (err.name === "TokenExpiredError")
+    // ADMIN_JWT_SECRET FIX (docs/audits/ADMIN_PANEL_AUDIT_AND_VISION.md,
+    // Addendum 2 §0): admin tokens are now signed with their own secret,
+    // separate from the shared user/driver one — a real, cheap isolation
+    // improvement. Verifying a correctly-signed admin token against the
+    // wrong (user/driver) secret always fails with "invalid signature"
+    // (JsonWebTokenError) regardless of expiry, so only retry on that
+    // specific error — a genuine TokenExpiredError from the first attempt
+    // must still be reported as expired, not masked by a second attempt.
+    if (err.name === "JsonWebTokenError") {
+      const adminJwtSecret = getOptional("ADMIN_JWT_SECRET", "auth");
+      if (adminJwtSecret) {
+        try {
+          decoded = jwt.verify(token, adminJwtSecret);
+        } catch (adminErr) {
+          if (adminErr.name === "TokenExpiredError")
+            return res.status(401).json({ error: "TOKEN_EXPIRED" });
+          return res.status(401).json({ error: "Invalid token" });
+        }
+      } else {
+        return res.status(401).json({ error: "Invalid token" });
+      }
+    } else if (err.name === "TokenExpiredError") {
       return res.status(401).json({ error: "TOKEN_EXPIRED" });
-    if (err.name === "JsonWebTokenError")
-      return res.status(401).json({ error: "Invalid token" });
-    return res.status(401).json({ error: "Authentication failed" });
+    } else {
+      return res.status(401).json({ error: "Authentication failed" });
+    }
   }
 
   // CRITICAL FIX: the revocation check below used to share the try/catch

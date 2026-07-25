@@ -2,6 +2,12 @@ const BaseModel = require("./BaseModel");
 const s3Service = require("../services/s3Service");
 
 class Admin extends BaseModel {
+  // Phase 0: individual admin accounts (docs/audits/ADMIN_PANEL_AUDIT_AND_VISION.md).
+  static async findByEmail(email) {
+    const result = await this.query("SELECT * FROM admins WHERE email=$1", [email]);
+    return result.rows[0] || null;
+  }
+
   static async getDrivers(status = null) {
     const query = status
       ? "SELECT id, name, email, phone, vehicle_type, status, created_at FROM drivers WHERE status=$1 ORDER BY created_at DESC"

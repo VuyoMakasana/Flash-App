@@ -1,4 +1,5 @@
 const Inventory = require("../models/Inventory");
+const AdminAction = require("../models/AdminAction");
 const { clearCache } = require("../middleware/cache");
 const FLASH_STORE_ID = "flash_closet";
 
@@ -57,6 +58,7 @@ class InventoryController {
         description,
       });
       await clearCache("cache:*/inventory*");
+      AdminAction.log(req.userId, "inventory_add_product", "flash_inventory", product.id, { product_name });
       res.status(201).json({ product });
     } catch (err) {
       console.error("[Inventory] addProduct error:", err.message);
@@ -73,6 +75,7 @@ class InventoryController {
         return res.status(404).json({ error: "Product not found" });
       }
       await clearCache("cache:*/inventory*");
+      AdminAction.log(req.userId, "inventory_update_stock", "flash_inventory", productId, { stock_by_size });
       res.json({ product });
     } catch (err) {
       console.error("[Inventory] updateStock error:", err.message);
@@ -85,6 +88,7 @@ class InventoryController {
     try {
       await Inventory.deleteProduct(productId);
       await clearCache("cache:*/inventory*");
+      AdminAction.log(req.userId, "inventory_delete_product", "flash_inventory", productId);
       res.json({ success: true });
     } catch (err) {
       console.error("[Inventory] deleteProduct error:", err.message);
