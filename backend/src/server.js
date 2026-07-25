@@ -143,6 +143,24 @@ function createApp() {
 // JSON for Payflex) so we mount the router directly without global raw parsing.
   app.use("/api/webhooks", webhookRoutes);
 
+// Admin panel (AdminJS) mount point — same reason as webhooks immediately
+// above: AdminJS's own login form uses express-formidable to read the raw
+// request body itself, which fails once the global express.json() below has
+// already consumed it (confirmed live: "You probably used old body-parser
+// middleware, which is not compatible with @adminjs/express" — AdminJS's own
+// error message for exactly this ordering mistake). Registered as an empty
+// placeholder router here, before the global body parser AND before
+// notFound/errorHandler; routes added to this same router object later
+// (once startServer()'s async mountAdminPanel() finishes) are reachable
+// immediately, since Express resolves a mounted router's contents at
+// request time, not at mount time — this doesn't require createApp()
+// itself to become async. Anything hitting /admin-panel before that
+// finishes (or in a test/mock-server context that never calls
+// mountAdminPanel at all) correctly falls through to notFound, same as today.
+  const adminPanelRouter = express.Router();
+  app.locals.adminPanelRouter = adminPanelRouter;
+  app.use("/admin-panel", adminPanelRouter);
+
 // Body parsing
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true }));
@@ -556,6 +574,18 @@ function startServer() {
     console.log(` Socket.IO ready for real-time events`);
     console.log(`Server is running!\n`);
   });
+
+  // Fire-and-forget, mounted onto the already-running app — Express allows
+  // routes to be added after listen() starts, so this never blocks or delays
+  // server startup. Deliberately not awaited here: createApp()/startServer()
+  // both stay synchronous (tests and mock-server depend on createApp()'s
+  // existing contract), and a failure here must never crash the real server —
+  // same "log loudly, don't take the process down" standard as the cron jobs.
+  const { mountAdminPanel } = require("./adminPanel");
+  mountAdminPanel(app).catch((err) => {
+    console.error("[AdminPanel] Failed to mount:", err.message);
+  });
+
   return { app, server, io };
 }
 

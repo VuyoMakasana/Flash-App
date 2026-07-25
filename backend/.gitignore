@@ -4,3 +4,7 @@ dist/
 *.log
 logs/*.log
 coverage/
+
+# AdminJS's own generated frontend bundle — regenerated automatically on
+# every server start, not source, same category as node_modules/dist.
+.adminjs/
