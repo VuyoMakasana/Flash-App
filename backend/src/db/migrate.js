@@ -845,6 +845,17 @@ async function migrate() {
     throw err;
   } finally {
     client17.release();
+  }
+
+  // ── v18 ────────────────────────────────────────────────────────────────────
+  const client18 = await pool.connect();
+  try {
+    await migrateV18(client18);
+  } catch (err) {
+    console.error('Migration v18 failed:', err.message);
+    throw err;
+  } finally {
+    client18.release();
     await pool.end();
   }
 
@@ -1169,4 +1180,53 @@ async function migrateV17(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17 };
+// ─── v18: real individual admin accounts + admin action audit log ───────────
+// Admin panel Phase 0 (docs/audits/ADMIN_PANEL_AUDIT_AND_VISION.md). Replaces
+// the single shared ADMIN_EMAIL/ADMIN_PASSWORD_HASH identity with real rows,
+// same shape as users/drivers (id, name, email UNIQUE, password_hash, phone
+// nullable, created_at/updated_at). `role` exists from day one — every row
+// defaults to 'admin' today — so a future distinction (e.g. a read-only
+// support role) is a data change later, not a schema migration.
+// admin_actions is the audit trail the doc named as directly connected to
+// this same table: append-only, same shape as driver_wallet_ledger, one row
+// per real admin-mutating action (approve/reject a return, update a driver's
+// status, etc.) — never updated or deleted after insert.
+async function migrateV18(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admins (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name          VARCHAR(255) NOT NULL,
+        email         VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        phone         VARCHAR(50),
+        role          VARCHAR(20) NOT NULL DEFAULT 'admin',
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_actions (
+        id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        admin_id     UUID NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+        action_type  VARCHAR(50) NOT NULL,
+        target_table VARCHAR(50),
+        target_id    UUID,
+        metadata     JSONB,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_admin_actions_admin_id ON admin_actions(admin_id, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v18 completed: admins + admin_actions tables');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v18 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18 };
