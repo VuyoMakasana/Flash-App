@@ -86,9 +86,24 @@ async function mountAdminPanel(app) {
   // `private` doesn't survive to compiled JS) — so mutating it directly,
   // before the resource is ever handed to AdminJS's constructor, is the one
   // approach that actually reaches the value reference() reads from.
+  //
+  // FOUND LIVE, MISSED THE FIRST TIME: nulling _referencedTable alone stops
+  // the backend populator from crashing, but the frontend still rendered a
+  // broken "property: user_id does not have a reference" error box in the
+  // list view. Root cause, confirmed by reading postgres.parser.js directly:
+  // `type: column.referenced_table ? 'reference' : getColumnType(...)` is
+  // set once at construction, independent of _referencedTable — so the
+  // property's type() still reported 'reference' regardless, and the
+  // frontend picks its rendering component from type(), not from
+  // reference(). type() reads from BaseProperty._type (adminjs core,
+  // base-property.js) — same plain-JS-property situation, same fix: also
+  // override that directly, not just the adapter-level reference field.
   function suppressReference(resourceMetadata, propertyName) {
     const prop = resourceMetadata.properties.find((p) => p.name() === propertyName);
-    if (prop) prop._referencedTable = null;
+    if (prop) {
+      prop._referencedTable = null;
+      prop._type = 'string';
+    }
     return resourceMetadata;
   }
 
