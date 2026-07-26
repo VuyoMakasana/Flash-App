@@ -20,6 +20,11 @@ const bcrypt = require('bcryptjs');
 const Admin = require('./models/Admin');
 const AdminAction = require('./models/AdminAction');
 const Return = require('./models/Return');
+// Named pgPool, deliberately not db — mountAdminPanel already has a local
+// `db` variable for the @adminjs/sql adapter; reusing that name here for an
+// unrelated plain pg Pool would be exactly the kind of mistake worth
+// avoiding on purpose, not by luck.
+const pgPool = require('./config/database');
 
 const ADMIN_PANEL_PATH = '/admin-panel';
 
@@ -260,6 +265,31 @@ async function mountAdminPanel(app) {
         },
       },
     ],
+    // No custom frontend component registered — that needs AdminJS's
+    // component-loader/bundling system, unproven in this exact setup, and
+    // not worth the added risk this late without a separately-verified
+    // pass. This still returns real, correct data via
+    // GET /admin-panel/api/dashboard (callable directly, and picked up by
+    // AdminJS's own default dashboard view) — the getStats() numbers plus
+    // the one new query Phase 1's own plan named explicitly: a live
+    // active-orders-by-status breakdown.
+    dashboard: {
+      handler: async () => {
+        const stats = await Admin.getStats();
+        const statusBreakdown = await pgPool.query(
+          `SELECT status, COUNT(*) as count FROM orders
+           WHERE status NOT IN ('completed', 'cancelled')
+           GROUP BY status ORDER BY count DESC`,
+        );
+        return {
+          ...stats,
+          activeOrdersByStatus: statusBreakdown.rows.map((r) => ({
+            status: r.status,
+            count: parseInt(r.count, 10),
+          })),
+        };
+      },
+    },
   });
 
   // Reuses the exact same check as the real /api/admin/login (Admin.findByEmail
