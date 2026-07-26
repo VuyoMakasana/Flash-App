@@ -30,23 +30,138 @@ const ADMIN_PANEL_PATH = '/admin-panel';
 
 // Real observed response shape (confirmed live against the running mount,
 // not assumed from AdminJS's own generic docs example): list responses are
-// { records: [{ params: {...} }] }, show/edit responses are { record: { params: {...} } }.
-// Factory, not a single hardcoded field list — drivers needs password_hash
-// stripped, orders needs the two cash_otp fields stripped, each resource
-// gets its own instance of this rather than one shared, field-specific function.
+// { records: [{ params: {...}, populated: {...} }] }, show/edit responses
+// are { record: { params: {...}, populated: {...} } }.
+//
+// FOUND LIVE while verifying the display-cleanup work below (adding
+// titleProperty to drivers/orders so references show real names instead of
+// raw UUIDs — see suppressReference's neighbors further down): AdminJS's
+// own reference-populator embeds the FULL referenced record — including its
+// raw, unstripped params — under record.populated[path]. That means once
+// orders.driver_id (or return_requests.driver_id, or anything referencing
+// drivers) started resolving to a real driver record, the driver's actual
+// bcrypt password_hash rode along inside orders'/return_requests' own
+// list/show responses, completely bypassing the stripping this function
+// already did for drivers' OWN direct responses. Same risk for orders'
+// cash_otp_hash/cash_otp_plain riding along inside order_cancellations' and
+// return_requests' responses via their order_id reference. Fixed by
+// recursing into record.populated so a single call covers a record's own
+// fields AND anything pulled in through any reference, at any depth.
 function stripFields(fieldNames) {
+  function stripFromRecord(record) {
+    if (!record) return;
+    if (record.params) fieldNames.forEach((f) => delete record.params[f]);
+    if (record.populated) Object.values(record.populated).forEach(stripFromRecord);
+  }
   return function (response) {
-    if (response.record?.params) {
-      fieldNames.forEach((f) => delete response.record.params[f]);
-    }
-    if (Array.isArray(response.records)) {
-      response.records.forEach((r) => {
-        if (r.params) fieldNames.forEach((f) => delete r.params[f]);
-      });
-    }
+    stripFromRecord(response.record);
+    if (Array.isArray(response.records)) response.records.forEach(stripFromRecord);
     return response;
   };
 }
+
+// Single shared list, applied on every resource's list/show (and any custom
+// action that returns a record) — deliberately not per-resource anymore.
+// Given the populated-record leak above, ANY resource that references
+// drivers or orders can carry these fields in, regardless of whether that
+// resource "owns" the field itself — a shared list applied everywhere is
+// the only way to be sure none of the four resources can leak one of these
+// by way of a reference someone adds later.
+const SENSITIVE_FIELDS = ['password_hash', 'cash_otp_hash', 'cash_otp_plain'];
+const stripSensitive = stripFields(SENSITIVE_FIELDS);
+
+// @adminjs/sql's own introspection never returns a "users" table at all
+// (confirmed live — 46 tables discovered, users absent; the real cause,
+// found while investigating this fix: information_schema.columns has TWO
+// tables named "users" in this database — public.users (the real app
+// table) and auth.users (Supabase-managed) — and the adapter's own
+// unqualified-by-schema queries return "more than one row" for any table
+// name that collides across schemas, so it silently drops them). That
+// means user_id/cancelled_by_id can never be a real AdminJS reference —
+// only a plain UUID column. To still show a real name instead of a bare
+// UUID in the list view (per the founder's explicit ask), this resolves
+// the raw ids in a page of list results directly against the real
+// public.users table (one batched query per page, not one query per row)
+// and overwrites the displayed value. Deliberately applied to `list`
+// only, never `show` — the founder explicitly asked for raw IDs to stay
+// available in the detail view for anyone who needs them.
+function attachUserNames(fieldName) {
+  return async function (response) {
+    const records = response.records;
+    if (!Array.isArray(records) || records.length === 0) return response;
+    const ids = [...new Set(records.map((r) => r.params?.[fieldName]).filter(Boolean))];
+    if (ids.length === 0) return response;
+    const { rows } = await pgPool.query(
+      'SELECT id, name, phone FROM public.users WHERE id = ANY($1::uuid[])',
+      [ids],
+    );
+    const byId = new Map(rows.map((u) => [u.id, u]));
+    records.forEach((r) => {
+      const rawId = r.params?.[fieldName];
+      const user = rawId && byId.get(rawId);
+      if (user && r.params && user.name) {
+        r.params[fieldName] = user.phone ? `${user.name} — ${user.phone}` : user.name;
+      }
+    });
+    return response;
+  };
+}
+
+// Real enum values, confirmed by reading the actual source of truth for
+// each — not guessed. Orders: orderStateMachineService.js's ORDER_STATES.
+// Drivers: the literal status strings assigned in models/Driver.js.
+// Returns: the literal status strings assigned in models/Return.js.
+// Order cancellations: the literal refundMode/cancelled_by_role strings
+// assigned in controllers/orderController.js + server.js's timeout job.
+// AdminJS renders any property with matching availableValues as a real
+// styled Badge component automatically (confirmed by reading
+// default-property-value.js) — no custom frontend component needed.
+const ORDER_STATUS_VALUES = [
+  { value: 'created', label: 'Created' },
+  { value: 'payment_pending', label: 'Payment Pending' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'scheduled_for_morning', label: 'Scheduled For Morning' },
+  { value: 'waiting_for_driver', label: 'Waiting For Driver' },
+  { value: 'driver_assigned', label: 'Driver Assigned' },
+  { value: 'driver_arrived_store', label: 'Driver Arrived At Store' },
+  { value: 'picked_up', label: 'Picked Up' },
+  { value: 'in_transit', label: 'In Transit' },
+  { value: 'delivered', label: 'Delivered' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'cancelled', label: 'Cancelled' },
+];
+
+const DRIVER_STATUS_VALUES = [
+  { value: 'pending_documents', label: 'Pending Documents' },
+  { value: 'documents_submitted', label: 'Documents Submitted' },
+  { value: 'under_review', label: 'Under Review' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'suspended', label: 'Suspended' },
+];
+
+const RETURN_STATUS_VALUES = [
+  { value: 'requested', label: 'Requested' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'refunded', label: 'Refunded' },
+];
+
+const REFUND_MODE_VALUES = [
+  { value: 'none', label: 'No Refund' },
+  { value: 'full_refund', label: 'Full Refund' },
+  { value: 'pre_pickup_split', label: 'Pre-Pickup Split' },
+  { value: 'store_refund_no_delivery_refund', label: 'Store Refund (No Delivery Refund)' },
+  // Legacy value, found live in real historical data — predates the
+  // pre_pickup_split rename. Kept here purely so old rows still get a
+  // readable badge instead of falling through to the raw string.
+  { value: 'store_refund_keep_delivery', label: 'Store Refund (Legacy — Delivery Fee Kept)' },
+];
+
+const CANCELLED_BY_ROLE_VALUES = [
+  { value: 'user', label: 'Customer' },
+  { value: 'system', label: 'System (Auto-Cancelled)' },
+];
 
 async function mountAdminPanel(app) {
   const AdminJSModule = require('adminjs');
@@ -61,9 +176,6 @@ async function mountAdminPanel(app) {
     connectionString: process.env.DATABASE_URL,
     database: dbName,
   }).init();
-
-  const stripPasswordHash = stripFields(['password_hash']);
-  const stripCashOtp = stripFields(['cash_otp_hash', 'cash_otp_plain']);
 
   // @adminjs/sql auto-detects the user_id foreign key on orders/return_requests
   // and tries to populate it as a reference to a "users" resource — found
@@ -121,6 +233,23 @@ async function mountAdminPanel(app) {
       {
         resource: db.table('drivers'),
         options: {
+          // titleProperty controls two things at once, both confirmed by
+          // reading resource-decorator.js directly: (1) which column AdminJS
+          // treats as this resource's "title" in its own breadcrumbs, and
+          // (2) — the part that matters here — what text ANY reference to
+          // this resource displays elsewhere (orders.driver_id,
+          // return_requests.driver_id). Without this, AdminJS falls back to
+          // the first property (the raw `id` UUID) as the title, so every
+          // reference to a driver would show a bare UUID as its link text.
+          titleProperty: 'name',
+          // Explicit column set/order for the list view — real, human-facing
+          // fields first, raw UUID (`id`) and other technical fields (push
+          // tokens, lat/lng, paystack codes) omitted entirely from the list.
+          // Nothing here removes them from the detail view — `showProperties`
+          // is left at its default (every real column), so raw IDs and every
+          // other field stay available to anyone who opens a driver's detail
+          // page, per the founder's explicit instruction.
+          listProperties: ['name', 'email', 'phone', 'status', 'vehicle_type', 'rating', 'created_at'],
           // isVisible: false only hides the field in the rendered UI — confirmed
           // live: the raw list API response still included the real bcrypt hash
           // in plain text over the wire. AdminJS's own documented fix for
@@ -138,12 +267,12 @@ async function mountAdminPanel(app) {
             // from the edit form (not just making the whole resource
             // read-only, since name/phone edits are harmless) forces status
             // changes through the two real actions below instead.
-            status: { isVisible: { edit: false } },
+            status: { isVisible: { edit: false }, availableValues: DRIVER_STATUS_VALUES },
           },
           actions: {
-            list: { after: [stripPasswordHash] },
-            show: { after: [stripPasswordHash] },
-            edit: { after: [stripPasswordHash] },
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            edit: { after: [stripSensitive] },
             approveDriver: {
               actionType: 'record',
               component: false,
@@ -152,7 +281,7 @@ async function mountAdminPanel(app) {
               // list/show/edit): a custom action's response isn't covered
               // by those hooks automatically — this leaked the real bcrypt
               // hash in plain text over the wire until caught here.
-              after: [stripPasswordHash],
+              after: [stripSensitive],
               handler: async (request, response, context) => {
                 const { record, currentAdmin } = context;
                 await Admin.updateDriverStatus(record.id(), 'approved');
@@ -165,7 +294,7 @@ async function mountAdminPanel(app) {
               actionType: 'record',
               component: false,
               guard: 'Reject this driver?',
-              after: [stripPasswordHash],
+              after: [stripSensitive],
               handler: async (request, response, context) => {
                 const { record, currentAdmin } = context;
                 await Admin.updateDriverStatus(record.id(), 'rejected');
@@ -180,13 +309,25 @@ async function mountAdminPanel(app) {
       {
         resource: suppressReference(db.table('orders'), 'user_id'),
         options: {
+          // Same reasoning as drivers' titleProperty above: makes every
+          // reference TO orders (order_cancellations.order_id,
+          // return_requests.order_id) display the real, human-facing order
+          // number instead of a raw UUID, and makes order_number (not `id`)
+          // the primary/title column for orders itself.
+          titleProperty: 'order_number',
+          listProperties: ['order_number', 'user_id', 'driver_id', 'status', 'payment_method', 'total', 'created_at'],
           properties: {
             cash_otp_hash: { isVisible: false },
             cash_otp_plain: { isVisible: false },
+            status: { availableValues: ORDER_STATUS_VALUES },
+            payment_method: { availableValues: [{ value: 'cash', label: 'Cash' }, { value: 'card', label: 'Card' }] },
           },
           actions: {
-            list: { after: [stripCashOtp] },
-            show: { after: [stripCashOtp] },
+            // attachUserNames only on `list` — show intentionally keeps the
+            // raw user_id UUID untouched, per the founder's explicit ask to
+            // keep raw IDs available in the detail view.
+            list: { after: [stripSensitive, attachUserNames('user_id')] },
+            show: { after: [stripSensitive] },
             // Read-only — orders are created and mutated through the real
             // app/driver flows and the order state machine
             // (orderStateMachineService.js), never by an admin editing a row
@@ -202,10 +343,28 @@ async function mountAdminPanel(app) {
       {
         resource: db.table('order_cancellations'),
         options: {
+          listProperties: [
+            'order_id', 'cancelled_by_role', 'cancelled_by_id', 'reason',
+            'refund_mode', 'store_amount', 'driver_amount', 'created_at',
+          ],
+          properties: {
+            refund_mode: { availableValues: REFUND_MODE_VALUES },
+            cancelled_by_role: { availableValues: CANCELLED_BY_ROLE_VALUES },
+          },
           // Fully read-only — this table is a record of what already
           // happened (real money already split at cancellation time,
           // orderController.cancelOrder), not something an admin edits.
           actions: {
+            // cancelled_by_id is only ever a real users.id when
+            // cancelled_by_role is 'user' (confirmed by reading the actual
+            // INSERT statements in orderController.js/server.js — the
+            // 'system' auto-cancel path never sets this column) —
+            // attachUserNames is null-safe, so it's fine to apply
+            // unconditionally. stripSensitive covers the populated order_id
+            // -> orders sub-record, which otherwise carries orders'
+            // cash_otp_hash/cash_otp_plain along for the ride.
+            list: { after: [attachUserNames('cancelled_by_id'), stripSensitive] },
+            show: { after: [stripSensitive] },
             edit: { isAccessible: false },
             new: { isAccessible: false },
             delete: { isAccessible: false },
@@ -216,7 +375,17 @@ async function mountAdminPanel(app) {
       {
         resource: suppressReference(db.table('return_requests'), 'user_id'),
         options: {
+          listProperties: ['order_id', 'user_id', 'driver_id', 'status', 'reason', 'refund_amount', 'credit_amount', 'created_at'],
+          properties: {
+            status: { availableValues: RETURN_STATUS_VALUES },
+          },
           actions: {
+            // Same as orders — attachUserNames only on `list`, show keeps
+            // the raw user_id UUID for anyone who needs it. stripSensitive
+            // covers the populated driver_id -> drivers (password_hash) and
+            // order_id -> orders (cash_otp_hash/cash_otp_plain) sub-records.
+            list: { after: [attachUserNames('user_id'), stripSensitive] },
+            show: { after: [stripSensitive] },
             // Generic new/edit/delete disabled — every real mutation on a
             // return goes through the three actions below, which call the
             // exact same Return.js model methods the JSON API's
