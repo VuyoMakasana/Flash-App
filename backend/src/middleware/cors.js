@@ -5,7 +5,16 @@ const { isProd, isDev } = require("../config/env");
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps, curl, Postman, etc.)
-    if (!origin) return callback(null, true);
+    // — and the literal string "null", which is JS-truthy so !origin alone
+    // never caught it. Confirmed live (2026-07-26), not assumed: browsers
+    // send this exact string, not a missing header, for certain requests —
+    // reproduced consistently on AdminJS's own bundled-frontend login POST
+    // to /admin-panel/login. A real, legitimate value browsers send under
+    // specific privacy/security conditions, not an attacker-controlled
+    // header (an actual malicious cross-origin request carries a real
+    // origin, not the sentinel string), so treating it the same as no
+    // origin at all is the standard, safe pattern for this.
+    if (!origin || origin === 'null') return callback(null, true);
 
     let allowedOrigins = [];
 
