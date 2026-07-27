@@ -1,0 +1,23 @@
+/* Flash admin panel — explicit logo-size override.
+ *
+ * AdminJS's own built-in caps (login: max-width 200px, sidebar: max-width
+ * 170px — confirmed by reading login/index.js and sidebar-branding.js
+ * directly) only constrain width, not height. Against a square source
+ * image that meant the logo rendered up to 200x200/170x170 in practice —
+ * a large square block dominating the login panel and pushing the sidebar
+ * nav links down, not a compact header mark. Resizing the source image
+ * alone helps but doesn't guarantee an exact final size; this forces a
+ * real, deterministic small size in both spots regardless of source image
+ * dimensions or any future change to AdminJS's own internal caps.
+ *
+ * Selector: both the login and sidebar logo <img> tags render with
+ * alt={branding.companyName} ("Flash", confirmed in both components'
+ * source) — a stable, guaranteed hook, unlike styled-components' own
+ * generated class names, which aren't meant to be targeted externally.
+ */
+img[alt="Flash"] {
+  height: 40px !important;
+  max-height: 40px !important;
+  width: auto !important;
+  max-width: 120px !important;
+}

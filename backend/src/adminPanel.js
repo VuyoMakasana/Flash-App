@@ -384,6 +384,20 @@ async function mountAdminPanel(app) {
         },
       },
     },
+    // FOUND LIVE via real screenshots (not caught by the earlier HTML-only
+    // verification pass): AdminJS's own logo caps (login: max-width 200px,
+    // sidebar: max-width 170px) only constrain width, not height. Against
+    // the square source image that meant it rendered up to 200x200/170x170
+    // in practice -- a large square block, not a compact header mark.
+    // assets.styles is AdminJS's own real, documented mechanism for
+    // appending a stylesheet to <head> (AdminJSOptions.assets, confirmed
+    // directly) -- used here instead of any DOM/compiled-output hacking to
+    // force a deterministic, genuinely small logo size in both spots. See
+    // admin-branding.css for the exact rule and why alt="Flash" is the
+    // selector.
+    assets: {
+      styles: [`${ADMIN_PANEL_PATH}/assets/admin-branding.css`],
+    },
     // loginPath/logoutPath do NOT derive from rootPath — confirmed directly
     // against adminjs's own type definitions (adminjs-options.interface.d.ts),
     // not assumed. Left unset, they default to /admin/login and /admin/logout
