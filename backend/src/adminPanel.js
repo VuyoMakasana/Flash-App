@@ -1149,6 +1149,21 @@ async function mountAdminPanel(app) {
     'FinanceDashboard',
     require('path').join(__dirname, 'adminComponents', 'FinanceDashboard.jsx'),
   );
+  // Phase 4 -- individual user lookup and the Flash Fleet demand-cluster
+  // view. Both are real AdminJS "pages" (AdminJSOptions.pages, confirmed
+  // directly, not assumed), not resources -- neither is backed by a single
+  // browsable table (user lookup is search-then-view; fleet clusters is a
+  // computed aggregate), so the chronological-sort helper's "resource" model
+  // genuinely doesn't apply to either -- a page has no list/sort concept at
+  // all, confirmed by reading AdminPage's own type.
+  const userLookupComponent = componentLoader.add(
+    'UserLookup',
+    path.join(__dirname, 'adminComponents', 'UserLookup.jsx'),
+  );
+  const fleetClustersComponent = componentLoader.add(
+    'FleetClusters',
+    path.join(__dirname, 'adminComponents', 'FleetClusters.jsx'),
+  );
 
   const dbName = new URL(process.env.DATABASE_URL).pathname.replace(/^\//, '');
   const db = await new Adapter('postgresql', {
@@ -1233,6 +1248,40 @@ async function mountAdminPanel(app) {
           dailyTrends,
           ratingTrend,
         };
+      },
+    },
+    pages: {
+      userLookup: {
+        label: 'User Lookup',
+        icon: 'User',
+        component: userLookupComponent,
+        // request.query -- the same real object a dashboard handler
+        // receives, confirmed via PageHandler's own type
+        // (adminjs-options.interface.d.ts: (request, response, context) =>
+        // Promise<any>) -- carries whatever the frontend's ApiClient.getPage
+        // call passed as `params`.
+        handler: async (request) => {
+          const { q, userId } = request.query || {};
+          if (userId) {
+            return { profile: await Admin.getUserProfile(userId) };
+          }
+          if (q) {
+            return { results: await Admin.searchUsers(q) };
+          }
+          return {};
+        },
+      },
+      fleetClusters: {
+        label: 'Flash Fleet Demand',
+        icon: 'TrendingUp',
+        component: fleetClustersComponent,
+        // Fleet.getClusters() is the real, existing read-only query
+        // (fleetController.js's own GET /api/fleet/clusters uses the exact
+        // same method) -- deliberately not runFleetIntelligence(), which
+        // ALSO emits a real 'fleet_alert' socket event per cluster as a
+        // side effect; a page a founder can load repeatedly just to look
+        // must never re-trigger that alert each time.
+        handler: async () => ({ clusters: await Fleet.getClusters() }),
       },
     },
   });

@@ -291,6 +291,59 @@ class Admin extends BaseModel {
       count: parseInt(r.count, 10),
     }));
   }
+
+  // Phase 4 (ADMIN_PANEL_AUDIT_AND_VISION.md §3 -- individual user lookup).
+  // Deliberately a search-then-view page, not a browsable AdminJS resource:
+  // users still can't be registered directly (same schema-collision reason
+  // documented everywhere else in this file), and "look up one specific
+  // customer" is a different real need than "browse every user" anyway.
+  // Only ever selects specific real columns -- never password_hash, and
+  // never SELECT * -- no leak is possible by construction, not by
+  // discipline alone.
+  static async searchUsers(query) {
+    if (!query || query.trim().length < 2) return [];
+    const like = `%${query.trim()}%`;
+    const result = await this.query(
+      `SELECT id, name, email, phone, created_at FROM public.users
+       WHERE name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1
+       ORDER BY created_at DESC LIMIT 20`,
+      [like],
+    );
+    return result.rows;
+  }
+
+  static async getUserProfile(userId) {
+    const [userRes, ordersRes, addressesRes, trustedRes] = await Promise.all([
+      this.query(
+        `SELECT id, name, email, phone, flagged_for_cash_abuse, cash_refusal_count, created_at, updated_at
+         FROM public.users WHERE id = $1`,
+        [userId],
+      ),
+      this.query(
+        `SELECT id, order_number, status, total, payment_method, created_at
+         FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`,
+        [userId],
+      ),
+      this.query(
+        `SELECT id, label, street, suburb, city, is_default
+         FROM addresses WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC`,
+        [userId],
+      ),
+      this.query(
+        `SELECT td.id, td.status, td.created_at, d.name AS driver_name, d.phone AS driver_phone
+         FROM trusted_drivers td JOIN drivers d ON d.id = td.driver_id
+         WHERE td.user_id = $1 ORDER BY td.created_at DESC`,
+        [userId],
+      ),
+    ]);
+    if (!userRes.rows.length) return null;
+    return {
+      user: userRes.rows[0],
+      orders: ordersRes.rows,
+      addresses: addressesRes.rows,
+      trustedDrivers: trustedRes.rows,
+    };
+  }
 }
 
 module.exports = Admin;
