@@ -362,6 +362,16 @@ async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`);
 
+    // CONFIRMED DEAD (ADMIN_PANEL_AUDIT_AND_VISION.md Addendum 1 §4.4, re-confirmed
+    // again during the final admin-panel completion pass by searching the entire
+    // backend source): no INSERT/UPDATE anywhere writes to this table, and nothing
+    // reads from it either -- fully orphaned, not just under-used. Superseded by
+    // driver_payout_requests + payout_transactions, which are the real, actively-used
+    // pair backing every real payout today (payoutService.js). Per this project's own
+    // "never drop data without being explicitly asked" rule, the table is kept, not
+    // dropped -- but it must not be read from or written to going forward. Registered
+    // in adminCoverage.js's intentionallyExcluded bucket with this exact reasoning, so
+    // a future admin-panel resource can never be built on top of it by accident.
     await client.query(`CREATE TABLE IF NOT EXISTS driver_payouts (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       payout_request_id UUID REFERENCES driver_payout_requests(id) ON DELETE SET NULL,
@@ -507,6 +517,20 @@ async function migrate() {
       created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
     )`);
 
+    // CONFIRMED DEAD (ADMIN_PANEL_AUDIT_AND_VISION.md Addendum 1 §4.4, re-confirmed
+    // again during the final admin-panel completion pass): no INSERT/UPDATE anywhere
+    // writes to this table -- confirmed by searching the entire backend source, not
+    // assumed. A real READ path still exists (Return.getCredits(), reachable via
+    // GET /api/returns/credits) but since nothing ever creates a row with
+    // balance > 0, that endpoint can only ever return an empty result -- a remnant
+    // of the old store-credit, driver-claims-instantly return model, explicitly
+    // superseded by the current real-refund model (returnRoutes.js's own comment:
+    // "the old store-credit... model has been removed"). Per this project's own
+    // "never drop data without being explicitly asked" rule, the table is kept, not
+    // dropped -- but it must not be written to going forward, and any dashboard
+    // number built on it (e.g. "outstanding store credit liability") would always,
+    // silently, incorrectly report zero. Registered in adminCoverage.js's
+    // intentionallyExcluded bucket with this exact reasoning.
     await client.query(`CREATE TABLE IF NOT EXISTS store_credits (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

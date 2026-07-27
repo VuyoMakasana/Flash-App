@@ -594,6 +594,97 @@ cron.schedule('30 1 * * *', async () => {
     }
   });
 
+  // WHY: Addendum 1 §4.4 named this explicitly -- accuracy can't be assumed
+  // forever, only checked. Daily 04:00 SAST (a clean slot -- doesn't
+  // collide with the 03:00/03:30/01:30 UTC jobs above). Two real checks:
+  //
+  // 1. wallet_balance reconciliation, for EVERY driver with a wallet row,
+  //    not a sample. Confirmed the real accounting rule by reading
+  //    DriverWallet.js directly rather than assuming: wallet_balance is
+  //    only ever moved by 'available_credit' (adds, via releasePending/
+  //    creditAvailable) and 'payout_debit' (subtracts, via
+  //    createPayoutRequest/payoutService.finalizeSuccessfulPayout) ledger
+  //    entries -- 'pending_credit'/'pending_debit' only ever touch the
+  //    separate pending_balance column, never wallet_balance, so they're
+  //    deliberately excluded from this formula rather than included by
+  //    mistake. 'payout_debit_reconcile_required' (payoutService.js's own
+  //    real, named edge case for when a wallet_balance guard blocked the
+  //    normal deduction) is also deliberately excluded -- it exists
+  //    specifically to flag that no deduction happened, so subtracting it
+  //    here would manufacture a false mismatch, not report a real one.
+  //
+  // 2. A spot-check (this one genuinely sampled, per Addendum 1 §4.4's own
+  //    wording, unlike the wallet check above) of recently-completed
+  //    refunds against Paystack's own record via paystackService.fetchRefund
+  //    -- the exact same method paymentReconciliationJob.js's existing
+  //    reconcileStuckRefunds() already uses for 'processing' refunds, reused
+  //    here for a different purpose: confirming already-'completed' rows
+  //    are still actually correct, not trusting the local status alone.
+  //
+  // On any mismatch: log loudly AND Sentry.captureException -- the real,
+  // already-proven-in-this-codebase Sentry mechanism (server.js's own
+  // unhandledRejection handler and errorHandler.js both already use
+  // exactly this, confirmed by reading them directly; it safely no-ops
+  // with no SENTRY_DSN/non-prod, same as everywhere else it's used).
+  cron.schedule('0 2 * * *', async () => {
+    try {
+      const wallets = await pool.query(`
+        SELECT dw.driver_id, dw.wallet_balance,
+               COALESCE(SUM(CASE WHEN dwl.entry_type = 'available_credit' THEN dwl.amount ELSE 0 END), 0) AS total_credits,
+               COALESCE(SUM(CASE WHEN dwl.entry_type = 'payout_debit' THEN dwl.amount ELSE 0 END), 0) AS total_payout_debits
+        FROM driver_wallets dw
+        LEFT JOIN driver_wallet_ledger dwl ON dwl.driver_id = dw.driver_id
+        GROUP BY dw.driver_id, dw.wallet_balance
+      `);
+
+      for (const row of wallets.rows) {
+        const expected = parseFloat(row.total_credits) - parseFloat(row.total_payout_debits);
+        const actual = parseFloat(row.wallet_balance);
+        // 1 cent tolerance for floating-point/rounding noise, not a real
+        // discrepancy allowance.
+        if (Math.abs(expected - actual) > 0.01) {
+          const mismatchErr = new Error(
+            `[Reconciliation] Wallet balance mismatch for driver ${row.driver_id}: ` +
+            `wallet_balance=${actual.toFixed(2)}, expected from ledger=${expected.toFixed(2)} ` +
+            `(credits=${parseFloat(row.total_credits).toFixed(2)}, payout_debits=${parseFloat(row.total_payout_debits).toFixed(2)})`,
+          );
+          console.error(mismatchErr.message);
+          Sentry.captureException(mismatchErr);
+        }
+      }
+    } catch (e) {
+      console.warn('[Cron] Wallet reconciliation error:', e.message);
+    }
+
+    try {
+      const paystackService = require('./services/paystackService');
+      const refunds = await pool.query(`
+        SELECT id, refund_reference FROM payment_refunds
+        WHERE status = 'completed' AND refund_reference IS NOT NULL
+        ORDER BY updated_at DESC LIMIT 20
+      `);
+
+      for (const refund of refunds.rows) {
+        try {
+          const fetched = await paystackService.fetchRefund(refund.refund_reference);
+          const realStatus = fetched?.data?.status;
+          if (realStatus && realStatus !== 'processed') {
+            const mismatchErr = new Error(
+              `[Reconciliation] payment_refunds row ${refund.id} is marked 'completed' locally, ` +
+              `but Paystack reports its real status as '${realStatus}' for refund_reference=${refund.refund_reference}`,
+            );
+            console.error(mismatchErr.message);
+            Sentry.captureException(mismatchErr);
+          }
+        } catch (fetchErr) {
+          console.warn(`[Cron] Reconciliation refund spot-check failed for refund ${refund.id}:`, fetchErr.message);
+        }
+      }
+    } catch (e) {
+      console.warn('[Cron] Refund reconciliation error:', e.message);
+    }
+  });
+
   return { app, server, io };
 }
 

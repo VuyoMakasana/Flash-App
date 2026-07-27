@@ -213,6 +213,34 @@ const FinanceDashboard = () => {
           </Box>
         </>
       )}
+
+      {/* Final admin-panel completion pass, §3 -- deliberately NOT a real
+          API integration into Render/Sentry/Supabase (§3's own stated
+          reasoning: disproportionate ongoing-maintenance cost for what a
+          solo founder needs). Plain links to each platform's real,
+          stable entry point -- not a guessed project-specific deep link,
+          since this codebase has no already-documented project slug for
+          any of the three to reuse. The founder, already logged into his
+          own account, lands on his own project from there. */}
+      <Section title="System health — quick links">
+        <Box variant="grey" p="lg" width="100%">
+          <Text mb="sm">
+            <a href="https://dashboard.render.com/" target="_blank" rel="noopener noreferrer">Render dashboard</a>
+            {' '}— deploy status, logs, service health.
+          </Text>
+          <Text mb="sm">
+            <a href="https://sentry.io/" target="_blank" rel="noopener noreferrer">Sentry</a>
+            {' '}— real error/exception reports, including this dashboard's own reconciliation-check alerts.
+          </Text>
+          <Text mb="sm">
+            <a href="https://supabase.com/dashboard" target="_blank" rel="noopener noreferrer">Supabase dashboard</a>
+            {' '}— database health, advisors, connection pooling.
+          </Text>
+          <Text>
+            Production secrets checklist: <code>docs/audits/PRODUCTION_SECRETS_CHECKLIST.md</code> (in the repo).
+          </Text>
+        </Box>
+      </Section>
     </Box>
   );
 };

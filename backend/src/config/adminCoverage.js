@@ -85,8 +85,6 @@ module.exports = {
     feed_comments:        'Phase 4 — same content-moderation screen as feed_posts.',
     store_boosts:         'Phase 4 — real product decision needed (build the pricing/ranking effect, or retire the feature) — not just a UI task. Confirmed again this pass: purchaseBoost never calls Paystack, price_paid is not a verified charge.',
     store_promotions:     'Phase 4 — same decision as store_boosts.',
-    store_credits:        'Phase 4 — DEAD TABLE (Addendum 1 §4.4): real read path, never written to anywhere. Needs a retire-or-rebuild decision before Phase 4 touches it.',
-    driver_payouts:        'Phase 4 — DEAD TABLE (Addendum 1 §4.4): created by a migration, referenced nowhere else. Real pair is driver_payout_requests + payout_transactions.',
     browsing_events:      'Phase 4 — backs the Flash Fleet demand-cluster view (fleetIntelligenceService.js), zero new backend needed.',
   },
 
@@ -99,6 +97,8 @@ module.exports = {
 
     // ── Dead/legacy tables that need no view because nothing writes to them ──
     saved_cards: 'DEAD TABLE, found new during this pass — superseded by payment_methods (migrate.js\'s own one-time data migration copies rows FROM saved_cards INTO payment_methods). No controller or model reads or writes saved_cards anymore.',
+    store_credits: 'CONFIRMED DEAD TABLE (Addendum 1 §4.4, re-confirmed at the final completion pass by searching the entire backend source) — moved here from `covered`, where it had been sitting despite being dead. No INSERT/UPDATE anywhere; the one real read path (Return.getCredits, GET /api/returns/credits) can only ever return empty since nothing creates a balance > 0 row. Superseded by the current real-refund return model. Kept, not dropped, per this project\'s own rule — see migrate.js\'s own comment on the table definition. Must never be read from for a real admin number (e.g. "outstanding store credit liability" would always silently report zero).',
+    driver_payouts: 'CONFIRMED DEAD TABLE (Addendum 1 §4.4, re-confirmed at the final completion pass) — moved here from `covered` for the same reason as store_credits above. No INSERT/UPDATE/SELECT anywhere in the backend — fully orphaned, not just under-used. Superseded by driver_payout_requests + payout_transactions, the real, actively-used pair. Kept, not dropped — see migrate.js\'s own comment on the table definition.',
 
     // ── Real, live tables with a genuine reason to stay out of the admin panel ──
     payment_methods:      'Users\' saved payment methods — no legitimate day-to-day admin business need to browse; card data minimization is deliberate (see the AppSec audit\'s PCI-scope reasoning). Visible only indirectly (last4/brand) if a support case ever needs it via direct DB access, not a standing UI.',
