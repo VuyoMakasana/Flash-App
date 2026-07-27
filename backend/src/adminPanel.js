@@ -293,6 +293,65 @@ async function attachOrderDetailContext(response) {
   return response;
 }
 
+// Phase 2 (ADMIN_PANEL_AUDIT_AND_VISION.md §3/§4.3) -- driver wallet/payout
+// visibility. Real data already exists in driver_wallets/driver_wallet_ledger/
+// driver_payout_requests -- there was simply no admin endpoint at all to see
+// any driver's balance, pending amount, or payout history (an admin could
+// previously only find this out by querying the database directly). This
+// virtual field gives the at-a-glance answer directly on a driver's own
+// page; the four detailed tables are also registered as their own
+// resources below for full browsing/filtering.
+async function attachWalletSummary(response) {
+  const record = response.record;
+  if (!record?.params) return response;
+  const driverId = record.id;
+  const [walletRes, ledgerRes, payoutRes] = await Promise.all([
+    pgPool.query(
+      'SELECT wallet_balance, pending_balance, cash_commission_debt, unpaid_cash_deliveries FROM driver_wallets WHERE driver_id = $1',
+      [driverId],
+    ),
+    pgPool.query(
+      'SELECT amount, entry_type, note, created_at FROM driver_wallet_ledger WHERE driver_id = $1 ORDER BY created_at DESC LIMIT 5',
+      [driverId],
+    ),
+    pgPool.query(
+      'SELECT amount, status, created_at FROM driver_payout_requests WHERE driver_id = $1 ORDER BY created_at DESC LIMIT 3',
+      [driverId],
+    ),
+  ]);
+  const w = walletRes.rows[0];
+  const walletLines = w
+    ? `Available: R${w.wallet_balance}\nPending: R${w.pending_balance}\nCash commission owed: R${w.cash_commission_debt}\nUnpaid cash deliveries: ${w.unpaid_cash_deliveries}`
+    : 'No wallet record yet (no completed deliveries).';
+  const ledgerLines = ledgerRes.rows.length
+    ? ledgerRes.rows.map((l) => `${new Date(l.created_at).toLocaleString()} — ${l.entry_type} R${l.amount}${l.note ? ` (${l.note})` : ''}`).join('\n')
+    : 'No ledger entries yet.';
+  const payoutLines = payoutRes.rows.length
+    ? payoutRes.rows.map((p) => `${new Date(p.created_at).toLocaleString()} — R${p.amount} — ${p.status}`).join('\n')
+    : 'No payout requests yet.';
+  record.params.wallet_summary = `${walletLines}\n\nRecent ledger entries (last 5):\n${ledgerLines}\n\nRecent payout requests (last 3):\n${payoutLines}`;
+  return response;
+}
+
+const WALLET_LEDGER_ENTRY_TYPE_VALUES = [
+  { value: 'pending_credit', label: 'Pending Credit' },
+  { value: 'available_credit', label: 'Available Credit' },
+  { value: 'pending_debit', label: 'Pending Debit' },
+  { value: 'payout_debit', label: 'Payout Debit' },
+];
+
+const PAYOUT_REQUEST_STATUS_VALUES = [
+  { value: 'requested', label: 'Requested' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'failed', label: 'Failed' },
+];
+
+const PAYOUT_TRANSACTION_STATUS_VALUES = [
+  { value: 'initiated', label: 'Initiated' },
+  { value: 'success', label: 'Success' },
+  { value: 'failed', label: 'Failed' },
+];
+
 // Phase 3 (ADMIN_PANEL_AUDIT_AND_VISION.md §1.4/§3) -- SOS alert queue
 // helpers. triggered_by_id is genuinely polymorphic -- sos_alerts'
 // triggered_by_role has a real CHECK constraint of ('user','driver')
@@ -521,10 +580,13 @@ async function mountAdminPanel(app) {
             // document-review screen the founder asked for, populated by
             // attachDriverDocuments below.
             documents: { type: 'richtext', isVisible: { list: false, show: true, edit: false, filter: false } },
+            // Virtual — wallet/payout at-a-glance summary (Phase 2), populated
+            // by attachWalletSummary below.
+            wallet_summary: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
           },
           actions: {
             list: { after: [stripSensitive] },
-            show: { after: [stripSensitive, attachDriverDocuments] },
+            show: { after: [stripSensitive, attachDriverDocuments, attachWalletSummary] },
             edit: { after: [stripSensitive] },
             approveDriver: {
               actionType: 'record',
@@ -766,6 +828,80 @@ async function mountAdminPanel(app) {
           },
         },
       },
+      // Phase 2 (§3/§4.3) -- the four tables backing driver wallet/payout
+      // visibility. Each is a live balance/ledger/transaction record of
+      // real money movement, not something an admin hand-edits -- fully
+      // read-only, same reasoning as order_cancellations. driver_id
+      // references drivers everywhere below and works automatically
+      // (drivers.titleProperty is already 'name', set earlier in this
+      // file) -- no extra code needed for that part.
+      {
+        resource: db.table('driver_wallets'),
+        options: {
+          listProperties: ['driver_id', 'wallet_balance', 'pending_balance', 'cash_commission_debt', 'unpaid_cash_deliveries', 'updated_at'],
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        },
+      },
+      {
+        resource: db.table('driver_wallet_ledger'),
+        options: {
+          listProperties: ['driver_id', 'order_id', 'entry_type', 'amount', 'note', 'created_at'],
+          properties: {
+            entry_type: { availableValues: WALLET_LEDGER_ENTRY_TYPE_VALUES },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        },
+      },
+      {
+        resource: db.table('driver_payout_requests'),
+        options: {
+          listProperties: ['driver_id', 'amount', 'status', 'created_at', 'updated_at'],
+          properties: {
+            status: { availableValues: PAYOUT_REQUEST_STATUS_VALUES },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        },
+      },
+      {
+        // The real Paystack transfer trail (Addendum 1 §4.3: "the one cost
+        // line with a genuinely real, auditable multi-table trail already").
+        resource: db.table('payout_transactions'),
+        options: {
+          listProperties: ['driver_id', 'amount', 'status', 'reference', 'created_at', 'completed_at'],
+          properties: {
+            status: { availableValues: PAYOUT_TRANSACTION_STATUS_VALUES },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        },
+      },
     ],
     // component registered above (financeDashboardComponent) -- see the
     // comment by componentLoader's construction for why this replaced the
@@ -851,7 +987,7 @@ async function mountAdminPanel(app) {
   });
   adminPanelRouter.use(router);
 
-  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts)`);
+  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions)`);
 }
 
 module.exports = { mountAdminPanel, ADMIN_PANEL_PATH };
