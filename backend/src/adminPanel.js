@@ -614,6 +614,20 @@ function buildResources(db) {
           // response data itself, on every action that can return a record
           // (list/show/edit) — both layers together, not isVisible alone.
           properties: {
+            // FLASH — RESPONSIVE PASS: AdminJS's own list-table component
+            // (record-in-list.tsx) hides every non-title column below its
+            // 'md' breakpoint (~832px) — confirmed live: on any phone or
+            // portrait tablet, a resource's list view showed literally
+            // nothing but a "..." actions menu per row. A column only
+            // auto-qualifies as "title" if its raw name is exactly one of
+            // title/name/subject/email (base-property.ts's own hardcoded
+            // list) — true for drivers.name by luck, but none of this
+            // file's other identifying columns (order_number, product_name,
+            // driver_id, etc.) match, so every other resource was silently
+            // broken on mobile. Explicit isTitle: true is AdminJS's own
+            // real, intended per-property override for exactly this — not
+            // a CSS hack — applied here and on every resource below.
+            name: { isTitle: true },
             password_hash: { isVisible: false },
             // Found while adding the new resources below, not part of the
             // original proof-of-concept: AdminJS's generic `edit` action
@@ -681,6 +695,10 @@ function buildResources(db) {
           titleProperty: 'order_number',
           listProperties: ['order_number', 'user_id', 'driver_id', 'status', 'payment_method', 'total', 'created_at'],
           properties: {
+            // See the identical responsive fix's full explanation on
+            // drivers.name above — order_number doesn't match AdminJS's
+            // hardcoded auto-title column names, so it needed this too.
+            order_number: { isTitle: true },
             cash_otp_hash: { isVisible: false },
             cash_otp_plain: { isVisible: false },
             status: { availableValues: ORDER_STATUS_VALUES },
@@ -727,6 +745,10 @@ function buildResources(db) {
             'refund_mode', 'store_amount', 'driver_amount', 'created_at',
           ],
           properties: {
+            // Responsive fix (see drivers.name above) — order_id already
+            // resolves to a real, working order_number link (orders'
+            // titleProperty), so it's the most useful single mobile column.
+            order_id: { isTitle: true },
             refund_mode: { availableValues: REFUND_MODE_VALUES },
             cancelled_by_role: { availableValues: CANCELLED_BY_ROLE_VALUES },
           },
@@ -756,6 +778,8 @@ function buildResources(db) {
         options: withChronologicalDefaults({
           listProperties: ['order_id', 'user_id', 'driver_id', 'status', 'reason', 'refund_amount', 'credit_amount', 'created_at'],
           properties: {
+            // Responsive fix (see drivers.name above).
+            order_id: { isTitle: true },
             status: { availableValues: RETURN_STATUS_VALUES },
           },
           actions: {
@@ -843,6 +867,8 @@ function buildResources(db) {
             'acknowledged_at', 'acknowledged_by', 'created_at',
           ],
           properties: {
+            // Responsive fix (see drivers.name above).
+            order_id: { isTitle: true },
             triggered_by_role: { availableValues: TRIGGERED_BY_ROLE_VALUES },
             // Virtual -- no such column on sos_alerts.
             location_link: { type: 'richtext', isVisible: { list: true, show: true, edit: false, filter: false } },
@@ -893,6 +919,11 @@ function buildResources(db) {
         resource: db.table('driver_wallets'),
         options: withChronologicalDefaults({
           listProperties: ['driver_id', 'wallet_balance', 'pending_balance', 'cash_commission_debt', 'unpaid_cash_deliveries', 'updated_at'],
+          properties: {
+            // Responsive fix (see drivers.name above) — driver_id already
+            // resolves to a real, working driver-name link.
+            driver_id: { isTitle: true },
+          },
           actions: {
             list: { after: [stripSensitive] },
             show: { after: [stripSensitive] },
@@ -908,6 +939,8 @@ function buildResources(db) {
         options: withChronologicalDefaults({
           listProperties: ['driver_id', 'order_id', 'entry_type', 'amount', 'note', 'created_at'],
           properties: {
+            // Responsive fix (see drivers.name above).
+            driver_id: { isTitle: true },
             entry_type: { availableValues: WALLET_LEDGER_ENTRY_TYPE_VALUES },
           },
           actions: {
@@ -925,6 +958,8 @@ function buildResources(db) {
         options: withChronologicalDefaults({
           listProperties: ['driver_id', 'amount', 'status', 'created_at', 'updated_at'],
           properties: {
+            // Responsive fix (see drivers.name above).
+            driver_id: { isTitle: true },
             status: { availableValues: PAYOUT_REQUEST_STATUS_VALUES },
           },
           actions: {
@@ -944,6 +979,8 @@ function buildResources(db) {
         options: withChronologicalDefaults({
           listProperties: ['driver_id', 'amount', 'status', 'reference', 'created_at', 'completed_at'],
           properties: {
+            // Responsive fix (see drivers.name above).
+            driver_id: { isTitle: true },
             status: { availableValues: PAYOUT_TRANSACTION_STATUS_VALUES },
           },
           actions: {
@@ -969,6 +1006,8 @@ function buildResources(db) {
         options: withChronologicalDefaults({
           listProperties: ['order_id', 'driver_id', 'user_id', 'rating', 'comment', 'created_at'],
           properties: {
+            // Responsive fix (see drivers.name above).
+            driver_id: { isTitle: true },
             rating: { availableValues: RATING_VALUES },
           },
           actions: {
@@ -999,6 +1038,13 @@ function buildResources(db) {
         resource: suppressReference(db.table('flagged_accounts'), 'user_id'),
         options: withChronologicalDefaults({
           listProperties: ['user_id', 'flagged_for_cash_abuse', 'cash_refusal_count', 'synced_at'],
+          properties: {
+            // Responsive fix (see drivers.name above) — user_id is
+            // rewritten to a real "Name — Phone" string by attachUserNames
+            // below (list only), making it a genuinely useful mobile title
+            // despite the reference itself being suppressed.
+            user_id: { isTitle: true },
+          },
           actions: {
             // attachUserNames only on list, same convention as everywhere
             // else. stripSensitive is a defensive no-op today (user_id's
@@ -1023,6 +1069,8 @@ function buildResources(db) {
         options: withChronologicalDefaults({
           listProperties: ['product_name', 'category', 'brand', 'price', 'is_active', 'created_at'],
           properties: {
+            // Responsive fix (see drivers.name above).
+            product_name: { isTitle: true },
             // cost_price is Flash's internal wholesale/margin data --
             // Inventory.js's own PUBLIC_COLUMNS already excludes it from
             // every public-facing read; hidden from the list here for the
@@ -1338,6 +1386,26 @@ async function mountAdminPanel(app) {
     res.removeHeader('Content-Security-Policy');
     next();
   });
+
+  // FLASH — SECURITY AUDIT FIX: @adminjs/express's own login brute-force
+  // guard (auth.maxRetries above) is a plain in-memory Map keyed by IP,
+  // at module scope inside @adminjs/express itself (Retry.retriesContainer,
+  // confirmed by reading login.handler.js directly) — not Redis-backed,
+  // and not reachable to configure that way since it's third-party code.
+  // Under more than one backend instance it would silently reset per
+  // instance, the same class of gap this project already solved for every
+  // other privileged endpoint via rateLimiter.js's adminLimiter (Redis-
+  // backed when REDIS_URL is configured, in-memory fallback otherwise —
+  // matching this app's current single-instance stage, same as every
+  // other limiter here today). Wiring the existing, already-Redis-ready
+  // adminLimiter in front of AdminJS's own /login POST — same real
+  // middleware /api/admin/login already uses — closes that gap instead of
+  // leaving this one login form as the sole exception to it. Registered as
+  // its own middleware (not inside `router`, which is @adminjs/express's
+  // own code) so it runs first and falls through via next() when allowed.
+  const { adminLimiter } = require('./middleware/rateLimiter');
+  adminPanelRouter.post('/login', adminLimiter);
+
   adminPanelRouter.use(router);
 
   console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, driver_ratings, flagged_accounts, flash_inventory)`);

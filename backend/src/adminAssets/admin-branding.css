@@ -21,3 +21,28 @@ img[alt="Flash"] {
   width: auto !important;
   max-width: 120px !important;
 }
+
+/* FLASH — RESPONSIVE PASS: AdminJS's own top-right CurrentUserNav widget
+ * (email + avatar) never shrinks or truncates the admin's email at narrow
+ * widths, pushing the avatar circle partly off the right edge of the
+ * screen — confirmed live: avatar right edge at 398px on a 375px viewport
+ * (iPhone SE class). Fine from ~414px up.
+ *
+ * Selector: [data-css="logged-in"] is AdminJS's own stable hook for this
+ * exact widget (frontend/components/app/logged-in.js sets it directly on
+ * the wrapping Box) — everything else in this widget's markup is an
+ * unstable styled-components hash class, not meant to be targeted
+ * externally. `div:not(:has(div))` reaches only genuine leaf text nodes
+ * inside it regardless of exact nesting depth (name/email text, and the
+ * avatar's own single-letter div when no avatarUrl is set) — safe on the
+ * avatar div too, since its content is already narrower than the cap
+ * below and the rule has no visible effect on it.
+ */
+@media (max-width: 480px) {
+  [data-css="logged-in"] div:not(:has(div)) {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
