@@ -94,7 +94,7 @@ class Admin extends BaseModel {
   }
 
   static async getStats() {
-    const [users, drivers, orders, revenue] = await Promise.all([
+    const [users, drivers, orders, grossOrderValue] = await Promise.all([
       this.query("SELECT COUNT(*) FROM users"),
       this.query("SELECT COUNT(*) FROM drivers WHERE status='approved'"),
       this.query("SELECT COUNT(*) FROM orders"),
@@ -107,7 +107,94 @@ class Admin extends BaseModel {
       totalUsers: parseInt(users.rows[0].count),
       approvedDrivers: parseInt(drivers.rows[0].count),
       totalOrders: parseInt(orders.rows[0].count),
-      totalRevenue: parseFloat(revenue.rows[0].total),
+      // Renamed from totalRevenue (ADMIN_PANEL_AUDIT_AND_VISION.md §4.4):
+      // this sums orders.total where paid -- gross order value processed
+      // (item price + delivery fee, the customer's full payment), not
+      // Flash's actual revenue share. Kept as its own honestly-labeled
+      // figure; see getFinancials() below for the real revenue/cost/net
+      // picture. Nothing else in the codebase reads the old `totalRevenue`
+      // key (confirmed by search) -- this rename is not a breaking change.
+      grossOrderValue: parseFloat(grossOrderValue.rows[0].total),
+    };
+  }
+
+  // Real financial picture (ADMIN_PANEL_AUDIT_AND_VISION.md §4.3). Every
+  // figure here is traced to a real, existing money-movement table -- no
+  // new tracking invented, no new tables. Deliberately excludes
+  // store_boosts/store_promotions.price_paid: confirmed by re-reading
+  // boostController.js that purchaseBoost/createPromotion only insert a
+  // DB row, never call Paystack -- including it in revenue would report
+  // money Flash never actually received.
+  static async getFinancials() {
+    const [
+      cardCommission, cashCommissionCollected, cashCommissionOutstanding,
+      driverSubscriptions, premiumSubscriptions, cancellationStoreShare,
+      driverPayoutsPaid, cancellationDriverCompensation, refundsCompleted,
+      penalties,
+    ] = await Promise.all([
+      // Order.create(): flashCommission = max(10, delivery_fee * 0.25),
+      // driverPayout = delivery_fee - flashCommission -- so
+      // delivery_fee - driver_payout recovers Flash's commission directly
+      // from the two stored columns, without re-deriving the formula.
+      this.query(
+        "SELECT COALESCE(SUM(delivery_fee - driver_payout),0) as v FROM orders WHERE payment_status='paid' AND payment_method != 'cash'",
+      ),
+      this.query(
+        "SELECT COALESCE(SUM(commission_amount),0) as v FROM driver_commission_debts WHERE status IN ('collected_wallet','collected_payout')",
+      ),
+      this.query(
+        "SELECT COALESCE(SUM(commission_amount),0) as v FROM driver_commission_debts WHERE status = 'outstanding'",
+      ),
+      this.query("SELECT COALESCE(SUM(price),0) as v FROM driver_subscriptions WHERE paystack_reference IS NOT NULL"),
+      this.query("SELECT COALESCE(SUM(price),0) as v FROM premium_subscriptions WHERE paystack_reference IS NOT NULL"),
+      this.query("SELECT COALESCE(SUM(store_amount),0) as v FROM order_cancellations"),
+      // payout_transactions.status='success' is the real, completed
+      // Paystack transfer -- not orders.driver_payout, which includes
+      // amounts still sitting pending in a driver's wallet, not yet paid.
+      this.query("SELECT COALESCE(SUM(amount),0) as v FROM payout_transactions WHERE status = 'success'"),
+      this.query("SELECT COALESCE(SUM(driver_amount),0) as v FROM order_cancellations"),
+      this.query("SELECT COALESCE(SUM(amount),0) as v FROM payment_refunds WHERE status = 'completed'"),
+      // No reversal mechanism exists anywhere in the codebase (confirmed by
+      // search -- driver_penalties.status is never updated after insert),
+      // so summing every row is equivalent to filtering status='applied'.
+      this.query("SELECT COALESCE(SUM(amount),0) as v FROM driver_penalties"),
+    ]);
+
+    const num = (r) => parseFloat(r.rows[0].v);
+
+    const flashRevenue = {
+      cardOrderCommission: num(cardCommission),
+      cashOrderCommission: num(cashCommissionCollected),
+      driverSubscriptions: num(driverSubscriptions),
+      premiumSubscriptions: num(premiumSubscriptions),
+      cancellationStoreShare: num(cancellationStoreShare),
+    };
+    flashRevenue.total = Object.values(flashRevenue).reduce((a, b) => a + b, 0);
+
+    const costs = {
+      driverPayoutsPaid: num(driverPayoutsPaid),
+      cancellationDriverCompensation: num(cancellationDriverCompensation),
+      refundsIssued: num(refundsCompleted),
+    };
+    costs.total = Object.values(costs).reduce((a, b) => a + b, 0);
+
+    const driverPenaltiesCollected = num(penalties);
+
+    return {
+      flashRevenue,
+      costs,
+      driverPenaltiesCollected,
+      // Driver penalties are a cost *offset* (money taken from a driver,
+      // reducing what Flash pays out), not a separate cost -- netted in,
+      // never double-counted as its own cost line (per the audit doc).
+      netPosition: flashRevenue.total - costs.total + driverPenaltiesCollected,
+      excludedFromRevenue: {
+        boostAndPromotionPricePaid: 'Not real revenue — no Paystack charge is ever made for boost/promotion purchases (purchaseBoost/createPromotion only insert a DB row). Deliberately excluded.',
+      },
+      outstanding: {
+        cashCommissionNotYetCollected: num(cashCommissionOutstanding),
+      },
+      excludesExternalCosts: 'Excludes infrastructure costs (Cloudinary, Resend, Render, Supabase, Paystack fees) — check each provider dashboard directly, not tracked here.',
     };
   }
 }

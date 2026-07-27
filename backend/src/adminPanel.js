@@ -277,10 +277,28 @@ async function attachOrderDetailContext(response) {
 async function mountAdminPanel(app) {
   const AdminJSModule = require('adminjs');
   const AdminJS = AdminJSModule.default;
+  const { ComponentLoader } = AdminJSModule;
   const { buildAuthenticatedRouter } = await import('@adminjs/express');
   const { Adapter, Database, Resource } = await import('@adminjs/sql');
 
   AdminJS.registerAdapter({ Database, Resource });
+
+  // FOUND while wiring in the real financial numbers below: AdminJS's own
+  // default dashboard (default-dashboard.js, confirmed by reading it
+  // directly) is a static "welcome to AdminJS" marketing page -- it never
+  // renders anything a dashboard.handler returns. That means every number
+  // getStats()/getFinancials() compute was already real and correct, but
+  // only reachable by calling GET /admin-panel/api/dashboard directly --
+  // nothing showed it in the actual panel a founder opens. This is the
+  // first real custom AdminJS component in this codebase: registered here
+  // via ComponentLoader, rendered by FinanceDashboard.jsx. react/react-dom
+  // are already adminjs's own dependencies (confirmed in its package.json)
+  // -- no new dependency added for this.
+  const componentLoader = new ComponentLoader();
+  const financeDashboardComponent = componentLoader.add(
+    'FinanceDashboard',
+    require('path').join(__dirname, 'adminComponents', 'FinanceDashboard.jsx'),
+  );
 
   const dbName = new URL(process.env.DATABASE_URL).pathname.replace(/^\//, '');
   const db = await new Adapter('postgresql', {
@@ -332,6 +350,7 @@ async function mountAdminPanel(app) {
 
   const admin = new AdminJS({
     rootPath: ADMIN_PANEL_PATH,
+    componentLoader,
     // loginPath/logoutPath do NOT derive from rootPath — confirmed directly
     // against adminjs's own type definitions (adminjs-options.interface.d.ts),
     // not assumed. Left unset, they default to /admin/login and /admin/logout
@@ -574,24 +593,27 @@ async function mountAdminPanel(app) {
         },
       },
     ],
-    // No custom frontend component registered — that needs AdminJS's
-    // component-loader/bundling system, unproven in this exact setup, and
-    // not worth the added risk this late without a separately-verified
-    // pass. This still returns real, correct data via
-    // GET /admin-panel/api/dashboard (callable directly, and picked up by
-    // AdminJS's own default dashboard view) — the getStats() numbers plus
-    // the one new query Phase 1's own plan named explicitly: a live
-    // active-orders-by-status breakdown.
+    // component registered above (financeDashboardComponent) -- see the
+    // comment by componentLoader's construction for why this replaced the
+    // silent-no-op default dashboard. handler still returns real, correct
+    // data via GET /admin-panel/api/dashboard, same as before -- now
+    // actually rendered, plus the real financial picture (Admin.getFinancials(),
+    // ADMIN_PANEL_AUDIT_AND_VISION.md §4.3), not just operational stats.
     dashboard: {
+      component: financeDashboardComponent,
       handler: async () => {
-        const stats = await Admin.getStats();
-        const statusBreakdown = await pgPool.query(
-          `SELECT status, COUNT(*) as count FROM orders
-           WHERE status NOT IN ('completed', 'cancelled')
-           GROUP BY status ORDER BY count DESC`,
-        );
+        const [stats, financials, statusBreakdown] = await Promise.all([
+          Admin.getStats(),
+          Admin.getFinancials(),
+          pgPool.query(
+            `SELECT status, COUNT(*) as count FROM orders
+             WHERE status NOT IN ('completed', 'cancelled')
+             GROUP BY status ORDER BY count DESC`,
+          ),
+        ]);
         return {
           ...stats,
+          financials,
           activeOrdersByStatus: statusBreakdown.rows.map((r) => ({
             status: r.status,
             count: parseInt(r.count, 10),
