@@ -912,7 +912,7 @@ async function mountAdminPanel(app) {
     dashboard: {
       component: financeDashboardComponent,
       handler: async () => {
-        const [stats, financials, statusBreakdown] = await Promise.all([
+        const [stats, financials, statusBreakdown, dailyTrends] = await Promise.all([
           Admin.getStats(),
           Admin.getFinancials(),
           pgPool.query(
@@ -920,6 +920,7 @@ async function mountAdminPanel(app) {
              WHERE status NOT IN ('completed', 'cancelled')
              GROUP BY status ORDER BY count DESC`,
           ),
+          Admin.getDailyTrends(14),
         ]);
         return {
           ...stats,
@@ -928,6 +929,7 @@ async function mountAdminPanel(app) {
             status: r.status,
             count: parseInt(r.count, 10),
           })),
+          dailyTrends,
         };
       },
     },

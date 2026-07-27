@@ -197,6 +197,78 @@ class Admin extends BaseModel {
       excludesExternalCosts: 'Excludes infrastructure costs (Cloudinary, Resend, Render, Supabase, Paystack fees) — check each provider dashboard directly, not tracked here.',
     };
   }
+
+  // Day-over-day trends (Addendum 2 §5): user signups, driver signups,
+  // order volume, revenue — all buildable entirely from data that already
+  // exists (created_at is already real on every relevant table), grouped
+  // by day. Revenue uses the same real sources as getFinancials() above,
+  // just grouped by day instead of summed once — not a separate, simpler
+  // definition. "Real-time" per the audit doc's own conclusion means a
+  // periodic pull on page load, not a live socket feed — proportionate to
+  // how a solo founder actually checks this.
+  //
+  // TO_CHAR(..., 'YYYY-MM-DD') is used for every date, both the canonical
+  // day list and each grouped query, deliberately avoiding node-postgres's
+  // own DATE→JS-Date conversion (which applies a timezone interpretation
+  // that can shift a date by a day depending on server timezone) — a plain
+  // string produced by Postgres itself, matched directly, sidesteps that
+  // ambiguity entirely rather than risking an off-by-one day.
+  static async getDailyTrends(days = 14) {
+    const [dayListRes, usersRes, driversRes, ordersRes, revenueRes] = await Promise.all([
+      this.query(
+        `SELECT TO_CHAR(generate_series(NOW() - (($1::int - 1) || ' days')::interval, NOW(), '1 day'), 'YYYY-MM-DD') AS day`,
+        [days],
+      ),
+      this.query(
+        `SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, COUNT(*) AS count FROM users
+         WHERE created_at >= NOW() - ($1 || ' days')::interval GROUP BY day`,
+        [days],
+      ),
+      this.query(
+        `SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, COUNT(*) AS count FROM drivers
+         WHERE created_at >= NOW() - ($1 || ' days')::interval GROUP BY day`,
+        [days],
+      ),
+      this.query(
+        `SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, COUNT(*) AS count FROM orders
+         WHERE created_at >= NOW() - ($1 || ' days')::interval GROUP BY day`,
+        [days],
+      ),
+      this.query(
+        `SELECT day, SUM(amount) AS amount FROM (
+           SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, (delivery_fee - driver_payout) AS amount FROM orders
+             WHERE payment_status = 'paid' AND payment_method != 'cash' AND created_at >= NOW() - ($1 || ' days')::interval
+           UNION ALL
+           SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, price AS amount FROM driver_subscriptions
+             WHERE paystack_reference IS NOT NULL AND created_at >= NOW() - ($1 || ' days')::interval
+           UNION ALL
+           SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, price AS amount FROM premium_subscriptions
+             WHERE paystack_reference IS NOT NULL AND created_at >= NOW() - ($1 || ' days')::interval
+           UNION ALL
+           SELECT TO_CHAR(settled_at, 'YYYY-MM-DD') AS day, commission_amount AS amount FROM driver_commission_debts
+             WHERE status IN ('collected_wallet', 'collected_payout') AND settled_at >= NOW() - ($1 || ' days')::interval
+           UNION ALL
+           SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, store_amount AS amount FROM order_cancellations
+             WHERE created_at >= NOW() - ($1 || ' days')::interval
+         ) combined GROUP BY day`,
+        [days],
+      ),
+    ]);
+
+    const toMap = (rows, key) => new Map(rows.map((r) => [r.day, parseFloat(r[key])]));
+    const usersMap = toMap(usersRes.rows, 'count');
+    const driversMap = toMap(driversRes.rows, 'count');
+    const ordersMap = toMap(ordersRes.rows, 'count');
+    const revenueMap = toMap(revenueRes.rows, 'amount');
+
+    return dayListRes.rows.map((r) => ({
+      day: r.day,
+      newUsers: usersMap.get(r.day) || 0,
+      newDrivers: driversMap.get(r.day) || 0,
+      orders: ordersMap.get(r.day) || 0,
+      revenue: revenueMap.get(r.day) || 0,
+    }));
+  }
 }
 
 module.exports = Admin;
