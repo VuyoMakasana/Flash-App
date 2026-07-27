@@ -1,6 +1,6 @@
 const jwt   = require("jsonwebtoken");
 const pool  = require("../config/database");
-const { getRequired } = require("../config/env");
+const { getRequired, getOptional } = require("../config/env");
 
 // ─── AUTHENTICATE ────────────────────────────────────────────────────────────
 // Verifies the short-lived access token (15 min).
@@ -13,15 +13,64 @@ const authenticate = async (req, res, next) => {
   const token = header.replace("Bearer ", "");
 
   let decoded;
+  // Tracks which secret's signature actually verified this token — never
+  // trust the token's own `role` claim alone. Found live during the
+  // responsive/security audit pass: a token signed with the plain
+  // JWT_SECRET but with `role: 'admin'` written into its payload was
+  // ACCEPTED by every admin-gated route, because the two verify attempts
+  // below only ever checked "did some secret's signature match," never
+  // "does the role this token claims actually match the secret that
+  // proved it." Not exploitable by an external attacker without already
+  // having JWT_SECRET (nothing in this codebase ever mints a JWT_SECRET
+  // token with role:'admin' — confirmed by reading every issueTokenPair()
+  // call site), but it silently defeated the ADMIN_JWT_SECRET isolation
+  // this project explicitly built (Addendum 2 §0) as a real, defense-in-
+  // depth boundary, not just an accident-proofing convenience.
+  let verifiedWithAdminSecret = false;
   try {
     const jwtSecret = getRequired("JWT_SECRET", "auth");
     decoded = jwt.verify(token, jwtSecret);
   } catch (err) {
-    if (err.name === "TokenExpiredError")
+    // ADMIN_JWT_SECRET FIX (docs/audits/ADMIN_PANEL_AUDIT_AND_VISION.md,
+    // Addendum 2 §0): admin tokens are now signed with their own secret,
+    // separate from the shared user/driver one — a real, cheap isolation
+    // improvement. Verifying a correctly-signed admin token against the
+    // wrong (user/driver) secret always fails with "invalid signature"
+    // (JsonWebTokenError) regardless of expiry, so only retry on that
+    // specific error — a genuine TokenExpiredError from the first attempt
+    // must still be reported as expired, not masked by a second attempt.
+    if (err.name === "JsonWebTokenError") {
+      const adminJwtSecret = getOptional("ADMIN_JWT_SECRET", "auth");
+      if (adminJwtSecret) {
+        try {
+          decoded = jwt.verify(token, adminJwtSecret);
+          verifiedWithAdminSecret = true;
+        } catch (adminErr) {
+          if (adminErr.name === "TokenExpiredError")
+            return res.status(401).json({ error: "TOKEN_EXPIRED" });
+          return res.status(401).json({ error: "Invalid token" });
+        }
+      } else {
+        return res.status(401).json({ error: "Invalid token" });
+      }
+    } else if (err.name === "TokenExpiredError") {
       return res.status(401).json({ error: "TOKEN_EXPIRED" });
-    if (err.name === "JsonWebTokenError")
-      return res.status(401).json({ error: "Invalid token" });
-    return res.status(401).json({ error: "Authentication failed" });
+    } else {
+      return res.status(401).json({ error: "Authentication failed" });
+    }
+  }
+
+  // The real fix: a role of 'admin' is only ever legitimate if
+  // ADMIN_JWT_SECRET is the secret that actually proved this token — and
+  // symmetrically, a token verified against ADMIN_JWT_SECRET has no
+  // legitimate reason to claim any role other than 'admin'. Either
+  // mismatch means the token's payload was crafted, not issued by this
+  // app's real login flow.
+  if (decoded.role === "admin" && !verifiedWithAdminSecret) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+  if (verifiedWithAdminSecret && decoded.role !== "admin") {
+    return res.status(401).json({ error: "Invalid token" });
   }
 
   // CRITICAL FIX: the revocation check below used to share the try/catch

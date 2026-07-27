@@ -1,0 +1,68 @@
+/* Flash admin panel — explicit logo-size override.
+ *
+ * AdminJS's own built-in caps (login: max-width 200px, sidebar: max-width
+ * 170px — confirmed by reading login/index.js and sidebar-branding.js
+ * directly) only constrain width, not height. Against a square source
+ * image that meant the logo rendered up to 200x200/170x170 in practice —
+ * a large square block dominating the login panel and pushing the sidebar
+ * nav links down, not a compact header mark. Resizing the source image
+ * alone helps but doesn't guarantee an exact final size; this forces a
+ * real, deterministic small size in both spots regardless of source image
+ * dimensions or any future change to AdminJS's own internal caps.
+ *
+ * Selector: both the login and sidebar logo <img> tags render with
+ * alt={branding.companyName} ("Flash", confirmed in both components'
+ * source) — a stable, guaranteed hook, unlike styled-components' own
+ * generated class names, which aren't meant to be targeted externally.
+ */
+img[alt="Flash"] {
+  height: 40px !important;
+  max-height: 40px !important;
+  width: auto !important;
+  max-width: 120px !important;
+}
+
+/* FLASH — RESPONSIVE PASS: AdminJS's own top-right CurrentUserNav widget
+ * (email + avatar) never shrinks or truncates the admin's email at narrow
+ * widths, pushing the avatar circle partly off the right edge of the
+ * screen — confirmed live: avatar right edge at 398px on a 375px viewport
+ * (iPhone SE class). Fine from ~414px up.
+ *
+ * Selector: [data-css="logged-in"] is AdminJS's own stable hook for this
+ * exact widget (frontend/components/app/logged-in.js sets it directly on
+ * the wrapping Box) — everything else in this widget's markup is an
+ * unstable styled-components hash class, not meant to be targeted
+ * externally. `div:not(:has(div))` reaches only genuine leaf text nodes
+ * inside it regardless of exact nesting depth (name/email text, and the
+ * avatar's own single-letter div when no avatarUrl is set) — safe on the
+ * avatar div too, since its content is already narrower than the cap
+ * below and the rule has no visible effect on it.
+ */
+@media (max-width: 480px) {
+  [data-css="logged-in"] div:not(:has(div)) {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* FLASH — mobile zoom-on-focus fix. iOS Safari (and most Android mobile
+ * browsers) automatically zoom the whole page in when a focused text
+ * input's rendered font-size is under 16px -- a touch-input/browser
+ * behavior tied to the input's own font-size, not to viewport WIDTH (a
+ * wide tablet in landscape is just as affected as a narrow phone), so this
+ * is applied universally rather than behind a max-width media query like
+ * the rule above. Root cause confirmed live via real computed styles, not
+ * guessed: AdminJS's own theme default font size is 14px
+ * (theme.fontSizes.default/sm) on every text input in this panel --
+ * login, every list's filter drawer, every new/edit form -- none reach
+ * 16px anywhere. The page's <meta name="viewport"> tag itself (AdminJS's
+ * own default, deliberately left unmodified) has no user-scalable=no or
+ * maximum-scale -- correctly left alone, since disabling pinch-zoom
+ * outright would be a real accessibility regression this bug doesn't
+ * actually require.
+ */
+input, textarea, select {
+  font-size: 16px !important;
+}

@@ -362,6 +362,16 @@ async function migrate() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )`);
 
+    // CONFIRMED DEAD (ADMIN_PANEL_AUDIT_AND_VISION.md Addendum 1 §4.4, re-confirmed
+    // again during the final admin-panel completion pass by searching the entire
+    // backend source): no INSERT/UPDATE anywhere writes to this table, and nothing
+    // reads from it either -- fully orphaned, not just under-used. Superseded by
+    // driver_payout_requests + payout_transactions, which are the real, actively-used
+    // pair backing every real payout today (payoutService.js). Per this project's own
+    // "never drop data without being explicitly asked" rule, the table is kept, not
+    // dropped -- but it must not be read from or written to going forward. Registered
+    // in adminCoverage.js's intentionallyExcluded bucket with this exact reasoning, so
+    // a future admin-panel resource can never be built on top of it by accident.
     await client.query(`CREATE TABLE IF NOT EXISTS driver_payouts (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       payout_request_id UUID REFERENCES driver_payout_requests(id) ON DELETE SET NULL,
@@ -507,6 +517,20 @@ async function migrate() {
       created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
     )`);
 
+    // CONFIRMED DEAD (ADMIN_PANEL_AUDIT_AND_VISION.md Addendum 1 §4.4, re-confirmed
+    // again during the final admin-panel completion pass): no INSERT/UPDATE anywhere
+    // writes to this table -- confirmed by searching the entire backend source, not
+    // assumed. A real READ path still exists (Return.getCredits(), reachable via
+    // GET /api/returns/credits) but since nothing ever creates a row with
+    // balance > 0, that endpoint can only ever return an empty result -- a remnant
+    // of the old store-credit, driver-claims-instantly return model, explicitly
+    // superseded by the current real-refund model (returnRoutes.js's own comment:
+    // "the old store-credit... model has been removed"). Per this project's own
+    // "never drop data without being explicitly asked" rule, the table is kept, not
+    // dropped -- but it must not be written to going forward, and any dashboard
+    // number built on it (e.g. "outstanding store credit liability") would always,
+    // silently, incorrectly report zero. Registered in adminCoverage.js's
+    // intentionallyExcluded bucket with this exact reasoning.
     await client.query(`CREATE TABLE IF NOT EXISTS store_credits (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -845,6 +869,61 @@ async function migrate() {
     throw err;
   } finally {
     client17.release();
+  }
+
+  // ── v18 ────────────────────────────────────────────────────────────────────
+  const client18 = await pool.connect();
+  try {
+    await migrateV18(client18);
+  } catch (err) {
+    console.error('Migration v18 failed:', err.message);
+    throw err;
+  } finally {
+    client18.release();
+  }
+
+  // ── v19 ────────────────────────────────────────────────────────────────────
+  const client19 = await pool.connect();
+  try {
+    await migrateV19(client19);
+  } catch (err) {
+    console.error('Migration v19 failed:', err.message);
+    throw err;
+  } finally {
+    client19.release();
+  }
+
+  // ── v20 ────────────────────────────────────────────────────────────────────
+  const client20 = await pool.connect();
+  try {
+    await migrateV20(client20);
+  } catch (err) {
+    console.error('Migration v20 failed:', err.message);
+    throw err;
+  } finally {
+    client20.release();
+  }
+
+  // ── v21 ────────────────────────────────────────────────────────────────────
+  const client21 = await pool.connect();
+  try {
+    await migrateV21(client21);
+  } catch (err) {
+    console.error('Migration v21 failed:', err.message);
+    throw err;
+  } finally {
+    client21.release();
+  }
+
+  // ── v22 ────────────────────────────────────────────────────────────────────
+  const client22 = await pool.connect();
+  try {
+    await migrateV22(client22);
+  } catch (err) {
+    console.error('Migration v22 failed:', err.message);
+    throw err;
+  } finally {
+    client22.release();
     await pool.end();
   }
 
@@ -1169,4 +1248,202 @@ async function migrateV17(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17 };
+// ─── v18: real individual admin accounts + admin action audit log ───────────
+// Admin panel Phase 0 (docs/audits/ADMIN_PANEL_AUDIT_AND_VISION.md). Replaces
+// the single shared ADMIN_EMAIL/ADMIN_PASSWORD_HASH identity with real rows,
+// same shape as users/drivers (id, name, email UNIQUE, password_hash, phone
+// nullable, created_at/updated_at). `role` exists from day one — every row
+// defaults to 'admin' today — so a future distinction (e.g. a read-only
+// support role) is a data change later, not a schema migration.
+// admin_actions is the audit trail the doc named as directly connected to
+// this same table: append-only, same shape as driver_wallet_ledger, one row
+// per real admin-mutating action (approve/reject a return, update a driver's
+// status, etc.) — never updated or deleted after insert.
+async function migrateV18(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admins (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name          VARCHAR(255) NOT NULL,
+        email         VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        phone         VARCHAR(50),
+        role          VARCHAR(20) NOT NULL DEFAULT 'admin',
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_actions (
+        id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        admin_id     UUID NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+        action_type  VARCHAR(50) NOT NULL,
+        target_table VARCHAR(50),
+        target_id    UUID,
+        metadata     JSONB,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_admin_actions_admin_id ON admin_actions(admin_id, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v18 completed: admins + admin_actions tables');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v18 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v19: chronological-sort indexes for the admin panel ────────────────────
+// (docs/audits/ADMIN_PANEL_AUDIT_AND_VISION.md — the chronological-ordering
+// pass). Every admin-panel resource now defaults its list view to sorting by
+// a real timestamp column, most recent first — and at real scale (thousands
+// to millions of rows), sorting or filtering on an unindexed column gets
+// slower as the table grows, never faster. Checked every EXISTING index on
+// each of these eight tables before adding anything, not assumed: orders
+// already has a real standalone idx_orders_created_at (v1–v6) — not
+// duplicated here. The other seven either had no index on the relevant
+// column at all (drivers, return_requests, driver_wallets,
+// driver_payout_requests), or only a COMPOSITE index led by a different
+// column — idx_order_cancellations_order leads with order_id,
+// idx_driver_wallet_ledger_driver and idx_payout_transactions_driver lead
+// with driver_id — which does not help Postgres avoid a full sort for the
+// admin panel's own global "every row, most recent first" query, since that
+// query has no leading-column filter to match the composite index against.
+// idx_sos_alerts_unacknowledged is also insufficient for this specific
+// purpose: it's a PARTIAL index (WHERE acknowledged_at IS NULL), so it
+// never covers already-acknowledged rows in a global list view.
+//
+// Plain CREATE INDEX (inside this function's existing transaction), not
+// CREATE INDEX CONCURRENTLY, matching every other migration in this file —
+// CONCURRENTLY cannot run inside a transaction block at all, and singling
+// out just this one migration to run non-transactionally, at current table
+// sizes, would be inconsistent for no real present benefit. Worth
+// revisiting if/when a table here grows large enough that a brief
+// index-build lock becomes an actual deployment concern.
+async function migrateV19(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_drivers_created_at ON drivers(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_order_cancellations_created_at ON order_cancellations(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_return_requests_created_at ON return_requests(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_sos_alerts_created_at ON sos_alerts(created_at DESC)`);
+    // driver_wallets is a one-row-per-driver live snapshot, not an event
+    // log -- updated_at (last balance change), not created_at (the row's
+    // arbitrary first-insert time), is the column the admin panel actually
+    // sorts by here. See adminPanel.js's RESOURCE_TIMESTAMP_COLUMNS for the
+    // same reasoning.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_wallets_updated_at ON driver_wallets(updated_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_wallet_ledger_created_at ON driver_wallet_ledger(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_payout_requests_created_at ON driver_payout_requests(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_payout_transactions_created_at ON payout_transactions(created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v19 completed: chronological-sort indexes for the admin panel');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v19 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v20: flagged_accounts (Phase 3 — flagged-account review) ───────────────
+// users.flagged_for_cash_abuse/cash_refusal_count are real columns already
+// written to by real code (paymentController.js flags a customer after
+// their second cash-payment refusal) but were never surfaced anywhere for a
+// human to see (ADMIN_PANEL_AUDIT_AND_VISION.md §2). users itself can't be
+// registered as a real AdminJS resource -- @adminjs/sql's own introspection
+// drops it entirely, confirmed live: this database has two tables named
+// "users" (public.users, the real app table, and Supabase-managed
+// auth.users), and the adapter's own unqualified-by-schema queries throw
+// "more than one row returned" for any table name that collides across
+// schemas, so it silently excludes them (same root cause already documented
+// in adminPanel.js's attachUserNames comment).
+//
+// flagged_accounts is a small, periodically-synced snapshot of just the
+// flagged subset (server.js's new cron job keeps it current) -- a real,
+// uniquely-named table @adminjs/sql's introspection has no reason to drop,
+// so it CAN be registered directly. Deliberately doesn't duplicate
+// name/email/phone here -- those stay looked up live via the same
+// attachUserNames pattern already used everywhere else in adminPanel.js,
+// so there's no separate copy of contact info that could drift stale;
+// only the flag data itself (which lives on users and is otherwise
+// unreachable) needs syncing.
+async function migrateV20(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS flagged_accounts (
+        id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id                 UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+        flagged_for_cash_abuse  BOOLEAN NOT NULL DEFAULT false,
+        cash_refusal_count      INTEGER NOT NULL DEFAULT 0,
+        synced_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_flagged_accounts_synced_at ON flagged_accounts(synced_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v20 completed: flagged_accounts table');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v20 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v21: chronological-sort index for the flash_inventory admin resource ───
+// Phase 4 (ADMIN_PANEL_AUDIT_AND_VISION.md §3 — inventory management, backend
+// already fully built, no admin UI until now). Checked the existing indexes
+// on flash_inventory first, not assumed: idx_flash_inventory_active_created
+// and idx_flash_inventory_active_category_created both lead with is_active
+// (real, correct indexes for the customer-facing "active products only"
+// query) — neither helps Postgres avoid a full sort for the admin panel's
+// own global "every product, active or not, most recent first" list, which
+// has no is_active filter to match a composite index's leading column
+// against. Same reasoning as migration v19.
+async function migrateV21(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_flash_inventory_created_at ON flash_inventory(created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v21 completed: flash_inventory chronological-sort index');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v21 failed:', err.message);
+    throw err;
+  }
+}
+
+// Final admin-panel completion pass, §4 (boost/promotions — build the real
+// effect, founder's decision). store_boosts previously had no per-product
+// target at all — it was store-level only, and this codebase is genuinely
+// single-vendor (no `stores` table; store_id is a free-text tag, always
+// "flash_closet"), so a store-level boost had nothing to rank above — it
+// couldn't produce any observable effect even if wired up correctly. A real
+// ranking effect requires a real product to target, hence product_id here
+// (nullable — legacy/store-level rows, if any exist, remain valid, they
+// simply never match the boosted-first ORDER BY in Inventory.getProducts).
+// paystack_reference mirrors driver_subscriptions/premium_subscriptions —
+// the payment audit trail for the real charge now wired into purchaseBoost.
+async function migrateV22(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE store_boosts ADD COLUMN IF NOT EXISTS product_id UUID REFERENCES flash_inventory(id)`);
+    await client.query(`ALTER TABLE store_boosts ADD COLUMN IF NOT EXISTS paystack_reference VARCHAR(255)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_boosts_product_active ON store_boosts(product_id, status, expires_at)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v22 completed: store_boosts product_id + paystack_reference (real boost effect)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v22 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22 };

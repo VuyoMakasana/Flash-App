@@ -14,6 +14,7 @@ const pool    = require('../config/database');
 const { getOptional, isProd } = require('../config/env');
 const Payment = require('../models/Payment');
 const Subscription = require('../models/Subscription');
+const Boost = require('../models/Boost');
 const RefundService = require('../services/refundService');
 const { autoAssignNearestDriver } = require('../services/autoMatchService');
 const { updateOrderStatus }       = require('../services/orderStateMachineService');
@@ -112,6 +113,12 @@ class WebhookController {
     // attach to — handle and finalize them separately from order payments.
     if (metaType === 'driver_subscription' || metaType === 'premium_subscription') {
       return WebhookController.handleSubscriptionCharge(event);
+    }
+
+    // Store boost charges (final admin-panel completion pass, §4) — same
+    // "no orders row" shape as subscriptions above.
+    if (metaType === 'store_boost') {
+      return WebhookController.handleBoostCharge(event);
     }
 
     const orderId = data?.metadata?.orderId;
@@ -328,6 +335,56 @@ class WebhookController {
       }
     } catch (err) {
       console.error('[Webhook] Subscription activation failed:', err.message);
+    }
+  }
+
+  // Finalizes a store_boost charge — the counterpart to Boost.purchaseBoost(),
+  // which only initializes the Paystack hosted-checkout redirect. Mirrors
+  // handleSubscriptionCharge()'s idempotency pattern exactly (event id
+  // inserted inside its own transaction, so a rollback also removes the
+  // marker and allows a safe retry) — there is no orders row to lock here.
+  static async handleBoostCharge(event) {
+    const data = event.data;
+    const { productId, boostType } = data?.metadata || {};
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      if (event.id) {
+        try {
+          await client.query(
+            `INSERT INTO webhook_events (paystack_event_id, event_type) VALUES ($1, $2)`,
+            [String(event.id), event.event || 'unknown'],
+          );
+        } catch (dupErr) {
+          if (dupErr.code === '23505') {
+            await client.query('ROLLBACK');
+            console.log(`[Webhook] Duplicate event ${event.id} — already processed, skipping`);
+            return;
+          }
+          throw dupErr;
+        }
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[Webhook] handleBoostCharge idempotency error:', err.message);
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    try {
+      if (productId && boostType) {
+        await Boost.activateBoost(productId, boostType, data.reference);
+        console.log(`[Webhook] Activated store_boost type=${boostType} productId=${productId} ref=${data.reference}`);
+      } else {
+        console.warn('[Webhook] handleBoostCharge: missing/invalid metadata', data?.metadata);
+      }
+    } catch (err) {
+      console.error('[Webhook] Boost activation failed:', err.message);
     }
   }
 

@@ -1,4 +1,5 @@
 const Return = require("../models/Return");
+const AdminAction = require("../models/AdminAction");
 
 class ReturnController {
   static async requestReturn(req, res) {
@@ -77,6 +78,7 @@ class ReturnController {
     const { returnId } = req.params;
     try {
       const result = await Return.approveReturn(returnId, req.userId);
+      AdminAction.log(req.userId, "return_approve", "return_requests", returnId);
       res.json({ success: true, ...result });
     } catch (err) {
       if (err.message === "Return not found") {
@@ -95,6 +97,7 @@ class ReturnController {
     const { rejectionReason } = req.body;
     try {
       const result = await Return.rejectReturn(returnId, req.userId, rejectionReason);
+      AdminAction.log(req.userId, "return_reject", "return_requests", returnId, { rejectionReason: rejectionReason || null });
       res.json({ success: true, returnRequest: result });
     } catch (err) {
       if (err.message === "Return not found") {
@@ -112,6 +115,7 @@ class ReturnController {
     const { returnId } = req.params;
     try {
       const result = await Return.finalizeRefund(returnId, req.userId);
+      AdminAction.log(req.userId, "return_finalize_refund", "return_requests", returnId);
       res.json({ success: true, ...result });
     } catch (err) {
       if (err.message === "Return not found") {

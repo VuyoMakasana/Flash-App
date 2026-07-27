@@ -1,4 +1,7 @@
 const BaseModel = require("./BaseModel");
+const paystackService = require("../services/paystackService");
+
+const FLASH_STORE_ID = "flash_closet";
 
 const BOOST_PLANS = {
   search_top: {
@@ -42,25 +45,69 @@ class Boost extends BaseModel {
     return result.rows;
   }
 
-  static async purchaseBoost(storeId, storeName, boostType) {
+  // Final admin-panel completion pass, §4 — real Paystack charge, same
+  // pattern as Subscription.purchaseDriverPlan/purchasePremium: no
+  // store_boosts row is written here at all. This only validates the
+  // target product and boost plan, then hands back a Paystack hosted-
+  // checkout URL. The row is created by activateBoost() below, called from
+  // webhookController once Paystack actually confirms the charge succeeded
+  // — so a boost can never appear "active" without a real, verified payment.
+  //
+  // Requires a real productId (not just a storeId) because this codebase is
+  // single-vendor (no `stores` table) — boosting "the store" has nothing to
+  // rank above, so it can never produce an observable effect. Boosting a
+  // specific product against the rest of the catalogue is the only version
+  // of this feature that does something real (see Inventory.getProducts).
+  static async purchaseBoost(productId, boostType, adminId) {
     const plan = BOOST_PLANS[boostType];
     if (!plan) {
       throw new Error("Invalid boost type");
     }
 
+    const productResult = await this.query(
+      `SELECT id, product_name FROM flash_inventory WHERE id=$1 AND is_active=true`,
+      [productId],
+    );
+    if (!productResult.rows.length) {
+      throw new Error("Product not found or inactive");
+    }
+    const product = productResult.rows[0];
+
+    const adminResult = await this.query(`SELECT email FROM admins WHERE id=$1`, [adminId]);
+    if (!adminResult.rows.length) {
+      throw new Error("Admin not found");
+    }
+
+    const amountInCents = Math.round(plan.price * 100);
+    const paystackRes = await paystackService.initializeGenericCharge(
+      adminResult.rows[0].email,
+      amountInCents,
+      { productId, boostType, type: "store_boost", platform: "flash" },
+    );
+
+    return {
+      requiresPayment: true,
+      authorizationUrl: paystackRes.authorizationUrl,
+      message: `Complete payment to activate "${plan.label}" on ${product.product_name}`,
+    };
+  }
+
+  // Called by webhookController once Paystack confirms a store_boost charge
+  // succeeded — the other half of purchaseBoost() above.
+  static async activateBoost(productId, boostType, paystackReference) {
+    const plan = BOOST_PLANS[boostType];
+    if (!plan) throw new Error(`Unknown boost type: ${boostType}`);
+
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + plan.days);
 
     const result = await this.query(
-      `INSERT INTO store_boosts (store_id, store_name, boost_type, price_paid, starts_at, expires_at, status)
-       VALUES ($1,$2,$3,$4,NOW(),$5,'active') RETURNING *`,
-      [storeId, storeName, boostType, plan.price, expiresAt],
+      `INSERT INTO store_boosts (store_id, store_name, boost_type, price_paid, starts_at, expires_at, status, product_id, paystack_reference)
+       VALUES ($1,$2,$3,$4,NOW(),$5,'active',$6,$7) RETURNING *`,
+      [FLASH_STORE_ID, "Flash", boostType, plan.price, expiresAt, productId, paystackReference],
     );
 
-    return {
-      boost: result.rows[0],
-      message: `${plan.label} activated for ${plan.days} days`,
-    };
+    return result.rows[0];
   }
 
   static async createPromotion(

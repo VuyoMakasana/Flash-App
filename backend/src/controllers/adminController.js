@@ -1,96 +1,53 @@
 const Admin = require("../models/Admin");
+const AdminAction = require("../models/AdminAction");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const pool = require("../config/database");
-const { getRequired, isProd, isDev } = require("../config/env");
-
-// There is no admins table — a single, config-driven admin identity
-// (ADMIN_EMAIL/ADMIN_PASSWORD_HASH) is the only one this system supports.
-// The JWT's `id` claim used to be the literal string "admin", which
-// middleware/auth.js copies straight into req.userId for every
-// admin-authenticated request. Any admin-gated write that stores
-// req.userId into a UUID-typed column (e.g. return_requests.approved_by)
-// crashed unconditionally with a Postgres type error. Using a real, fixed
-// UUID here instead means req.userId is a valid UUID everywhere, for
-// every admin action, without each write site needing to special-case it.
-const ADMIN_USER_ID = "00000000-0000-0000-0000-000000000001";
+const { getRequired } = require("../config/env");
 
 class AdminController {
+  // ADMIN PANEL PHASE 0 (docs/audits/ADMIN_PANEL_AUDIT_AND_VISION.md):
+  // real, individual admin accounts, replacing the single shared
+  // ADMIN_EMAIL/ADMIN_PASSWORD_HASH identity entirely — not run alongside it.
+  // Each admin now has a real row (admins.id) and a real bcrypt hash of
+  // their own; the JWT's `id` claim is that real UUID, so every admin-gated
+  // write (e.g. return_requests.approved_by) records who actually did it.
+  // Signed with ADMIN_JWT_SECRET, not the shared JWT_SECRET user/driver
+  // tokens use — a real, cheap isolation improvement (see middleware/auth.js).
   static async login(req, res) {
     const { email, password } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "Email and password required" });
     }
 
-    const adminEmail = process.env.ADMIN_EMAIL;
-    if (email !== adminEmail) {
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
-
     try {
-      let isValid = false;
-      const passwordHash = process.env.ADMIN_PASSWORD_HASH;
-      const plainPassword = process.env.ADMIN_PASSWORD;
-
-      // Production: MUST use bcrypt hash
-      if (isProd) {
-        if (!passwordHash) {
-          console.error("[Admin Auth] CRITICAL: ADMIN_PASSWORD_HASH required in production");
-          return res.status(500).json({
-            error:
-              "Admin authentication system misconfigured. [ERR_ADMIN_CONFIG]",
-          });
-        }
-        isValid = await bcrypt.compare(password, passwordHash);
-      } else {
-        // Development: Try hashed first, then fallback to plain-text with warning
-        if (passwordHash) {
-          try {
-            isValid = await bcrypt.compare(password, passwordHash);
-          } catch (e) {
-            console.warn(
-              "[Admin Auth] Hash comparison failed, trying plain-text fallback",
-            );
-            isValid = false;
-          }
-        }
-
-        if (!isValid && plainPassword) {
-          console.warn(
-            "[Admin Auth]   SECURITY: Using plain-text password comparison. Set ADMIN_PASSWORD_HASH before production!",
-          );
-          isValid = password === plainPassword;
-        }
-
-        if (!passwordHash && !plainPassword) {
-          console.warn(
-            "[Admin Auth]   Neither ADMIN_PASSWORD_HASH nor ADMIN_PASSWORD configured",
-          );
-        }
+      const admin = await Admin.findByEmail(email);
+      if (!admin) {
+        return res.status(401).json({ error: "Invalid credentials" });
       }
 
+      const isValid = await bcrypt.compare(password, admin.password_hash);
       if (!isValid) {
         return res.status(401).json({ error: "Invalid credentials" });
       }
 
-      const jwtSecret = getRequired("JWT_SECRET", "admin-auth");
+      const jwtSecret = getRequired("ADMIN_JWT_SECRET", "admin-auth");
       if (!jwtSecret) {
         return res.status(500).json({
           error: "Authentication system misconfigured. [ERR_JWT_CONFIG]",
         });
       }
 
-      // H7 FIX: admin tokens previously carried no `jti`, so middleware/auth.js's
-      // revocation check (`if (decoded.jti) { ... }`) silently skipped them —
-      // a leaked admin token stayed valid for its full 8h life with no way to
-      // kill it early, and there was no admin logout endpoint at all.
+      // H7 FIX (unchanged): admin tokens carry a jti so middleware/auth.js's
+      // revocation check applies to them too — a leaked admin token can be
+      // killed early via logout, not just left valid for its full 8h life.
       const token = jwt.sign(
-        { id: ADMIN_USER_ID, role: "admin", jti: uuidv4() },
+        { id: admin.id, role: admin.role, jti: uuidv4() },
         jwtSecret,
         { expiresIn: "8h" },
       );
-      res.json({ token });
+      res.json({ token, admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role } });
     } catch (err) {
       console.error("[Admin Auth] Login error:", err.message);
       res.status(500).json({ error: "Login failed" });
@@ -154,6 +111,7 @@ class AdminController {
 
     try {
       await Admin.updateDriverStatus(driverId, status);
+      AdminAction.log(req.userId, "driver_status_update", "drivers", driverId, { status, notes: notes || null });
       res.json({ success: true, status });
     } catch (err) {
       res.status(500).json({ error: "Failed to update driver status" });

@@ -119,6 +119,23 @@ class Order extends BaseModel {
       //   with HTTP 400 before the transaction commits.
       //
       // ──────────────────────────────────────────────────────────────────────
+      // Final admin-panel completion pass, §4 — the store-wide promotion's
+      // discount_percent (Boost.createPromotion) now actually reduces price,
+      // instead of just sitting in store_promotions unused. Only the best
+      // (highest-percent) active promotion applies, computed once outside
+      // the item loop rather than re-queried per item. Only flash_inventory
+      // items are discounted — external/partner items aren't Flash's own
+      // stock, so a Flash promotion has no claim on their price.
+      const promoResult = await client.query(
+        `SELECT discount_percent FROM store_promotions
+         WHERE is_active = true AND discount_percent IS NOT NULL
+           AND NOW() BETWEEN starts_at AND expires_at
+         ORDER BY discount_percent DESC LIMIT 1`
+      );
+      const activeDiscountPercent = promoResult.rows.length
+        ? parseInt(promoResult.rows[0].discount_percent, 10)
+        : 0;
+
       let computedSubtotal = 0;
       const validatedItems  = [];
 
@@ -144,6 +161,9 @@ class Order extends BaseModel {
           if (invRow.rows.length) {
             // ── FLASH INVENTORY PATH: use server price, ignore client price ──
             serverPrice = parseFloat(invRow.rows[0].price);
+            if (activeDiscountPercent > 0) {
+              serverPrice = Math.round(serverPrice * (1 - activeDiscountPercent / 100) * 100) / 100;
+            }
 
             // Stock check — decrement atomically
             const stock     = invRow.rows[0].stock_by_size || {};

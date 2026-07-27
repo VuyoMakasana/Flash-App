@@ -178,10 +178,20 @@ class OrderController {
       if (!result.rows.length) return res.status(404).json({ error: 'Order not found' });
 
       const order = result.rows[0];
-      if (req.userRole === 'user' && order.user_id !== req.userId) {
-        return res.status(403).json({ error: 'Not your order' });
-      }
-      if (req.userRole === 'driver' && order.driver_id !== req.userId) {
+      // ADMIN-ACCESS FIX (ADMIN_PANEL_AUDIT_AND_VISION.md, Addendum 3 §2):
+      // neither guard below ever matched req.userRole === 'admin', so an
+      // admin token previously passed straight through by omission -- never
+      // denied, but never a deliberate decision either, the same class of
+      // gap already found and closed once this engagement for the
+      // unauthenticated /api/drivers/nearby endpoint. Rewritten as an
+      // explicit allow-list: exactly three cases are allowed (the order's
+      // own customer, its own driver, or any admin) and everything else is
+      // denied on purpose, rather than "whatever isn't user-or-driver falls
+      // through unchecked."
+      const isOwnCustomer = req.userRole === 'user' && order.user_id === req.userId;
+      const isOwnDriver = req.userRole === 'driver' && order.driver_id === req.userId;
+      const isAdmin = req.userRole === 'admin';
+      if (!isOwnCustomer && !isOwnDriver && !isAdmin) {
         return res.status(403).json({ error: 'Not your order' });
       }
 

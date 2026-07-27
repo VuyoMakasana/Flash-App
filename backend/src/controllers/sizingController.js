@@ -1,4 +1,5 @@
 const Sizing = require("../models/Sizing");
+const AdminAction = require("../models/AdminAction");
 
 class SizingController {
   static async getMeasurementGuide(req, res) {
@@ -62,6 +63,7 @@ class SizingController {
         category,
         mappings,
       );
+      AdminAction.log(req.userId, "sizing_seed_mappings", "brand_size_mappings", null, { storeId, brandName, category, count: seeded });
       res.json({
         success: true,
         message: `${seeded} size mappings saved for ${brandName}`,
