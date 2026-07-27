@@ -163,6 +163,117 @@ const CANCELLED_BY_ROLE_VALUES = [
   { value: 'system', label: 'System (Auto-Cancelled)' },
 ];
 
+// Real, fixed set — confirmed by reading driverController.js's own
+// REQUIRED_DOCS array (the actual server-side allow-list a driver's upload
+// is checked against), not guessed. document_type has no DB-level CHECK
+// constraint, so this is a display label lookup, not a validator — an
+// unrecognized value still renders, just with its raw string as the label.
+const DOCUMENT_TYPE_LABELS = {
+  government_id: 'Government ID',
+  drivers_license: "Driver's License",
+  police_certified: 'Police Clearance Certificate',
+  profile_photo: 'Profile Photo',
+  vehicle_registration: 'Vehicle Registration',
+};
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+// Surfaces the same signed, short-lived URLs Admin.getDriverById already
+// generates (the H-access-audit fix — never the permanent file_url column)
+// as a real, viewable-in-panel document review screen. `documents` is a
+// virtual property (declared in drivers' resource options below, not a real
+// DB column) — AdminJS's own decorateVirtualProperties creates a real
+// property for any options.properties key that isn't an existing column,
+// confirmed by reading decorate-properties.js directly. Uses AdminJS's
+// built-in `richtext` property type (renders via the `xss` package's
+// default whitelist, confirmed to keep <a href>/<img src> intact) instead of
+// a custom frontend component -- no new bundling risk, no new dependency.
+async function attachDriverDocuments(response) {
+  const record = response.record;
+  if (!record?.params) return response;
+  const result = await Admin.getDriverById(record.id);
+  const documents = result?.documents || [];
+  record.params.documents = documents.length
+    ? documents.map((doc) => {
+      const label = DOCUMENT_TYPE_LABELS[doc.document_type] || doc.document_type;
+      const status = doc.verified ? 'Verified' : 'Not yet verified';
+      if (!doc.file_url) {
+        return `<p><b>${escapeHtml(label)}</b> — ${status}<br>(no file available — either nothing uploaded yet, or it predates the signed-URL fix and needs re-upload)</p>`;
+      }
+      return `<p><b>${escapeHtml(label)}</b> — ${status}<br>`
+        + `<a href="${doc.file_url}" target="_blank" rel="noopener">Open full-size in a new tab</a><br>`
+        + `<img src="${doc.file_url}" alt="${escapeHtml(label)}" style="max-width:320px;margin-top:6px;border:1px solid #ccc" /></p>`;
+    }).join('<hr>')
+    : '<p>No documents uploaded yet.</p>';
+  return response;
+}
+
+// Unified order-detail view (Addendum 2 §1 of the planning doc): customer
+// contact and driver contact, plus that order's return/cancellation shown
+// inline if one exists, rather than requiring a switch to a separate
+// resource to discover them. Four virtual properties (declared show-only,
+// textarea type — plain multi-line text, no HTML, so no escaping/xss
+// concerns the way the richtext driver-documents field has). Deliberately
+// additive: user_id/driver_id stay exactly as they already were (raw UUID
+// column + driver_id's existing working reference-link) — this only adds
+// alongside, it doesn't touch either of those two fields, so tonight's
+// earlier "keep raw IDs in the detail view" behavior is unaffected.
+async function attachOrderDetailContext(response) {
+  const record = response.record;
+  if (!record?.params) return response;
+  const orderId = record.id;
+  const userId = record.params.user_id;
+  const driverId = record.params.driver_id;
+
+  const [userRes, driverRes, returnRes, cancellationRes] = await Promise.all([
+    userId
+      ? pgPool.query('SELECT name, phone, email FROM public.users WHERE id = $1', [userId])
+      : Promise.resolve({ rows: [] }),
+    driverId
+      ? pgPool.query('SELECT phone, vehicle_type, vehicle_plate FROM drivers WHERE id = $1', [driverId])
+      : Promise.resolve({ rows: [] }),
+    pgPool.query(
+      'SELECT status, reason, refund_amount, credit_amount FROM return_requests WHERE order_id = $1',
+      [orderId],
+    ),
+    pgPool.query(
+      `SELECT reason, refund_mode, store_amount, driver_amount, customer_item_refund, delivery_fee_refunded
+       FROM order_cancellations WHERE order_id = $1`,
+      [orderId],
+    ),
+  ]);
+
+  const u = userRes.rows[0];
+  record.params.customer_contact = u
+    ? `Name: ${u.name || '(none on file)'}\nPhone: ${u.phone || '(none on file)'}\nEmail: ${u.email || '(none on file)'}`
+    : 'No customer record found for this order.';
+
+  const d = driverRes.rows[0];
+  record.params.driver_contact = driverId
+    ? (d
+      ? `Phone: ${d.phone || '(none on file)'}\nVehicle: ${d.vehicle_type || '(not on file)'} ${d.vehicle_plate || ''}`.trim()
+      : 'Assigned driver record not found.')
+    : 'No driver assigned to this order yet.';
+
+  const ret = returnRes.rows[0];
+  record.params.return_status = ret
+    ? `Status: ${ret.status}\nReason: ${ret.reason || '(none given)'}\nRefund amount: R${ret.refund_amount || '0.00'}\nCredit amount: R${ret.credit_amount || '0.00'}`
+    : 'No return request on this order.';
+
+  const canc = cancellationRes.rows[0];
+  record.params.cancellation_details = canc
+    ? `Reason: ${canc.reason || '(none given)'}\nRefund mode: ${canc.refund_mode || '(not recorded)'}\n`
+      + `Store share: R${canc.store_amount || '0.00'}\nDriver compensation: R${canc.driver_amount || '0.00'}\n`
+      + `Customer item refund: R${canc.customer_item_refund || '0.00'}\nDelivery fee refunded: R${canc.delivery_fee_refunded || '0.00'}`
+    : 'This order was not cancelled.';
+
+  return response;
+}
+
 async function mountAdminPanel(app) {
   const AdminJSModule = require('adminjs');
   const AdminJS = AdminJSModule.default;
@@ -268,10 +379,14 @@ async function mountAdminPanel(app) {
             // read-only, since name/phone edits are harmless) forces status
             // changes through the two real actions below instead.
             status: { isVisible: { edit: false }, availableValues: DRIVER_STATUS_VALUES },
+            // Virtual — no such column on drivers. show-only: the driver
+            // document-review screen the founder asked for, populated by
+            // attachDriverDocuments below.
+            documents: { type: 'richtext', isVisible: { list: false, show: true, edit: false, filter: false } },
           },
           actions: {
             list: { after: [stripSensitive] },
-            show: { after: [stripSensitive] },
+            show: { after: [stripSensitive, attachDriverDocuments] },
             edit: { after: [stripSensitive] },
             approveDriver: {
               actionType: 'record',
@@ -321,13 +436,23 @@ async function mountAdminPanel(app) {
             cash_otp_plain: { isVisible: false },
             status: { availableValues: ORDER_STATUS_VALUES },
             payment_method: { availableValues: [{ value: 'cash', label: 'Cash' }, { value: 'card', label: 'Card' }] },
+            // Virtual — none of these four are real columns on orders. All
+            // show-only: the unified order-detail view (customer/driver
+            // contact, inline return/cancellation), populated by
+            // attachOrderDetailContext below.
+            customer_contact: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
+            driver_contact: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
+            return_status: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
+            cancellation_details: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
           },
           actions: {
             // attachUserNames only on `list` — show intentionally keeps the
             // raw user_id UUID untouched, per the founder's explicit ask to
-            // keep raw IDs available in the detail view.
+            // keep raw IDs available in the detail view. attachOrderDetailContext
+            // is additive on top of that -- it doesn't touch user_id/driver_id
+            // at all, it adds the four virtual fields above alongside them.
             list: { after: [stripSensitive, attachUserNames('user_id')] },
-            show: { after: [stripSensitive] },
+            show: { after: [stripSensitive, attachOrderDetailContext] },
             // Read-only — orders are created and mutated through the real
             // app/driver flows and the order state machine
             // (orderStateMachineService.js), never by an admin editing a row
