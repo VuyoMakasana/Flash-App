@@ -180,4 +180,57 @@ async function sendReturnAwaitingReviewEmail({ returnId, orderNumber, refundAmou
   });
 }
 
-module.exports = { sendPasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail };
+// ─── SOS alert — immediate, regardless of who's watching the panel ────────
+// Addendum 2 §4's own notification tiering named this as the single most
+// important item to wire up first: before this, an SOS alert only ever
+// reached a live Socket.io connection to the 'admin' room (sosController.js's
+// io.to('admin').emit) — missed entirely if nobody had the panel open at
+// that exact moment. Email fires regardless, the same way
+// sendReturnAwaitingReviewEmail already proved out for returns.
+
+async function sendSosAlertEmail({ alertId, orderId, orderNumber, triggeredByRole, pickupAddress, dropoffAddress, lat, lng }) {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  if (!adminEmail) {
+    console.warn('[Email] ADMIN_EMAIL not configured — skipping SOS alert notification');
+    return null;
+  }
+
+  const mapsLink = (lat != null && lng != null)
+    ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+    : null;
+
+  return sendEmail({
+    to:      adminEmail,
+    subject: `SOS ALERT — order ${orderNumber || orderId}`,
+    text:    `An SOS alert was just triggered by a ${triggeredByRole} on order ${orderNumber || orderId}.\n\n`
+      + `Pickup: ${pickupAddress || '(not recorded)'}\nDropoff: ${dropoffAddress || '(not recorded)'}\n`
+      + (mapsLink ? `Live location: ${mapsLink}\n` : 'Live location: not provided\n')
+      + `\nAlert ID: ${alertId}\nAcknowledge it in the admin panel as soon as you've responded.`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px;border:3px solid #C20012">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="display:inline-block;background:#C20012;border-radius:16px;padding:16px">
+        <span style="color:#fff;font-size:24px;font-weight:900;letter-spacing:2px">SOS ALERT</span>
+      </div>
+    </div>
+    <p style="color:#111827;font-size:16px">Triggered by a <strong>${triggeredByRole}</strong> on order <strong>${orderNumber || orderId}</strong>.</p>
+    <p style="color:#6b7280;margin-bottom:4px"><strong>Pickup:</strong> ${pickupAddress || '(not recorded)'}</p>
+    <p style="color:#6b7280;margin-top:0"><strong>Dropoff:</strong> ${dropoffAddress || '(not recorded)'}</p>
+    ${mapsLink ? `<div style="text-align:center;margin:24px 0"><a href="${mapsLink}" style="display:inline-block;background:#C20012;color:#fff;text-decoration:none;padding:14px 32px;border-radius:12px;font-weight:700;font-size:16px">Open Live Location</a></div>` : '<p style="color:#9ca3af">No location data was provided.</p>'}
+    <p style="color:#9ca3af;font-size:12px;border-top:1px solid #f3f4f6;padding-top:16px;margin-bottom:0">
+      Alert ID: ${alertId} — acknowledge it in the admin panel as soon as you've responded.
+    </p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
+module.exports = {
+  sendPasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
+  sendSosAlertEmail,
+};

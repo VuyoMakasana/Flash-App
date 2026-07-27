@@ -14,6 +14,7 @@
 
 const db = require('../config/database');
 const SosAlert = require('../models/SosAlert');
+const { sendSosAlertEmail } = require('../services/emailService');
 
 class SosController {
   static async trigger(req, res) {
@@ -23,7 +24,7 @@ class SosController {
 
     try {
       const orderResult = await db.query(
-        `SELECT id, user_id, driver_id, status, pickup_address, dropoff_address
+        `SELECT id, order_number, user_id, driver_id, status, pickup_address, dropoff_address
          FROM orders WHERE id = $1`,
         [orderId],
       );
@@ -58,6 +59,24 @@ class SosController {
       } else {
         console.error(`[SOS] ALERT with no io instance available — orderId=${orderId} role=${req.userRole} userId=${req.userId}`);
       }
+
+      // Fired without awaiting — the in-app "help is on the way" response
+      // below must never wait on an SMTP round trip. The .catch() here
+      // means a bug in the email path can NEVER affect the response a user
+      // in a real emergency is waiting on. Addendum 2 §4's own notification
+      // tiering named this the single most important item to wire up first,
+      // ahead of every other return/cancellation/threshold notification
+      // named alongside it.
+      sendSosAlertEmail({
+        alertId: alert.id,
+        orderId,
+        orderNumber: order.order_number,
+        triggeredByRole: req.userRole,
+        pickupAddress: order.pickup_address,
+        dropoffAddress: order.dropoff_address,
+        lat: alert.lat,
+        lng: alert.lng,
+      }).catch((emailErr) => console.error('[SOS] Failed to send alert email:', emailErr.message));
 
       return res.status(201).json({
         success: true,

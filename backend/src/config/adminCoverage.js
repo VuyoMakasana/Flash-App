@@ -61,7 +61,7 @@ module.exports = {
     messages:                'Phase 2 — found during this pass, not previously named in any round: order chat between customer/driver belongs in the dispute-review screen alongside pickup/dropoff photos (same screen, same justification — a dispute needs the conversation, not just the photo).',
 
     // ── Phase 3 — trust and safety ───────────────────────────────────────
-    sos_alerts:     'Phase 3 — the most urgent gap in the whole document (Addendum 1 §1.4): needs a real getAll/acknowledge pair.',
+    sos_alerts:     'Phase 3 — real AdminJS resource + SosAlert.getAll/acknowledge + an immediate SOS email (Addendum 2 §4) now built and verified live.',
     driver_ratings: 'Phase 3 — rating trends (already named in the original §3 Phase 3 text).',
 
     // ── Phase 4 — rounding out ───────────────────────────────────────────

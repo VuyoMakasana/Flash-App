@@ -22,6 +22,7 @@ const bcrypt = require('bcryptjs');
 const Admin = require('./models/Admin');
 const AdminAction = require('./models/AdminAction');
 const Return = require('./models/Return');
+const SosAlert = require('./models/SosAlert');
 // Named pgPool, deliberately not db — mountAdminPanel already has a local
 // `db` variable for the @adminjs/sql adapter; reusing that name here for an
 // unrelated plain pg Pool would be exactly the kind of mistake worth
@@ -175,6 +176,12 @@ const CANCELLED_BY_ROLE_VALUES = [
   { value: 'system', label: 'System (Auto-Cancelled)' },
 ];
 
+// sos_alerts.triggered_by_role's own real CHECK constraint (migrate.js).
+const TRIGGERED_BY_ROLE_VALUES = [
+  { value: 'user', label: 'Customer' },
+  { value: 'driver', label: 'Driver' },
+];
+
 // Real, fixed set — confirmed by reading driverController.js's own
 // REQUIRED_DOCS array (the actual server-side allow-list a driver's upload
 // is checked against), not guessed. document_type has no DB-level CHECK
@@ -283,6 +290,71 @@ async function attachOrderDetailContext(response) {
       + `Customer item refund: R${canc.customer_item_refund || '0.00'}\nDelivery fee refunded: R${canc.delivery_fee_refunded || '0.00'}`
     : 'This order was not cancelled.';
 
+  return response;
+}
+
+// Phase 3 (ADMIN_PANEL_AUDIT_AND_VISION.md §1.4/§3) -- SOS alert queue
+// helpers. triggered_by_id is genuinely polymorphic -- sos_alerts'
+// triggered_by_role has a real CHECK constraint of ('user','driver')
+// (confirmed in migrate.js), so unlike order_cancellations.cancelled_by_id
+// (always a user), this needs to check EACH row's own role before deciding
+// which table to look the name up in. Applied to `list` only, matching the
+// same convention as attachUserNames elsewhere in this file.
+async function attachTriggeredByName(response) {
+  const records = response.records;
+  if (!Array.isArray(records) || records.length === 0) return response;
+  const userIds = records.filter((r) => r.params?.triggered_by_role === 'user').map((r) => r.params.triggered_by_id).filter(Boolean);
+  const driverIds = records.filter((r) => r.params?.triggered_by_role === 'driver').map((r) => r.params.triggered_by_id).filter(Boolean);
+  const [userRows, driverRows] = await Promise.all([
+    userIds.length ? pgPool.query('SELECT id, name, phone FROM public.users WHERE id = ANY($1::uuid[])', [userIds]) : { rows: [] },
+    driverIds.length ? pgPool.query('SELECT id, name, phone FROM drivers WHERE id = ANY($1::uuid[])', [driverIds]) : { rows: [] },
+  ]);
+  const byId = new Map([...userRows.rows, ...driverRows.rows].map((p) => [p.id, p]));
+  records.forEach((r) => {
+    const rawId = r.params?.triggered_by_id;
+    const person = rawId && byId.get(rawId);
+    if (person && r.params && person.name) {
+      r.params.triggered_by_id = person.phone ? `${person.name} — ${person.phone}` : person.name;
+    }
+  });
+  return response;
+}
+
+// acknowledged_by is always a real admins.id (set by the acknowledge action
+// below) -- not polymorphic, so this is a plain single-table lookup, same
+// shape as attachUserNames.
+async function attachAcknowledgedByName(response) {
+  const records = response.records;
+  if (!Array.isArray(records) || records.length === 0) return response;
+  const ids = [...new Set(records.map((r) => r.params?.acknowledged_by).filter(Boolean))];
+  if (ids.length === 0) return response;
+  const { rows } = await pgPool.query('SELECT id, name FROM admins WHERE id = ANY($1::uuid[])', [ids]);
+  const byId = new Map(rows.map((a) => [a.id, a]));
+  records.forEach((r) => {
+    const rawId = r.params?.acknowledged_by;
+    const admin = rawId && byId.get(rawId);
+    if (admin && r.params) r.params.acknowledged_by = admin.name;
+  });
+  return response;
+}
+
+// Virtual richtext field (same mechanism as the driver-documents screen --
+// AdminJS's own decorateVirtualProperties, no low-level property hacking).
+// Applied to both list and show -- unlike the customer/driver-name fields
+// above, this doesn't hide or replace any real column (lat/lng stay exactly
+// as they are), so there's no "keep the raw value in show" tension to
+// balance here -- an admin scanning the queue should be able to jump
+// straight to a live location without opening each row individually.
+function attachLocationLink(response) {
+  function addLink(record) {
+    if (!record?.params) return;
+    const { lat, lng } = record.params;
+    record.params.location_link = (lat != null && lng != null)
+      ? `<a href="https://www.google.com/maps/search/?api=1&query=${lat},${lng}" target="_blank" rel="noopener">Open live location in Google Maps</a>`
+      : '<p>No location data was provided.</p>';
+  }
+  addLink(response.record);
+  if (Array.isArray(response.records)) response.records.forEach(addLink);
   return response;
 }
 
@@ -639,6 +711,61 @@ async function mountAdminPanel(app) {
           },
         },
       },
+      {
+        // Phase 3's own top-priority item (ADMIN_PANEL_AUDIT_AND_VISION.md
+        // §1.4/§3): "the single most safety-relevant gap in this whole
+        // audit" -- before this, a triggered SOS alert only ever reached a
+        // live Socket.io connection to the 'admin' room; missed entirely if
+        // nobody had the panel open at that exact moment. order_id is a
+        // real FK to orders -- automatically shows the real order_number as
+        // a working reference link, same as every other order_id column in
+        // this file, no extra code needed.
+        resource: db.table('sos_alerts'),
+        options: {
+          listProperties: [
+            'order_id', 'triggered_by_role', 'triggered_by_id', 'location_link',
+            'acknowledged_at', 'acknowledged_by', 'created_at',
+          ],
+          properties: {
+            triggered_by_role: { availableValues: TRIGGERED_BY_ROLE_VALUES },
+            // Virtual -- no such column on sos_alerts.
+            location_link: { type: 'richtext', isVisible: { list: true, show: true, edit: false, filter: false } },
+          },
+          actions: {
+            list: { after: [attachTriggeredByName, attachAcknowledgedByName, attachLocationLink, stripSensitive] },
+            show: { after: [attachLocationLink, stripSensitive] },
+            // Fully read-only except for the one real action below -- this
+            // table is either an active emergency or a record of one that
+            // already happened, not something an admin free-edits.
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+            acknowledge: {
+              actionType: 'record',
+              component: false,
+              guard: 'Acknowledge this SOS alert? This marks it as handled by you.',
+              // Only actionable while genuinely unacknowledged -- matches
+              // SosAlert.acknowledge's own WHERE acknowledged_at IS NULL
+              // guard, so the button disappears once someone has already
+              // handled it instead of inviting a second, meaningless click.
+              isAccessible: ({ record }) => !record.param('acknowledged_at'),
+              after: [stripSensitive],
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                const updated = await SosAlert.acknowledge(record.id(), currentAdmin.id);
+                if (!updated) {
+                  return { record: record.toJSON(currentAdmin), notice: { message: 'Already acknowledged by someone else.', type: 'error' } };
+                }
+                AdminAction.log(currentAdmin.id, 'sos_acknowledge', 'sos_alerts', record.id());
+                record.set('acknowledged_at', updated.acknowledged_at);
+                record.set('acknowledged_by', currentAdmin.id);
+                return { record: record.toJSON(currentAdmin), notice: { message: 'SOS alert acknowledged.', type: 'success' } };
+              },
+            },
+          },
+        },
+      },
     ],
     // component registered above (financeDashboardComponent) -- see the
     // comment by componentLoader's construction for why this replaced the
@@ -724,7 +851,7 @@ async function mountAdminPanel(app) {
   });
   adminPanelRouter.use(router);
 
-  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests)`);
+  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts)`);
 }
 
 module.exports = { mountAdminPanel, ADMIN_PANEL_PATH };
