@@ -23,6 +23,7 @@ const Admin = require('./models/Admin');
 const AdminAction = require('./models/AdminAction');
 const Return = require('./models/Return');
 const SosAlert = require('./models/SosAlert');
+const s3Service = require('./services/s3Service');
 // Named pgPool, deliberately not db — mountAdminPanel already has a local
 // `db` variable for the @adminjs/sql adapter; reusing that name here for an
 // unrelated plain pg Pool would be exactly the kind of mistake worth
@@ -289,6 +290,66 @@ async function attachOrderDetailContext(response) {
       + `Store share: R${canc.store_amount || '0.00'}\nDriver compensation: R${canc.driver_amount || '0.00'}\n`
       + `Customer item refund: R${canc.customer_item_refund || '0.00'}\nDelivery fee refunded: R${canc.delivery_fee_refunded || '0.00'}`
     : 'This order was not cancelled.';
+
+  return response;
+}
+
+// Phase 2 -- the order-photos dispute-review screen (Addendum 2 §1's
+// "returns/cancellations, full detail, not siloed" ask, plus the messages
+// table finding from Addendum 1 §4.1: "a dispute needs the conversation,
+// not just the photo"). Reuses s3Service.getSignedUrl directly -- the same
+// short-lived, never-permanent signed URL the real JSON API's
+// orderController.getOrderPhotos already generates, not a second
+// implementation of that logic. pickup/dropoff_photo_public_id are real
+// columns already present in record.params (never hidden), read directly
+// rather than re-queried.
+async function attachDisputeContext(response) {
+  const record = response.record;
+  if (!record?.params) return response;
+  const orderId = record.id;
+  const {
+    pickup_photo_public_id: pickupId, pickup_photo_resource_type: pickupType, pickup_photo_at: pickupAt,
+    dropoff_photo_public_id: dropoffId, dropoff_photo_resource_type: dropoffType, dropoff_photo_at: dropoffAt,
+  } = record.params;
+
+  const [pickupUrl, dropoffUrl, messagesRes] = await Promise.all([
+    s3Service.getSignedUrl(pickupId, pickupType || 'image'),
+    s3Service.getSignedUrl(dropoffId, dropoffType || 'image'),
+    pgPool.query(
+      'SELECT sender_id, sender_role, content, created_at FROM messages WHERE order_id = $1 ORDER BY created_at ASC',
+      [orderId],
+    ),
+  ]);
+
+  record.params.photos = [
+    pickupUrl
+      ? `<p><b>Pickup photo</b> — ${new Date(pickupAt).toLocaleString()}<br><a href="${pickupUrl}" target="_blank" rel="noopener">Open full-size</a><br><img src="${pickupUrl}" style="max-width:280px;margin-top:6px;border:1px solid #ccc" /></p>`
+      : '<p><b>Pickup photo</b> — none uploaded yet.</p>',
+    dropoffUrl
+      ? `<p><b>Dropoff photo</b> — ${new Date(dropoffAt).toLocaleString()}<br><a href="${dropoffUrl}" target="_blank" rel="noopener">Open full-size</a><br><img src="${dropoffUrl}" style="max-width:280px;margin-top:6px;border:1px solid #ccc" /></p>`
+      : '<p><b>Dropoff photo</b> — none uploaded yet.</p>',
+  ].join('<hr>');
+
+  // sender_id is polymorphic (messages.sender_role CHECK ('user','driver')) --
+  // same pattern as sos_alerts.triggered_by_id, same fix.
+  const rows = messagesRes.rows;
+  const userIds = rows.filter((m) => m.sender_role === 'user').map((m) => m.sender_id);
+  const driverIds = rows.filter((m) => m.sender_role === 'driver').map((m) => m.sender_id);
+  const [userRows, driverRows] = await Promise.all([
+    userIds.length ? pgPool.query('SELECT id, name FROM public.users WHERE id = ANY($1::uuid[])', [userIds]) : { rows: [] },
+    driverIds.length ? pgPool.query('SELECT id, name FROM drivers WHERE id = ANY($1::uuid[])', [driverIds]) : { rows: [] },
+  ]);
+  const nameById = new Map([...userRows.rows, ...driverRows.rows].map((p) => [p.id, p.name]));
+
+  // Type 'textarea', not 'richtext' -- rendered as plain text children
+  // (confirmed by reading textarea/show.js), never dangerouslySetInnerHTML,
+  // so real customer/driver-written message content can never inject HTML
+  // through this field the way it safely could for `photos` above (whose
+  // only interpolated values are server-generated URLs/dates, never raw
+  // user text).
+  record.params.order_chat = rows.length
+    ? rows.map((m) => `${new Date(m.created_at).toLocaleString()} — ${nameById.get(m.sender_id) || m.sender_role}: ${m.content}`).join('\n')
+    : 'No messages on this order.';
 
   return response;
 }
@@ -644,6 +705,11 @@ async function mountAdminPanel(app) {
             driver_contact: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
             return_status: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
             cancellation_details: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
+            // Virtual -- the dispute-review screen (Phase 2): real signed
+            // pickup/dropoff photos + the order's real chat thread,
+            // populated by attachDisputeContext below.
+            photos: { type: 'richtext', isVisible: { list: false, show: true, edit: false, filter: false } },
+            order_chat: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
           },
           actions: {
             // attachUserNames only on `list` — show intentionally keeps the
@@ -652,7 +718,7 @@ async function mountAdminPanel(app) {
             // is additive on top of that -- it doesn't touch user_id/driver_id
             // at all, it adds the four virtual fields above alongside them.
             list: { after: [stripSensitive, attachUserNames('user_id')] },
-            show: { after: [stripSensitive, attachOrderDetailContext] },
+            show: { after: [stripSensitive, attachOrderDetailContext, attachDisputeContext] },
             // Read-only — orders are created and mutated through the real
             // app/driver flows and the order state machine
             // (orderStateMachineService.js), never by an admin editing a row

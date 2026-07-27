@@ -58,7 +58,7 @@ module.exports = {
     driver_subscriptions:    'Phase 2 — subscription status/history (added in Addendum 3 §1, fixing the inconsistency where the revenue was counted without the record).',
     premium_subscriptions:   'Phase 2 — same fix as driver_subscriptions, Addendum 3 §1.',
     driver_documents:        'Phase 2/1 — document review via signed URLs; Admin.getDriverById already does this correctly, no UI yet.',
-    messages:                'Phase 2 — found during this pass, not previously named in any round: order chat between customer/driver belongs in the dispute-review screen alongside pickup/dropoff photos (same screen, same justification — a dispute needs the conversation, not just the photo).',
+    messages:                'Phase 2 — order chat now shown inline on the order-detail screen alongside pickup/dropoff photos, now built and verified live.',
 
     // ── Phase 3 — trust and safety ───────────────────────────────────────
     sos_alerts:     'Phase 3 — real AdminJS resource + SosAlert.getAll/acknowledge + an immediate SOS email (Addendum 2 §4) now built and verified live.',
