@@ -3,6 +3,26 @@
 'use strict';
 
 const nodemailer = require('nodemailer');
+const pool = require('../config/database');
+
+// FLASH — deploy/Sentry/admin-email pass: real, individual admin accounts
+// have existed since Phase 0 (the `admins` table), but these operational
+// notifications were still pointed at a static ADMIN_EMAIL env var left
+// over from the old single-shared-credential model. Reading the real
+// admins table means adding a second admin later automatically notifies
+// them too, with no config change — the env var could only ever reach one
+// inbox. Notifies every real admin (there is exactly one today); per-admin
+// routing (e.g. only whoever handled a related record) is a natural,
+// separate extension for once there's more than one, not built here.
+async function getAdminEmails() {
+  try {
+    const result = await pool.query('SELECT email FROM admins ORDER BY created_at ASC');
+    return result.rows.map((r) => r.email);
+  } catch (err) {
+    console.error('[Email] Failed to look up admin emails from database:', err.message);
+    return [];
+  }
+}
 
 // Build transporter once at module load.
 // Reads SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS from environment.
@@ -142,19 +162,19 @@ async function sendEmailVerificationEmail(toEmail, verifyToken) {
 // Fired the instant a return's reverse-delivery order reaches 'completed'
 // while the return itself is still 'approved' (i.e. dispatched but not yet
 // finalized) — closes the gap where nothing would otherwise tell anyone a
-// return is sitting ready for the manual refund/reject decision. There is
-// no admin dashboard/app in this codebase, so email to ADMIN_EMAIL is the
-// only currently-real notification channel.
+// return is sitting ready for the manual refund/reject decision. Email to
+// every real admin (getAdminEmails, above) is the only currently-real
+// notification channel — there is no in-app admin push/socket alert today.
 
 async function sendReturnAwaitingReviewEmail({ returnId, orderNumber, refundAmount }) {
-  const adminEmail = process.env.ADMIN_EMAIL;
-  if (!adminEmail) {
-    console.warn('[Email] ADMIN_EMAIL not configured — skipping return-awaiting-review notification');
+  const adminEmails = await getAdminEmails();
+  if (!adminEmails.length) {
+    console.warn('[Email] No admin accounts found — skipping return-awaiting-review notification');
     return null;
   }
 
   return sendEmail({
-    to:      adminEmail,
+    to:      adminEmails,
     subject: `Return ready for final review — ${orderNumber}`,
     text:    `Return ${returnId} (order ${orderNumber}) has been delivered back to the store and is awaiting your final decision.\n\nRefund amount if approved: R${parseFloat(refundAmount).toFixed(2)}\n\nFinalize or reject via POST /api/returns/${returnId}/finalize-refund or /reject.`,
     html: `
@@ -189,9 +209,9 @@ async function sendReturnAwaitingReviewEmail({ returnId, orderNumber, refundAmou
 // sendReturnAwaitingReviewEmail already proved out for returns.
 
 async function sendSosAlertEmail({ alertId, orderId, orderNumber, triggeredByRole, pickupAddress, dropoffAddress, lat, lng }) {
-  const adminEmail = process.env.ADMIN_EMAIL;
-  if (!adminEmail) {
-    console.warn('[Email] ADMIN_EMAIL not configured — skipping SOS alert notification');
+  const adminEmails = await getAdminEmails();
+  if (!adminEmails.length) {
+    console.warn('[Email] No admin accounts found — skipping SOS alert notification');
     return null;
   }
 
@@ -200,7 +220,7 @@ async function sendSosAlertEmail({ alertId, orderId, orderNumber, triggeredByRol
     : null;
 
   return sendEmail({
-    to:      adminEmail,
+    to:      adminEmails,
     subject: `SOS ALERT — order ${orderNumber || orderId}`,
     text:    `An SOS alert was just triggered by a ${triggeredByRole} on order ${orderNumber || orderId}.\n\n`
       + `Pickup: ${pickupAddress || '(not recorded)'}\nDropoff: ${dropoffAddress || '(not recorded)'}\n`

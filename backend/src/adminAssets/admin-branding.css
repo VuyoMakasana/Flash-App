@@ -46,3 +46,23 @@ img[alt="Flash"] {
     white-space: nowrap;
   }
 }
+
+/* FLASH — mobile zoom-on-focus fix. iOS Safari (and most Android mobile
+ * browsers) automatically zoom the whole page in when a focused text
+ * input's rendered font-size is under 16px -- a touch-input/browser
+ * behavior tied to the input's own font-size, not to viewport WIDTH (a
+ * wide tablet in landscape is just as affected as a narrow phone), so this
+ * is applied universally rather than behind a max-width media query like
+ * the rule above. Root cause confirmed live via real computed styles, not
+ * guessed: AdminJS's own theme default font size is 14px
+ * (theme.fontSizes.default/sm) on every text input in this panel --
+ * login, every list's filter drawer, every new/edit form -- none reach
+ * 16px anywhere. The page's <meta name="viewport"> tag itself (AdminJS's
+ * own default, deliberately left unmodified) has no user-scalable=no or
+ * maximum-scale -- correctly left alone, since disabling pinch-zoom
+ * outright would be a real accessibility regression this bug doesn't
+ * actually require.
+ */
+input, textarea, select {
+  font-size: 16px !important;
+}
