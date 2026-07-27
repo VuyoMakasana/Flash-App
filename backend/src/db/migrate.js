@@ -878,6 +878,17 @@ async function migrate() {
     throw err;
   } finally {
     client20.release();
+  }
+
+  // ── v21 ────────────────────────────────────────────────────────────────────
+  const client21 = await pool.connect();
+  try {
+    await migrateV21(client21);
+  } catch (err) {
+    console.error('Migration v21 failed:', err.message);
+    throw err;
+  } finally {
+    client21.release();
     await pool.end();
   }
 
@@ -1349,4 +1360,28 @@ async function migrateV20(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20 };
+// ─── v21: chronological-sort index for the flash_inventory admin resource ───
+// Phase 4 (ADMIN_PANEL_AUDIT_AND_VISION.md §3 — inventory management, backend
+// already fully built, no admin UI until now). Checked the existing indexes
+// on flash_inventory first, not assumed: idx_flash_inventory_active_created
+// and idx_flash_inventory_active_category_created both lead with is_active
+// (real, correct indexes for the customer-facing "active products only"
+// query) — neither helps Postgres avoid a full sort for the admin panel's
+// own global "every product, active or not, most recent first" list, which
+// has no is_active filter to match a composite index's leading column
+// against. Same reasoning as migration v19.
+async function migrateV21(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_flash_inventory_created_at ON flash_inventory(created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v21 completed: flash_inventory chronological-sort index');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v21 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21 };

@@ -23,7 +23,10 @@ const Admin = require('./models/Admin');
 const AdminAction = require('./models/AdminAction');
 const Return = require('./models/Return');
 const SosAlert = require('./models/SosAlert');
+const Inventory = require('./models/Inventory');
+const Fleet = require('./models/Fleet');
 const s3Service = require('./services/s3Service');
+const { clearCache } = require('./middleware/cache');
 const { withChronologicalDefaults, RESOURCE_TIMESTAMP_COLUMNS } = require('./config/adminResourceDefaults');
 // Named pgPool, deliberately not db — mountAdminPanel already has a local
 // `db` variable for the @adminjs/sql adapter; reusing that name here for an
@@ -426,6 +429,29 @@ const RATING_VALUES = [
   { value: 4, label: '4 stars' },
   { value: 5, label: '5 stars' },
 ];
+
+const INVENTORY_ACTIVE_VALUES = [
+  { value: true, label: 'Active' },
+  { value: false, label: 'Inactive' },
+];
+
+// Phase 4 -- flash_inventory (ADMIN_PANEL_AUDIT_AND_VISION.md §3: "real
+// admin CRUD already exists (inventoryRoutes.js), UI not yet built"). Unlike
+// every other resource in this file, inventory is something an admin is
+// genuinely expected to actively edit, not a read-only historical record --
+// so new/edit stay enabled (real forms, real column writes -- sizes/
+// stock_by_size are real JSONB columns, confirmed mapped to AdminJS's
+// built-in 'key-value' editor type, not raw text). What they must NOT skip:
+// inventoryController.js's addProduct/updateStock both call
+// clearCache('cache:*/inventory*') after writing -- confirmed by reading
+// Inventory.js/inventoryController.js directly -- so a customer-facing
+// stale-cache bug is the real risk of using AdminJS's generic new/edit
+// without this. This after-hook replicates that one real side effect
+// without duplicating the rest of the controller's logic.
+async function clearInventoryCacheAfter(response) {
+  await clearCache('cache:*/inventory*');
+  return response;
+}
 
 // Phase 3 (ADMIN_PANEL_AUDIT_AND_VISION.md §1.4/§3) -- SOS alert queue
 // helpers. triggered_by_id is genuinely polymorphic -- sos_alerts'
@@ -992,6 +1018,50 @@ function buildResources(db) {
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.flagged_accounts),
       },
+      {
+        resource: db.table('flash_inventory'),
+        options: withChronologicalDefaults({
+          listProperties: ['product_name', 'category', 'brand', 'price', 'is_active', 'created_at'],
+          properties: {
+            // cost_price is Flash's internal wholesale/margin data --
+            // Inventory.js's own PUBLIC_COLUMNS already excludes it from
+            // every public-facing read; hidden from the list here for the
+            // same reason (still visible in show/edit -- an admin managing
+            // stock legitimately needs to see and set it).
+            cost_price: { isVisible: { list: false, show: true, edit: true, filter: false } },
+            is_active: { isVisible: { edit: false }, availableValues: INVENTORY_ACTIVE_VALUES },
+          },
+          actions: {
+            list: {},
+            show: {},
+            // Real forms, real writes -- see clearInventoryCacheAfter's own
+            // comment for why the after-hook is required here, unlike every
+            // other resource in this file.
+            new: { after: [clearInventoryCacheAfter] },
+            edit: { after: [clearInventoryCacheAfter] },
+            // Generic delete would be a real, permanent DELETE FROM --
+            // Inventory.deleteProduct is a soft delete (is_active=false),
+            // matching this codebase's "never drop data unless explicitly
+            // requested" rule. Disabled in favor of the real action below.
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+            deactivateProduct: {
+              actionType: 'record',
+              component: false,
+              guard: 'Deactivate this product? It will stop showing to customers, but stays in the system.',
+              isAccessible: ({ record }) => record.param('is_active') !== false,
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                await Inventory.deleteProduct(record.id());
+                await clearCache('cache:*/inventory*');
+                AdminAction.log(currentAdmin.id, 'inventory_delete_product', 'flash_inventory', record.id());
+                record.set('is_active', false);
+                return { record: record.toJSON(currentAdmin), notice: { message: 'Product deactivated.', type: 'success' } };
+              },
+            },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.flash_inventory),
+      },
   ];
 }
 
@@ -1221,7 +1291,7 @@ async function mountAdminPanel(app) {
   });
   adminPanelRouter.use(router);
 
-  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, driver_ratings, flagged_accounts)`);
+  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, driver_ratings, flagged_accounts, flash_inventory)`);
 }
 
 module.exports = { mountAdminPanel, ADMIN_PANEL_PATH, buildResources };

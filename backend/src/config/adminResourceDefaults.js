@@ -42,6 +42,7 @@ const RESOURCE_TIMESTAMP_COLUMNS = {
   // against the real users columns) is the meaningful "when" here, same
   // reasoning as driver_wallets.updated_at above.
   flagged_accounts: 'synced_at',
+  flash_inventory: 'created_at',
 };
 
 // Applied via the same options object every resource already builds, not a
