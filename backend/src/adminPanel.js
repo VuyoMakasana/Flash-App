@@ -414,6 +414,19 @@ const PAYOUT_TRANSACTION_STATUS_VALUES = [
   { value: 'failed', label: 'Failed' },
 ];
 
+// driver_ratings.rating's own real CHECK constraint (migrate.js: BETWEEN 1
+// AND 5). Not a status in the usual sense, but the same Badge mechanism
+// (default-property-value.js) applies to any availableValues match
+// regardless of the underlying data's meaning -- a real, low-risk touch,
+// consistent with how every other enum-shaped column in this file renders.
+const RATING_VALUES = [
+  { value: 1, label: '1 star' },
+  { value: 2, label: '2 stars' },
+  { value: 3, label: '3 stars' },
+  { value: 4, label: '4 stars' },
+  { value: 5, label: '5 stars' },
+];
+
 // Phase 3 (ADMIN_PANEL_AUDIT_AND_VISION.md §1.4/§3) -- SOS alert queue
 // helpers. triggered_by_id is genuinely polymorphic -- sos_alerts'
 // triggered_by_role has a real CHECK constraint of ('user','driver')
@@ -512,12 +525,28 @@ function attachLocationLink(response) {
 // reference(). type() reads from BaseProperty._type (adminjs core,
 // base-property.js) — same plain-JS-property situation, same fix: also
 // override that directly, not just the adapter-level reference field.
+//
+// FOUND LIVE AGAIN, missed a second time (flagged_accounts, Phase 3):
+// .find() only mutates the FIRST property with a matching name -- but a
+// column that carries BOTH a UNIQUE constraint and a REFERENCES constraint
+// (flagged_accounts.user_id: `UUID NOT NULL REFERENCES users(id) ... UNIQUE`
+// -- unlike every other user_id column in this file, which is REFERENCES-only,
+// no UNIQUE) makes @adminjs/sql's own introspection enumerate that column
+// TWICE, producing two separate Property objects with the identical name
+// 'user_id' -- confirmed directly by logging resourceMetadata.properties'
+// names for this exact table, not assumed. .find() silently left the
+// second, still-broken duplicate in place, which is exactly the one
+// populator.js's getFlattenProperties() iterated onto and crashed on ("There
+// are no resources with given id: users"). Switched to .filter()+.forEach()
+// so every matching property gets fixed, not just the first -- correct
+// regardless of whether a given column happens to duplicate like this.
 function suppressReference(resourceMetadata, propertyName) {
-  const prop = resourceMetadata.properties.find((p) => p.name() === propertyName);
-  if (prop) {
-    prop._referencedTable = null;
-    prop._type = 'string';
-  }
+  resourceMetadata.properties
+    .filter((p) => p.name() === propertyName)
+    .forEach((prop) => {
+      prop._referencedTable = null;
+      prop._type = 'string';
+    });
   return resourceMetadata;
 }
 
@@ -901,6 +930,68 @@ function buildResources(db) {
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.payout_transactions),
       },
+      {
+        // Phase 3 (§3's original text: "driver-rating trends (aggregation
+        // query over existing rating data)"). order_id/driver_id are real
+        // FKs to already-registered resources and work automatically
+        // (orders.titleProperty='order_number', drivers.titleProperty='name'
+        // -- both set earlier in this file). user_id is the same broken-
+        // reference situation as everywhere else user_id appears (users
+        // can't be registered -- see suppressReference's own comment above)
+        // -- same fix.
+        resource: suppressReference(db.table('driver_ratings'), 'user_id'),
+        options: withChronologicalDefaults({
+          listProperties: ['order_id', 'driver_id', 'user_id', 'rating', 'comment', 'created_at'],
+          properties: {
+            rating: { availableValues: RATING_VALUES },
+          },
+          actions: {
+            // attachUserNames only on list -- show keeps the raw user_id
+            // UUID, same convention as every other resource in this file.
+            // stripSensitive covers the populated driver_id -> drivers
+            // (password_hash) and order_id -> orders (cash_otp fields)
+            // sub-records.
+            list: { after: [attachUserNames('user_id'), stripSensitive] },
+            show: { after: [stripSensitive] },
+            // Fully read-only -- a real historical record of what a
+            // customer actually rated, never admin-edited.
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.driver_ratings),
+      },
+      {
+        // Phase 3 (§2's original text: "a flagged-accounts view
+        // (flagged_for_cash_abuse, cash_refusal_count -- trivial new
+        // query)"). Real columns already written to by paymentController.js,
+        // never surfaced anywhere for a human to see until now. Synced from
+        // users into this small, uniquely-named table by server.js's new
+        // cron job (every 15 min) -- see migrate.js v20's comment for why
+        // users itself can't be a resource directly.
+        resource: suppressReference(db.table('flagged_accounts'), 'user_id'),
+        options: withChronologicalDefaults({
+          listProperties: ['user_id', 'flagged_for_cash_abuse', 'cash_refusal_count', 'synced_at'],
+          actions: {
+            // attachUserNames only on list, same convention as everywhere
+            // else. stripSensitive is a defensive no-op today (user_id's
+            // reference is suppressed, so there's no populated sub-record
+            // to leak from) -- kept for the same forward-looking reason
+            // it's applied everywhere else: a future reference added to
+            // this resource should not have to remember to add this back.
+            list: { after: [attachUserNames('user_id'), stripSensitive] },
+            show: { after: [stripSensitive] },
+            // Read-only -- a synced view of real flag state living on
+            // users, not something an admin hand-edits here. Reviewing,
+            // not managing, per the explicit ask.
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.flagged_accounts),
+      },
   ];
 }
 
@@ -1051,7 +1142,7 @@ async function mountAdminPanel(app) {
     dashboard: {
       component: financeDashboardComponent,
       handler: async () => {
-        const [stats, financials, statusBreakdown, dailyTrends] = await Promise.all([
+        const [stats, financials, statusBreakdown, dailyTrends, ratingTrend] = await Promise.all([
           Admin.getStats(),
           Admin.getFinancials(),
           pgPool.query(
@@ -1060,6 +1151,7 @@ async function mountAdminPanel(app) {
              GROUP BY status ORDER BY count DESC`,
           ),
           Admin.getDailyTrends(14),
+          Admin.getDriverRatingTrend(14),
         ]);
         return {
           ...stats,
@@ -1069,6 +1161,7 @@ async function mountAdminPanel(app) {
             count: parseInt(r.count, 10),
           })),
           dailyTrends,
+          ratingTrend,
         };
       },
     },
@@ -1128,7 +1221,7 @@ async function mountAdminPanel(app) {
   });
   adminPanelRouter.use(router);
 
-  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions)`);
+  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, driver_ratings, flagged_accounts)`);
 }
 
 module.exports = { mountAdminPanel, ADMIN_PANEL_PATH, buildResources };

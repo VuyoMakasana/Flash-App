@@ -561,6 +561,39 @@ cron.schedule('30 1 * * *', async () => {
     }
   });
 
+  // WHY: users.flagged_for_cash_abuse/cash_refusal_count are real columns
+  // already written to by paymentController.js (a customer flagged after
+  // their second cash-payment refusal), but users can't be registered as a
+  // real AdminJS resource (adapter introspection drops it -- schema
+  // collision with Supabase's auth.users, see migrate.js v20's comment).
+  // This keeps flagged_accounts -- a small, real, uniquely-named table the
+  // admin panel CAN register -- in sync with the real, current flag state on
+  // users, so admin-panel data is never more than ~15 minutes stale. Only
+  // syncs the flag columns themselves; name/contact info is looked up live
+  // elsewhere (adminPanel.js's attachUserNames), never duplicated here.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      await pool.query(`
+        INSERT INTO flagged_accounts (user_id, flagged_for_cash_abuse, cash_refusal_count, synced_at)
+        SELECT id, flagged_for_cash_abuse, COALESCE(cash_refusal_count, 0), NOW()
+        FROM users
+        WHERE flagged_for_cash_abuse = true OR COALESCE(cash_refusal_count, 0) > 0
+        ON CONFLICT (user_id) DO UPDATE SET
+          flagged_for_cash_abuse = EXCLUDED.flagged_for_cash_abuse,
+          cash_refusal_count = EXCLUDED.cash_refusal_count,
+          synced_at = NOW()
+      `);
+      await pool.query(`
+        DELETE FROM flagged_accounts
+        WHERE user_id NOT IN (
+          SELECT id FROM users WHERE flagged_for_cash_abuse = true OR COALESCE(cash_refusal_count, 0) > 0
+        )
+      `);
+    } catch (e) {
+      console.warn('[Cron] Flagged-accounts sync error:', e.message);
+    }
+  });
+
   return { app, server, io };
 }
 

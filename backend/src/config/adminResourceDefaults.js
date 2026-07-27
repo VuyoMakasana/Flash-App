@@ -36,6 +36,12 @@ const RESOURCE_TIMESTAMP_COLUMNS = {
   driver_wallet_ledger: 'created_at',
   driver_payout_requests: 'created_at',
   payout_transactions: 'created_at',
+  driver_ratings: 'created_at',
+  // flagged_accounts is a periodically-synced snapshot (server.js's cron
+  // job), not an event log -- synced_at (when this row was last refreshed
+  // against the real users columns) is the meaningful "when" here, same
+  // reasoning as driver_wallets.updated_at above.
+  flagged_accounts: 'synced_at',
 };
 
 // Applied via the same options object every resource already builds, not a

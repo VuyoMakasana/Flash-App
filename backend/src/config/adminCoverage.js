@@ -50,7 +50,7 @@ module.exports = {
     orders:                         'Phase 1 — GET /api/admin/orders already real backend (last 100, no filters yet), UI not yet built.',
     order_items:                    'Phase 1 — line items shown as part of the order-detail view.',
     order_stops:                    'Phase 1, alongside the stores-table work (Addendum 2 §1) — DEAD TABLE, found during this pass: created by migration v9 for multi-store pickup stops, referenced by no controller or model anywhere. Needs the same retire-or-document decision as store_credits/driver_payouts before any order-detail view is built on top of it.',
-    users:                          'Phase 1 (count, already real via getStats) + Phase 4 (full individual lookup — profile, orders, addresses, flags).',
+    users:                          'Phase 1 (count, already real via getStats) + Phase 3 (flagged_for_cash_abuse/cash_refusal_count now surfaced via the synced flagged_accounts table, below) + Phase 4 (full individual lookup — profile, orders, addresses).',
     addresses:                      'Phase 4 — part of the individual user-lookup screen (saved address book).',
     flash_inventory:                'Phase 4 — real admin CRUD already exists (inventoryRoutes.js), UI not yet built.',
 
@@ -73,8 +73,9 @@ module.exports = {
     messages:                'Phase 2 — order chat now shown inline on the order-detail screen alongside pickup/dropoff photos, now built and verified live.',
 
     // ── Phase 3 — trust and safety ───────────────────────────────────────
-    sos_alerts:     'Phase 3 — real AdminJS resource + SosAlert.getAll/acknowledge + an immediate SOS email (Addendum 2 §4) now built and verified live.',
-    driver_ratings: 'Phase 3 — rating trends (already named in the original §3 Phase 3 text).',
+    sos_alerts:       'Phase 3 — real AdminJS resource + SosAlert.getAll/acknowledge + an immediate SOS email (Addendum 2 §4) now built and verified live.',
+    driver_ratings:   'Phase 3 — real AdminJS resource + a driver-rating-trend dashboard chart, now built and verified live.',
+    flagged_accounts: 'Phase 3 — new table (migrate.js v20), a periodically-synced snapshot of users.flagged_for_cash_abuse/cash_refusal_count kept current by a real cron job (server.js) since users itself can\'t be a resource — real AdminJS resource now built and verified live.',
 
     // ── Phase 4 — rounding out ───────────────────────────────────────────
     app_ratings:          'Phase 4 (Addendum 3 §1 — was orphaned, now placed alongside content moderation).',

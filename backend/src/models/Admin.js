@@ -269,6 +269,28 @@ class Admin extends BaseModel {
       revenue: revenueMap.get(r.day) || 0,
     }));
   }
+
+  // Phase 3 (§3's original text: "driver-rating trends (aggregation query
+  // over existing rating data)"). Deliberately NOT zero-filled like
+  // getDailyTrends above -- a day with zero ratings has no real average to
+  // report, and showing a 0 would misread as a real 0-star day rather than
+  // "nobody rated a delivery that day". Only days with at least one real
+  // rating are returned; the dashboard component renders whatever real days
+  // come back, however sparse.
+  static async getDriverRatingTrend(days = 14) {
+    const result = await this.query(
+      `SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, AVG(rating)::float AS avg_rating, COUNT(*) AS count
+       FROM driver_ratings
+       WHERE created_at >= NOW() - ($1 || ' days')::interval
+       GROUP BY day ORDER BY day ASC`,
+      [days],
+    );
+    return result.rows.map((r) => ({
+      day: r.day,
+      avgRating: parseFloat(r.avg_rating),
+      count: parseInt(r.count, 10),
+    }));
+  }
 }
 
 module.exports = Admin;

@@ -128,7 +128,7 @@ const FinanceDashboard = () => {
     return <Box p="xxl"><Text>Loading...</Text></Box>;
   }
 
-  const { totalUsers, approvedDrivers, totalOrders, grossOrderValue, activeOrdersByStatus, financials, dailyTrends } = data;
+  const { totalUsers, approvedDrivers, totalOrders, grossOrderValue, activeOrdersByStatus, financials, dailyTrends, ratingTrend } = data;
 
   return (
     <Box p="xxl">
@@ -147,6 +147,27 @@ const FinanceDashboard = () => {
           <LineChart title="New drivers" data={dailyTrends} valueKey="newDrivers" color={CHART_COLORS.blue} />
           <LineChart title="Orders" data={dailyTrends} valueKey="orders" color={CHART_COLORS.blue} />
           <LineChart title="Flash revenue" data={dailyTrends} valueKey="revenue" color={CHART_COLORS.orange} formatValue={money} />
+        </Section>
+      )}
+
+      {/* Phase 3 -- driver-rating trend. Deliberately NOT zero-filled like
+          the block above (Admin.getDriverRatingTrend's own reasoning: a day
+          with no ratings has no real average to show, not a 0). Scope
+          note: LineChart spaces points evenly by array index, not by real
+          calendar distance -- with sparse, non-adjacent rated days this
+          means a gap between two far-apart ratings renders the same width
+          as a gap between two adjacent days. Proportionate to how sparse
+          this data genuinely is right now; worth a real day-spacing x-axis
+          if rating volume grows enough for that to actually mislead. */}
+      {ratingTrend && ratingTrend.length > 0 && (
+        <Section title={`Driver rating trend (last ${dailyTrends ? dailyTrends.length : 14} days, days with a rating only)`}>
+          <LineChart
+            title="Average driver rating"
+            data={ratingTrend}
+            valueKey="avgRating"
+            color={CHART_COLORS.aqua}
+            formatValue={(v) => `${v.toFixed(1)}★`}
+          />
         </Section>
       )}
 

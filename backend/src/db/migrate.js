@@ -867,6 +867,17 @@ async function migrate() {
     throw err;
   } finally {
     client19.release();
+  }
+
+  // ── v20 ────────────────────────────────────────────────────────────────────
+  const client20 = await pool.connect();
+  try {
+    await migrateV20(client20);
+  } catch (err) {
+    console.error('Migration v20 failed:', err.message);
+    throw err;
+  } finally {
+    client20.release();
     await pool.end();
   }
 
@@ -1293,4 +1304,49 @@ async function migrateV19(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19 };
+// ─── v20: flagged_accounts (Phase 3 — flagged-account review) ───────────────
+// users.flagged_for_cash_abuse/cash_refusal_count are real columns already
+// written to by real code (paymentController.js flags a customer after
+// their second cash-payment refusal) but were never surfaced anywhere for a
+// human to see (ADMIN_PANEL_AUDIT_AND_VISION.md §2). users itself can't be
+// registered as a real AdminJS resource -- @adminjs/sql's own introspection
+// drops it entirely, confirmed live: this database has two tables named
+// "users" (public.users, the real app table, and Supabase-managed
+// auth.users), and the adapter's own unqualified-by-schema queries throw
+// "more than one row returned" for any table name that collides across
+// schemas, so it silently excludes them (same root cause already documented
+// in adminPanel.js's attachUserNames comment).
+//
+// flagged_accounts is a small, periodically-synced snapshot of just the
+// flagged subset (server.js's new cron job keeps it current) -- a real,
+// uniquely-named table @adminjs/sql's introspection has no reason to drop,
+// so it CAN be registered directly. Deliberately doesn't duplicate
+// name/email/phone here -- those stay looked up live via the same
+// attachUserNames pattern already used everywhere else in adminPanel.js,
+// so there's no separate copy of contact info that could drift stale;
+// only the flag data itself (which lives on users and is otherwise
+// unreachable) needs syncing.
+async function migrateV20(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS flagged_accounts (
+        id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id                 UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE UNIQUE,
+        flagged_for_cash_abuse  BOOLEAN NOT NULL DEFAULT false,
+        cash_refusal_count      INTEGER NOT NULL DEFAULT 0,
+        synced_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_flagged_accounts_synced_at ON flagged_accounts(synced_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v20 completed: flagged_accounts table');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v20 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20 };
