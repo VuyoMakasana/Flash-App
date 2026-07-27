@@ -913,6 +913,17 @@ async function migrate() {
     throw err;
   } finally {
     client21.release();
+  }
+
+  // ── v22 ────────────────────────────────────────────────────────────────────
+  const client22 = await pool.connect();
+  try {
+    await migrateV22(client22);
+  } catch (err) {
+    console.error('Migration v22 failed:', err.message);
+    throw err;
+  } finally {
+    client22.release();
     await pool.end();
   }
 
@@ -1408,4 +1419,31 @@ async function migrateV21(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21 };
+// Final admin-panel completion pass, §4 (boost/promotions — build the real
+// effect, founder's decision). store_boosts previously had no per-product
+// target at all — it was store-level only, and this codebase is genuinely
+// single-vendor (no `stores` table; store_id is a free-text tag, always
+// "flash_closet"), so a store-level boost had nothing to rank above — it
+// couldn't produce any observable effect even if wired up correctly. A real
+// ranking effect requires a real product to target, hence product_id here
+// (nullable — legacy/store-level rows, if any exist, remain valid, they
+// simply never match the boosted-first ORDER BY in Inventory.getProducts).
+// paystack_reference mirrors driver_subscriptions/premium_subscriptions —
+// the payment audit trail for the real charge now wired into purchaseBoost.
+async function migrateV22(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE store_boosts ADD COLUMN IF NOT EXISTS product_id UUID REFERENCES flash_inventory(id)`);
+    await client.query(`ALTER TABLE store_boosts ADD COLUMN IF NOT EXISTS paystack_reference VARCHAR(255)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_boosts_product_active ON store_boosts(product_id, status, expires_at)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v22 completed: store_boosts product_id + paystack_reference (real boost effect)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v22 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22 };

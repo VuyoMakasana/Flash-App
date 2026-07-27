@@ -11,9 +11,18 @@ const PUBLIC_COLUMNS = `id, product_name, category, brand, price, sizes,
 class Inventory extends BaseModel {
   static async getProducts(category, page = 1, limit = 20) {
     const offset = (page - 1) * limit;
+    // Final admin-panel completion pass, §4 — a real, active boost
+    // (Boost.activateBoost, product_id-targeted) now actually ranks its
+    // product first, instead of store_boosts existing with no observable
+    // effect on any listing. Correlated EXISTS against flash_inventory's
+    // own id, so no join/column-list change is needed above.
+    const boostedFirst = `EXISTS (
+      SELECT 1 FROM store_boosts sb
+      WHERE sb.product_id = flash_inventory.id AND sb.status = 'active' AND sb.expires_at > NOW()
+    ) DESC`;
     const query = category
-      ? `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true AND category=$3 ORDER BY created_at DESC LIMIT $1 OFFSET $2`
-      : `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true ORDER BY created_at DESC LIMIT $1 OFFSET $2`;
+      ? `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true AND category=$3 ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`
+      : `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`;
     const params = category ? [limit, offset, category] : [limit, offset];
     const result = await this.query(query, params);
     return result.rows;

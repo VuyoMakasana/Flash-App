@@ -23,13 +23,16 @@ class BoostController {
   }
 
   static async purchaseBoost(req, res) {
-    const { storeId, storeName, boostType } = req.body;
+    const { productId, boostType } = req.body;
+    if (!productId || !boostType) {
+      return res.status(400).json({ error: "productId and boostType required" });
+    }
     try {
-      const boost = await Boost.purchaseBoost(storeId, storeName, boostType);
-      AdminAction.log(req.userId, "boost_purchase", "store_boosts", boost.boost?.id, { storeId, storeName, boostType });
-      res.status(201).json(boost);
+      const result = await Boost.purchaseBoost(productId, boostType, req.userId);
+      AdminAction.log(req.userId, "boost_purchase_initiated", "store_boosts", null, { productId, boostType });
+      res.json(result);
     } catch (err) {
-      if (err.message === "Invalid boost type") {
+      if (err.message === "Invalid boost type" || err.message === "Product not found or inactive") {
         return res.status(400).json({ error: err.message });
       }
       console.error("[Boost] purchaseBoost error:", err.message);
