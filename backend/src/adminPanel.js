@@ -24,6 +24,7 @@ const AdminAction = require('./models/AdminAction');
 const Return = require('./models/Return');
 const SosAlert = require('./models/SosAlert');
 const s3Service = require('./services/s3Service');
+const { withChronologicalDefaults, RESOURCE_TIMESTAMP_COLUMNS } = require('./config/adminResourceDefaults');
 // Named pgPool, deliberately not db — mountAdminPanel already has a local
 // `db` variable for the @adminjs/sql adapter; reusing that name here for an
 // unrelated plain pg Pool would be exactly the kind of mistake worth
@@ -478,130 +479,62 @@ function attachLocationLink(response) {
   return response;
 }
 
-async function mountAdminPanel(app) {
-  const AdminJSModule = require('adminjs');
-  const AdminJS = AdminJSModule.default;
-  const { ComponentLoader } = AdminJSModule;
-  const { buildAuthenticatedRouter } = await import('@adminjs/express');
-  const { Adapter, Database, Resource } = await import('@adminjs/sql');
-
-  AdminJS.registerAdapter({ Database, Resource });
-
-  // FOUND while wiring in the real financial numbers below: AdminJS's own
-  // default dashboard (default-dashboard.js, confirmed by reading it
-  // directly) is a static "welcome to AdminJS" marketing page -- it never
-  // renders anything a dashboard.handler returns. That means every number
-  // getStats()/getFinancials() compute was already real and correct, but
-  // only reachable by calling GET /admin-panel/api/dashboard directly --
-  // nothing showed it in the actual panel a founder opens. This is the
-  // first real custom AdminJS component in this codebase: registered here
-  // via ComponentLoader, rendered by FinanceDashboard.jsx. react/react-dom
-  // are already adminjs's own dependencies (confirmed in its package.json)
-  // -- no new dependency added for this.
-  const componentLoader = new ComponentLoader();
-  const financeDashboardComponent = componentLoader.add(
-    'FinanceDashboard',
-    require('path').join(__dirname, 'adminComponents', 'FinanceDashboard.jsx'),
-  );
-
-  const dbName = new URL(process.env.DATABASE_URL).pathname.replace(/^\//, '');
-  const db = await new Adapter('postgresql', {
-    connectionString: process.env.DATABASE_URL,
-    database: dbName,
-  }).init();
-
-  // @adminjs/sql auto-detects the user_id foreign key on orders/return_requests
-  // and tries to populate it as a reference to a "users" resource — found
-  // live: both threw 'There are no resources with given id: "users"' from
-  // AdminJS's internal reference populator, since users was never registered.
-  // Registering users to fix this turned out not to work either: db.tables()
-  // (confirmed directly, not assumed) never includes "users" at all — 46
-  // tables discovered, users absent — apparently dropped by the adapter's own
-  // introspection, for a reason not worth chasing further into a third-party
-  // adapter's internals.
-  //
-  // The real, root-level fix: PropertyDecorator.referenceName() is
-  // `options.reference || property.reference()` — an OR-fallback, so passing
-  // `reference: null` through resource options (tried first) can never
-  // suppress an already-auto-detected reference, since null is falsy and
-  // always falls through to the same adapter-detected value regardless of
-  // what's passed in options. property.reference() reads directly from
-  // Property._referencedTable (@adminjs/sql's Property.js) — a plain,
-  // ordinary JS instance property, not a real private field (TypeScript's
-  // `private` doesn't survive to compiled JS) — so mutating it directly,
-  // before the resource is ever handed to AdminJS's constructor, is the one
-  // approach that actually reaches the value reference() reads from.
-  //
-  // FOUND LIVE, MISSED THE FIRST TIME: nulling _referencedTable alone stops
-  // the backend populator from crashing, but the frontend still rendered a
-  // broken "property: user_id does not have a reference" error box in the
-  // list view. Root cause, confirmed by reading postgres.parser.js directly:
-  // `type: column.referenced_table ? 'reference' : getColumnType(...)` is
-  // set once at construction, independent of _referencedTable — so the
-  // property's type() still reported 'reference' regardless, and the
-  // frontend picks its rendering component from type(), not from
-  // reference(). type() reads from BaseProperty._type (adminjs core,
-  // base-property.js) — same plain-JS-property situation, same fix: also
-  // override that directly, not just the adapter-level reference field.
-  function suppressReference(resourceMetadata, propertyName) {
-    const prop = resourceMetadata.properties.find((p) => p.name() === propertyName);
-    if (prop) {
-      prop._referencedTable = null;
-      prop._type = 'string';
-    }
-    return resourceMetadata;
+// @adminjs/sql auto-detects the user_id foreign key on orders/return_requests
+// and tries to populate it as a reference to a "users" resource — found
+// live: both threw 'There are no resources with given id: "users"' from
+// AdminJS's internal reference populator, since users was never registered.
+// Registering users to fix this turned out not to work either: db.tables()
+// (confirmed directly, not assumed) never includes "users" at all — 46
+// tables discovered, users absent — apparently dropped by the adapter's own
+// introspection, for a reason not worth chasing further into a third-party
+// adapter's internals.
+//
+// The real, root-level fix: PropertyDecorator.referenceName() is
+// `options.reference || property.reference()` — an OR-fallback, so passing
+// `reference: null` through resource options (tried first) can never
+// suppress an already-auto-detected reference, since null is falsy and
+// always falls through to the same adapter-detected value regardless of
+// what's passed in options. property.reference() reads directly from
+// Property._referencedTable (@adminjs/sql's Property.js) — a plain,
+// ordinary JS instance property, not a real private field (TypeScript's
+// `private` doesn't survive to compiled JS) — so mutating it directly,
+// before the resource is ever handed to AdminJS's constructor, is the one
+// approach that actually reaches the value reference() reads from.
+//
+// FOUND LIVE, MISSED THE FIRST TIME: nulling _referencedTable alone stops
+// the backend populator from crashing, but the frontend still rendered a
+// broken "property: user_id does not have a reference" error box in the
+// list view. Root cause, confirmed by reading postgres.parser.js directly:
+// `type: column.referenced_table ? 'reference' : getColumnType(...)` is
+// set once at construction, independent of _referencedTable — so the
+// property's type() still reported 'reference' regardless, and the
+// frontend picks its rendering component from type(), not from
+// reference(). type() reads from BaseProperty._type (adminjs core,
+// base-property.js) — same plain-JS-property situation, same fix: also
+// override that directly, not just the adapter-level reference field.
+function suppressReference(resourceMetadata, propertyName) {
+  const prop = resourceMetadata.properties.find((p) => p.name() === propertyName);
+  if (prop) {
+    prop._referencedTable = null;
+    prop._type = 'string';
   }
+  return resourceMetadata;
+}
 
-  const admin = new AdminJS({
-    rootPath: ADMIN_PANEL_PATH,
-    componentLoader,
-    // Real, documented AdminJS branding options (adminjs-options.interface.d.ts's
-    // BrandingOptions -- confirmed directly, not assumed) -- no DOM hacking,
-    // no patched compiled output. Deliberately restrained, per the founder's
-    // explicit ask for "premium but simple, not too much": the real Flash
-    // logo + name replacing AdminJS's own, one accent-color override (the
-    // same amber already used as Flash's own highlight color throughout
-    // both mobile apps -- confirmed live in flash-driver-app/app/driver/dashboard.js
-    // and flash-user-app/screens/SplashScreen.js, not guessed), and turning
-    // off AdminJS's own "made with love" self-promotion mark. Every other
-    // color/spacing/font default is left untouched on purpose.
-    branding: {
-      companyName: 'Flash',
-      logo: ADMIN_LOGO_URL,
-      favicon: ADMIN_LOGO_URL,
-      withMadeWithLove: false,
-      theme: {
-        colors: {
-          primary100: '#f59e0b',
-        },
-      },
-    },
-    // FOUND LIVE via real screenshots (not caught by the earlier HTML-only
-    // verification pass): AdminJS's own logo caps (login: max-width 200px,
-    // sidebar: max-width 170px) only constrain width, not height. Against
-    // the square source image that meant it rendered up to 200x200/170x170
-    // in practice -- a large square block, not a compact header mark.
-    // assets.styles is AdminJS's own real, documented mechanism for
-    // appending a stylesheet to <head> (AdminJSOptions.assets, confirmed
-    // directly) -- used here instead of any DOM/compiled-output hacking to
-    // force a deterministic, genuinely small logo size in both spots. See
-    // admin-branding.css for the exact rule and why alt="Flash" is the
-    // selector.
-    assets: {
-      styles: [`${ADMIN_PANEL_PATH}/assets/admin-branding.css`],
-    },
-    // loginPath/logoutPath do NOT derive from rootPath — confirmed directly
-    // against adminjs's own type definitions (adminjs-options.interface.d.ts),
-    // not assumed. Left unset, they default to /admin/login and /admin/logout
-    // regardless of rootPath — found live: the login page redirected to
-    // /admin/login (a 404, since nothing is mounted there) instead of staying
-    // under /admin-panel.
-    loginPath: `${ADMIN_PANEL_PATH}/login`,
-    logoutPath: `${ADMIN_PANEL_PATH}/logout`,
-    resources: [
+// Refactored out of mountAdminPanel (chronological-ordering pass) so it's
+// independently testable without booting the full Express app/session --
+// adminChronologicalSort.test.js imports this directly, builds its own `db`
+// adapter against the same DATABASE_URL, and asserts every resource this
+// function returns has a real options.sort set via withChronologicalDefaults.
+// This is the enforcement mechanism §1 asked for: a resource added here
+// without going through withChronologicalDefaults has no `sort` key and
+// fails that test, the same shape adminCoverage.test.js already uses for
+// table-visibility decisions.
+function buildResources(db) {
+  return [
       {
         resource: db.table('drivers'),
-        options: {
+        options: withChronologicalDefaults({
           // titleProperty controls two things at once, both confirmed by
           // reading resource-decorator.js directly: (1) which column AdminJS
           // treats as this resource's "title" in its own breadcrumbs, and
@@ -680,11 +613,11 @@ async function mountAdminPanel(app) {
               },
             },
           },
-        },
+        }, RESOURCE_TIMESTAMP_COLUMNS.drivers),
       },
       {
         resource: suppressReference(db.table('orders'), 'user_id'),
-        options: {
+        options: withChronologicalDefaults({
           // Same reasoning as drivers' titleProperty above: makes every
           // reference TO orders (order_cancellations.order_id,
           // return_requests.order_id) display the real, human-facing order
@@ -729,11 +662,11 @@ async function mountAdminPanel(app) {
             delete: { isAccessible: false },
             bulkDelete: { isAccessible: false },
           },
-        },
+        }, RESOURCE_TIMESTAMP_COLUMNS.orders),
       },
       {
         resource: db.table('order_cancellations'),
-        options: {
+        options: withChronologicalDefaults({
           listProperties: [
             'order_id', 'cancelled_by_role', 'cancelled_by_id', 'reason',
             'refund_mode', 'store_amount', 'driver_amount', 'created_at',
@@ -761,11 +694,11 @@ async function mountAdminPanel(app) {
             delete: { isAccessible: false },
             bulkDelete: { isAccessible: false },
           },
-        },
+        }, RESOURCE_TIMESTAMP_COLUMNS.order_cancellations),
       },
       {
         resource: suppressReference(db.table('return_requests'), 'user_id'),
-        options: {
+        options: withChronologicalDefaults({
           listProperties: ['order_id', 'user_id', 'driver_id', 'status', 'reason', 'refund_amount', 'credit_amount', 'created_at'],
           properties: {
             status: { availableValues: RETURN_STATUS_VALUES },
@@ -837,7 +770,7 @@ async function mountAdminPanel(app) {
               },
             },
           },
-        },
+        }, RESOURCE_TIMESTAMP_COLUMNS.return_requests),
       },
       {
         // Phase 3's own top-priority item (ADMIN_PANEL_AUDIT_AND_VISION.md
@@ -849,7 +782,7 @@ async function mountAdminPanel(app) {
         // a working reference link, same as every other order_id column in
         // this file, no extra code needed.
         resource: db.table('sos_alerts'),
-        options: {
+        options: withChronologicalDefaults({
           listProperties: [
             'order_id', 'triggered_by_role', 'triggered_by_id', 'location_link',
             'acknowledged_at', 'acknowledged_by', 'created_at',
@@ -892,7 +825,7 @@ async function mountAdminPanel(app) {
               },
             },
           },
-        },
+        }, RESOURCE_TIMESTAMP_COLUMNS.sos_alerts),
       },
       // Phase 2 (§3/§4.3) -- the four tables backing driver wallet/payout
       // visibility. Each is a live balance/ledger/transaction record of
@@ -903,7 +836,7 @@ async function mountAdminPanel(app) {
       // file) -- no extra code needed for that part.
       {
         resource: db.table('driver_wallets'),
-        options: {
+        options: withChronologicalDefaults({
           listProperties: ['driver_id', 'wallet_balance', 'pending_balance', 'cash_commission_debt', 'unpaid_cash_deliveries', 'updated_at'],
           actions: {
             list: { after: [stripSensitive] },
@@ -913,11 +846,11 @@ async function mountAdminPanel(app) {
             delete: { isAccessible: false },
             bulkDelete: { isAccessible: false },
           },
-        },
+        }, RESOURCE_TIMESTAMP_COLUMNS.driver_wallets),
       },
       {
         resource: db.table('driver_wallet_ledger'),
-        options: {
+        options: withChronologicalDefaults({
           listProperties: ['driver_id', 'order_id', 'entry_type', 'amount', 'note', 'created_at'],
           properties: {
             entry_type: { availableValues: WALLET_LEDGER_ENTRY_TYPE_VALUES },
@@ -930,11 +863,11 @@ async function mountAdminPanel(app) {
             delete: { isAccessible: false },
             bulkDelete: { isAccessible: false },
           },
-        },
+        }, RESOURCE_TIMESTAMP_COLUMNS.driver_wallet_ledger),
       },
       {
         resource: db.table('driver_payout_requests'),
-        options: {
+        options: withChronologicalDefaults({
           listProperties: ['driver_id', 'amount', 'status', 'created_at', 'updated_at'],
           properties: {
             status: { availableValues: PAYOUT_REQUEST_STATUS_VALUES },
@@ -947,13 +880,13 @@ async function mountAdminPanel(app) {
             delete: { isAccessible: false },
             bulkDelete: { isAccessible: false },
           },
-        },
+        }, RESOURCE_TIMESTAMP_COLUMNS.driver_payout_requests),
       },
       {
         // The real Paystack transfer trail (Addendum 1 §4.3: "the one cost
         // line with a genuinely real, auditable multi-table trail already").
         resource: db.table('payout_transactions'),
-        options: {
+        options: withChronologicalDefaults({
           listProperties: ['driver_id', 'amount', 'status', 'reference', 'created_at', 'completed_at'],
           properties: {
             status: { availableValues: PAYOUT_TRANSACTION_STATUS_VALUES },
@@ -966,9 +899,149 @@ async function mountAdminPanel(app) {
             delete: { isAccessible: false },
             bulkDelete: { isAccessible: false },
           },
+        }, RESOURCE_TIMESTAMP_COLUMNS.payout_transactions),
+      },
+  ];
+}
+
+async function mountAdminPanel(app) {
+  const AdminJSModule = require('adminjs');
+  const AdminJS = AdminJSModule.default;
+  const { ComponentLoader } = AdminJSModule;
+  const { buildAuthenticatedRouter } = await import('@adminjs/express');
+  const { Adapter, Database, Resource } = await import('@adminjs/sql');
+
+  // FOUND LIVE while verifying the chronological-search work (real testing,
+  // not assumed): @adminjs/sql's own Resource.prototype.filterQuery
+  // (lib/Resource.js, confirmed by reading it directly) unconditionally
+  // calls Knex's q.whereBetween(key, [from, to]) for any date/datetime
+  // filter with an object value -- it never checks whether BOTH bounds are
+  // actually present. An admin filtering by an open-ended range ("everything
+  // after this date," from-only, or "everything before this date," to-only
+  // -- exactly the kind of query real scale needs, not just a fixed window)
+  // gets a genuine 500: Knex's whereBetween throws "Undefined binding(s)
+  // detected" the moment either bound is undefined. Confirmed live: a full
+  // range (both from and to) returns 200 with the correct filtered total;
+  // from-only or to-only both throw.
+  //
+  // Same technique as suppressReference above (a runtime prototype
+  // patch, not a node_modules file edit) -- survives npm install/npm ci
+  // untouched, and fixes this once, here, for every current and future
+  // resource's date/datetime filters, not per-resource. Falls back to a
+  // plain >=/<= comparison when only one bound is given; unchanged
+  // otherwise (a real range still goes through whereBetween, and every
+  // other filter type -- string ILIKE, availableValues equality, plain
+  // equality -- is copied verbatim from the original method).
+  const originalFilterQuery = Resource.prototype.filterQuery;
+  Resource.prototype.filterQuery = function patchedFilterQuery(filter) {
+    const knex = this.schemaName
+      ? this.knex(this.tableName).withSchema(this.schemaName)
+      : this.knex(this.tableName);
+    const q = knex;
+    if (!filter) return q;
+    const { filters } = filter;
+    Object.entries(filters ?? {}).forEach(([key, f]) => {
+      if (typeof f.value === 'object' && ['date', 'datetime'].includes(f.property.type())) {
+        const { from, to } = f.value;
+        if (from != null && to != null) {
+          q.whereBetween(key, [from, to]);
+        } else if (from != null) {
+          q.where(key, '>=', from);
+        } else if (to != null) {
+          q.where(key, '<=', to);
+        }
+        // Neither bound present: no-op, matching the original method's own
+        // (undocumented) behavior of contributing nothing to the query for
+        // an empty filter value.
+      } else if (f.property.type() === 'string' && !f.property.availableValues()) {
+        if (this.dialect === 'postgresql') {
+          q.whereILike(key, `%${f.value}%`);
+        } else {
+          q.whereLike(key, `%${f.value}%`);
+        }
+      } else {
+        q.where(key, f.value);
+      }
+    });
+    return q;
+  };
+  // Referenced so a future reader can diff this against the real original
+  // if @adminjs/sql ever fixes this upstream and the patch should be
+  // dropped -- not dead code.
+  void originalFilterQuery;
+
+  AdminJS.registerAdapter({ Database, Resource });
+
+  // FOUND while wiring in the real financial numbers below: AdminJS's own
+  // default dashboard (default-dashboard.js, confirmed by reading it
+  // directly) is a static "welcome to AdminJS" marketing page -- it never
+  // renders anything a dashboard.handler returns. That means every number
+  // getStats()/getFinancials() compute was already real and correct, but
+  // only reachable by calling GET /admin-panel/api/dashboard directly --
+  // nothing showed it in the actual panel a founder opens. This is the
+  // first real custom AdminJS component in this codebase: registered here
+  // via ComponentLoader, rendered by FinanceDashboard.jsx. react/react-dom
+  // are already adminjs's own dependencies (confirmed in its package.json)
+  // -- no new dependency added for this.
+  const componentLoader = new ComponentLoader();
+  const financeDashboardComponent = componentLoader.add(
+    'FinanceDashboard',
+    require('path').join(__dirname, 'adminComponents', 'FinanceDashboard.jsx'),
+  );
+
+  const dbName = new URL(process.env.DATABASE_URL).pathname.replace(/^\//, '');
+  const db = await new Adapter('postgresql', {
+    connectionString: process.env.DATABASE_URL,
+    database: dbName,
+  }).init();
+
+  const admin = new AdminJS({
+    rootPath: ADMIN_PANEL_PATH,
+    componentLoader,
+    // Real, documented AdminJS branding options (adminjs-options.interface.d.ts's
+    // BrandingOptions -- confirmed directly, not assumed) -- no DOM hacking,
+    // no patched compiled output. Deliberately restrained, per the founder's
+    // explicit ask for "premium but simple, not too much": the real Flash
+    // logo + name replacing AdminJS's own, one accent-color override (the
+    // same amber already used as Flash's own highlight color throughout
+    // both mobile apps -- confirmed live in flash-driver-app/app/driver/dashboard.js
+    // and flash-user-app/screens/SplashScreen.js, not guessed), and turning
+    // off AdminJS's own "made with love" self-promotion mark. Every other
+    // color/spacing/font default is left untouched on purpose.
+    branding: {
+      companyName: 'Flash',
+      logo: ADMIN_LOGO_URL,
+      favicon: ADMIN_LOGO_URL,
+      withMadeWithLove: false,
+      theme: {
+        colors: {
+          primary100: '#f59e0b',
         },
       },
-    ],
+    },
+    // FOUND LIVE via real screenshots (not caught by the earlier HTML-only
+    // verification pass): AdminJS's own logo caps (login: max-width 200px,
+    // sidebar: max-width 170px) only constrain width, not height. Against
+    // the square source image that meant it rendered up to 200x200/170x170
+    // in practice -- a large square block, not a compact header mark.
+    // assets.styles is AdminJS's own real, documented mechanism for
+    // appending a stylesheet to <head> (AdminJSOptions.assets, confirmed
+    // directly) -- used here instead of any DOM/compiled-output hacking to
+    // force a deterministic, genuinely small logo size in both spots. See
+    // admin-branding.css for the exact rule and why alt="Flash" is the
+    // selector.
+    assets: {
+      styles: [`${ADMIN_PANEL_PATH}/assets/admin-branding.css`],
+    },
+    // loginPath/logoutPath do NOT derive from rootPath — confirmed directly
+    // against adminjs's own type definitions (adminjs-options.interface.d.ts),
+    // not assumed. Left unset, they default to /admin/login and /admin/logout
+    // regardless of rootPath — found live: the login page redirected to
+    // /admin/login (a 404, since nothing is mounted there) instead of staying
+    // under /admin-panel.
+    loginPath: `${ADMIN_PANEL_PATH}/login`,
+    logoutPath: `${ADMIN_PANEL_PATH}/logout`,
+    resources: buildResources(db),
     // component registered above (financeDashboardComponent) -- see the
     // comment by componentLoader's construction for why this replaced the
     // silent-no-op default dashboard. handler still returns real, correct
@@ -1058,4 +1131,4 @@ async function mountAdminPanel(app) {
   console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions)`);
 }
 
-module.exports = { mountAdminPanel, ADMIN_PANEL_PATH };
+module.exports = { mountAdminPanel, ADMIN_PANEL_PATH, buildResources };

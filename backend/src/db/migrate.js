@@ -856,6 +856,17 @@ async function migrate() {
     throw err;
   } finally {
     client18.release();
+  }
+
+  // ── v19 ────────────────────────────────────────────────────────────────────
+  const client19 = await pool.connect();
+  try {
+    await migrateV19(client19);
+  } catch (err) {
+    console.error('Migration v19 failed:', err.message);
+    throw err;
+  } finally {
+    client19.release();
     await pool.end();
   }
 
@@ -1229,4 +1240,57 @@ async function migrateV18(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18 };
+// ─── v19: chronological-sort indexes for the admin panel ────────────────────
+// (docs/audits/ADMIN_PANEL_AUDIT_AND_VISION.md — the chronological-ordering
+// pass). Every admin-panel resource now defaults its list view to sorting by
+// a real timestamp column, most recent first — and at real scale (thousands
+// to millions of rows), sorting or filtering on an unindexed column gets
+// slower as the table grows, never faster. Checked every EXISTING index on
+// each of these eight tables before adding anything, not assumed: orders
+// already has a real standalone idx_orders_created_at (v1–v6) — not
+// duplicated here. The other seven either had no index on the relevant
+// column at all (drivers, return_requests, driver_wallets,
+// driver_payout_requests), or only a COMPOSITE index led by a different
+// column — idx_order_cancellations_order leads with order_id,
+// idx_driver_wallet_ledger_driver and idx_payout_transactions_driver lead
+// with driver_id — which does not help Postgres avoid a full sort for the
+// admin panel's own global "every row, most recent first" query, since that
+// query has no leading-column filter to match the composite index against.
+// idx_sos_alerts_unacknowledged is also insufficient for this specific
+// purpose: it's a PARTIAL index (WHERE acknowledged_at IS NULL), so it
+// never covers already-acknowledged rows in a global list view.
+//
+// Plain CREATE INDEX (inside this function's existing transaction), not
+// CREATE INDEX CONCURRENTLY, matching every other migration in this file —
+// CONCURRENTLY cannot run inside a transaction block at all, and singling
+// out just this one migration to run non-transactionally, at current table
+// sizes, would be inconsistent for no real present benefit. Worth
+// revisiting if/when a table here grows large enough that a brief
+// index-build lock becomes an actual deployment concern.
+async function migrateV19(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_drivers_created_at ON drivers(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_order_cancellations_created_at ON order_cancellations(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_return_requests_created_at ON return_requests(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_sos_alerts_created_at ON sos_alerts(created_at DESC)`);
+    // driver_wallets is a one-row-per-driver live snapshot, not an event
+    // log -- updated_at (last balance change), not created_at (the row's
+    // arbitrary first-insert time), is the column the admin panel actually
+    // sorts by here. See adminPanel.js's RESOURCE_TIMESTAMP_COLUMNS for the
+    // same reasoning.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_wallets_updated_at ON driver_wallets(updated_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_wallet_ledger_created_at ON driver_wallet_ledger(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_payout_requests_created_at ON driver_payout_requests(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_payout_transactions_created_at ON payout_transactions(created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v19 completed: chronological-sort indexes for the admin panel');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v19 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19 };

@@ -26,6 +26,18 @@
 // by doing this enumeration carefully, not assumed: store_credits and
 // driver_payouts (already flagged in Addendum 1 §4.4), and saved_cards +
 // order_stops (found new, during this exact pass — see their entries below).
+//
+// A SECOND, related requirement lives right next to this one, same spirit:
+// once a table here is actually registered as a real AdminJS resource (in
+// buildResources(), backend/src/adminPanel.js), it must also go through
+// withChronologicalDefaults() (backend/src/config/adminResourceDefaults.js)
+// with the real, correct timestamp column for that table added to
+// RESOURCE_TIMESTAMP_COLUMNS there — a resource that skips this fails
+// backend/tests/unit/adminChronologicalSort.test.js the same way an
+// undecided table fails the check below. Every future phase's resources
+// (Phase 3's remaining items, Phase 4 in full) must go through both checks,
+// not just this one — a table decision alone isn't the whole requirement
+// once that table becomes a real, browsable admin resource.
 
 module.exports = {
   covered: {
