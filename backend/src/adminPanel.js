@@ -16,6 +16,8 @@
 // adminjs core itself IS require()-able, but its class is at .default
 // (dual CJS/ESM interop shape, confirmed the same way).
 
+const path = require('path');
+const express = require('express');
 const bcrypt = require('bcryptjs');
 const Admin = require('./models/Admin');
 const AdminAction = require('./models/AdminAction');
@@ -27,6 +29,16 @@ const Return = require('./models/Return');
 const pgPool = require('./config/database');
 
 const ADMIN_PANEL_PATH = '/admin-panel';
+// The real Flash logo -- confirmed the exact same file (identical MD5) as
+// both flash-user-app/assets/icon.png and flash-driver-app/assets/flash-logo.png,
+// so this is a real, existing brand asset copied in, not a new/invented one.
+// Served as a plain static file under this mount (below) so branding.logo
+// can point at a real URL -- AdminJS's own login/sidebar components already
+// constrain it to max-width 200px/170px respectively (confirmed by reading
+// login/index.js and sidebar-branding.js directly), so the single
+// full-resolution 512x512 source renders correctly in both spots without
+// needing separate pre-resized copies.
+const ADMIN_LOGO_URL = `${ADMIN_PANEL_PATH}/assets/flash-logo.png`;
 
 // Real observed response shape (confirmed live against the running mount,
 // not assumed from AdminJS's own generic docs example): list responses are
@@ -351,6 +363,27 @@ async function mountAdminPanel(app) {
   const admin = new AdminJS({
     rootPath: ADMIN_PANEL_PATH,
     componentLoader,
+    // Real, documented AdminJS branding options (adminjs-options.interface.d.ts's
+    // BrandingOptions -- confirmed directly, not assumed) -- no DOM hacking,
+    // no patched compiled output. Deliberately restrained, per the founder's
+    // explicit ask for "premium but simple, not too much": the real Flash
+    // logo + name replacing AdminJS's own, one accent-color override (the
+    // same amber already used as Flash's own highlight color throughout
+    // both mobile apps -- confirmed live in flash-driver-app/app/driver/dashboard.js
+    // and flash-user-app/screens/SplashScreen.js, not guessed), and turning
+    // off AdminJS's own "made with love" self-promotion mark. Every other
+    // color/spacing/font default is left untouched on purpose.
+    branding: {
+      companyName: 'Flash',
+      logo: ADMIN_LOGO_URL,
+      favicon: ADMIN_LOGO_URL,
+      withMadeWithLove: false,
+      theme: {
+        colors: {
+          primary100: '#f59e0b',
+        },
+      },
+    },
     // loginPath/logoutPath do NOT derive from rootPath — confirmed directly
     // against adminjs's own type definitions (adminjs-options.interface.d.ts),
     // not assumed. Left unset, they default to /admin/login and /admin/logout
@@ -662,6 +695,10 @@ async function mountAdminPanel(app) {
   // AdminJS's own express-formidable body parsing conflicts with the global
   // express.json() the same way webhooks already had to solve this once).
   const adminPanelRouter = app.locals.adminPanelRouter;
+
+  // Serves the real Flash logo referenced by ADMIN_LOGO_URL above -- a
+  // plain static file, same origin as everything else under this mount.
+  adminPanelRouter.use('/assets', express.static(path.join(__dirname, 'adminAssets')));
 
   // Scoped CSP disable — only for this mount path. AdminJS ships its own
   // bundled React frontend (inline scripts/styles) that Helmet's default
