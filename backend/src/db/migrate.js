@@ -924,6 +924,17 @@ async function migrate() {
     throw err;
   } finally {
     client22.release();
+  }
+
+  // ── v23 ────────────────────────────────────────────────────────────────────
+  const client23 = await pool.connect();
+  try {
+    await migrateV23(client23);
+  } catch (err) {
+    console.error('Migration v23 failed:', err.message);
+    throw err;
+  } finally {
+    client23.release();
     await pool.end();
   }
 
@@ -1446,4 +1457,32 @@ async function migrateV22(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22 };
+// Critical-flow/edge-case audit §2.1 — the delivered->completed transition
+// requires a real OTP only the customer's own app can retrieve
+// (GET /api/payments/cash/otp/:orderId is requireRole('user')), for both
+// cash and card orders (confirmed live: paymentController.confirmCashReceived
+// verifies the OTP unconditionally before branching on payment_method). If a
+// customer is genuinely unreachable at exactly the moment of delivery and
+// never reconnects, the order is stuck at 'delivered' forever today — no
+// cron covers this (the existing two only cover pre-pickup states), and the
+// orders AdminJS resource is fully read-only, so there was no way for this
+// to ever surface to a human. This column is set once, idempotently, by the
+// new cron in server.js — never auto-completes anything, just makes the
+// stuck order (and the driver's pending payout, gated on 'completed')
+// impossible to miss in the admin panel.
+async function migrateV23(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS stuck_delivery_flagged_at TIMESTAMPTZ`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_stuck_delivery_check ON orders(status, delivered_at) WHERE stuck_delivery_flagged_at IS NULL`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v23 completed: orders.stuck_delivery_flagged_at (stuck-at-delivered detection)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v23 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23 };

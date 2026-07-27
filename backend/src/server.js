@@ -501,6 +501,51 @@ cron.schedule('30 1 * * *', async () => {
     }
   });
 
+  // STUCK-AT-DELIVERED DETECTION: Runs every 30 minutes
+  // WHY (critical-flow/edge-case audit §2.1): the delivered->completed
+  // transition requires a real OTP only the customer's own app can
+  // retrieve (paymentController.confirmCashReceived verifies it
+  // unconditionally, for both cash and card orders — confirmed live). If a
+  // customer is genuinely unreachable specifically at the moment of
+  // delivery and never reconnects, the order is stuck at 'delivered'
+  // forever — no other timeout covers this (the cron above only covers
+  // pre-pickup states), and the driver's payout for that delivery stays
+  // pending indefinitely as a direct consequence (release is gated on
+  // reaching 'completed'). This never auto-completes anything — it only
+  // flags the order once, idempotently, mirroring the SOS-alert live-
+  // notification pattern (io.to('admin').emit('fleet_alert', ...)) for
+  // anyone with the panel open right now, plus a persistent, visible
+  // column (orders.stuck_delivery_flagged_at) for anyone who isn't.
+  cron.schedule('*/30 * * * *', async () => {
+    try {
+      const stuckDelivered = await pool.query(`
+        SELECT id, order_number, driver_id
+        FROM orders
+        WHERE status = 'delivered'
+          AND delivered_at < NOW() - INTERVAL '2 hours'
+          AND stuck_delivery_flagged_at IS NULL
+      `);
+
+      for (const order of stuckDelivered.rows) {
+        await pool.query(
+          `UPDATE orders SET stuck_delivery_flagged_at = NOW() WHERE id = $1`,
+          [order.id],
+        );
+        console.warn(`[Cron] Order ${order.id} (${order.order_number}) stuck at 'delivered' for over 2 hours — driver ${order.driver_id}'s payout is pending until resolved. Flagged for admin review.`);
+        if (_io) {
+          _io.to('admin').emit('fleet_alert', {
+            type: 'stuck_delivery',
+            orderId: order.id,
+            orderNumber: order.order_number,
+            message: `Order ${order.order_number} has been stuck at 'delivered' for over 2 hours — the customer may be unreachable to confirm delivery. The driver's payout is pending until this is resolved.`,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[Cron] Stuck-at-delivered detection error:', e.message);
+    }
+  });
+
   // NO-DRIVER AUTO-CANCEL: Runs every 15 minutes
   // WHY: When a user pays and no drivers are available, their money is trapped
   // in a pending order with no resolution. After 30 minutes in waiting_for_driver

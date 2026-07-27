@@ -693,7 +693,7 @@ function buildResources(db) {
           // number instead of a raw UUID, and makes order_number (not `id`)
           // the primary/title column for orders itself.
           titleProperty: 'order_number',
-          listProperties: ['order_number', 'user_id', 'driver_id', 'status', 'payment_method', 'total', 'created_at'],
+          listProperties: ['order_number', 'user_id', 'driver_id', 'status', 'stuck_delivery_flagged_at', 'payment_method', 'total', 'created_at'],
           properties: {
             // See the identical responsive fix's full explanation on
             // drivers.name above — order_number doesn't match AdminJS's
@@ -702,6 +702,14 @@ function buildResources(db) {
             cash_otp_hash: { isVisible: false },
             cash_otp_plain: { isVisible: false },
             status: { availableValues: ORDER_STATUS_VALUES },
+            // Critical-flow/edge-case audit §2.1 — set once, idempotently,
+            // by the new stuck-at-delivered cron in server.js. Non-null
+            // means: the customer never confirmed delivery via OTP within
+            // 2 hours, and this driver's payout for this order is pending
+            // until it's resolved. Placed right next to `status` in the
+            // list so it's impossible to miss while scanning orders, not
+            // buried on the detail page.
+            stuck_delivery_flagged_at: { label: 'Stuck At Delivered (flagged)' },
             payment_method: { availableValues: [{ value: 'cash', label: 'Cash' }, { value: 'card', label: 'Card' }] },
             // Virtual — none of these four are real columns on orders. All
             // show-only: the unified order-detail view (customer/driver
