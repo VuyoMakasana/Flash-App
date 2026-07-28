@@ -503,6 +503,16 @@ class DriverController {
     }
   }
 
+  static async getAvailability(req, res) {
+    try {
+      const anyOnline = await Driver.anyOnline();
+      res.json({ anyOnline });
+    } catch (err) {
+      console.error('[Driver] getAvailability error:', err.message);
+      res.status(500).json({ error: 'Failed to check driver availability' });
+    }
+  }
+
   static async getSupportedBanks(req, res) {
     try {
       const result = await paystackService.getBankList();
