@@ -513,6 +513,14 @@ class AuthController {
             [decoded.jti, expiresAt]
           );
         }
+        // Server-side authority for is_online, not just the client's own
+        // setOnline(false) call — a driver who logs out without first going
+        // offline would otherwise stay eligible for new order assignment
+        // while unreachable. Confirmed live: is_online stayed true after
+        // logout before this fix.
+        if (decoded?.role === 'driver' && decoded?.id) {
+          await Driver.setOnlineStatus(decoded.id, false).catch(() => {});
+        }
       } catch (_) {}
     }
 

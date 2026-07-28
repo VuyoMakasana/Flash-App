@@ -42,22 +42,30 @@ function isClientError(message) {
 // Pre-pickup, post-assignment cancellation split — confirmed with the
 // founder (not guessed): 10% of item value to the store, 5% to the assigned
 // driver as compensation for the trip already started, the remainder (85%)
-// plus the FULL delivery fee back to the customer. The 85% is computed as a
-// remainder rather than an independent 0.85 multiplication so the three
-// shares always add up to exactly itemValue, with no rounding gap.
+// plus the FULL delivery fee back to the customer. The remainder is computed
+// as itemValue minus the two shares rather than an independent multiplication
+// so the three shares always add up to exactly itemValue, with no rounding
+// gap.
+//
+// A second, harsher-for-the-store tier applies once the driver has actually
+// arrived at the store (driver_arrived_store) — also confirmed with the
+// founder: 0% to the store (nothing left the premises), 8% to the driver
+// (higher than the pre-arrival 5%, since they've made the actual trip), 92%
+// of item value plus the full delivery fee back to the customer. Same
+// remainder-based math, different percentages passed in by the caller.
 //
 // Cash orders haven't collected any payment yet (that happens at delivery),
 // so there is nothing to withhold from the store or refund to the customer —
-// only the driver's 5% is real there, paid directly by Flash as compensation
-// for the wasted trip. Shared by cancelOrder and its own read-only preview
-// endpoint so the two can never drift apart on the math.
-function computeCancellationSplit(order) {
+// only the driver's share is real there, paid directly by Flash as
+// compensation for the wasted trip. Shared by cancelOrder and its own
+// read-only preview endpoint so the two can never drift apart on the math.
+function computeCancellationSplit(order, { storePct = 0.10, driverPct = 0.05 } = {}) {
   const itemValue    = parseFloat(order.subtotal) || 0;
   const deliveryFee  = parseFloat(order.delivery_fee) || 0;
   const isCash       = order.payment_method === 'cash';
 
-  const storeAmount        = isCash ? 0 : Math.round(itemValue * 0.10 * 100) / 100;
-  const driverAmount       = Math.round(itemValue * 0.05 * 100) / 100;
+  const storeAmount        = isCash ? 0 : Math.round(itemValue * storePct * 100) / 100;
+  const driverAmount       = Math.round(itemValue * driverPct * 100) / 100;
   const customerItemRefund = isCash ? 0 : Math.round((itemValue - storeAmount - driverAmount) * 100) / 100;
   const deliveryFeeRefund  = isCash ? 0 : deliveryFee;
 
@@ -237,8 +245,12 @@ class OrderController {
         return res.json({ hasDriverAssigned: false, fullRefund: true });
       }
 
-      const split = computeCancellationSplit(order);
-      return res.json({ hasDriverAssigned: true, fullRefund: false, ...split });
+      const arrivedAtStore = state === 'driver_arrived_store';
+      const split = computeCancellationSplit(
+        order,
+        arrivedAtStore ? { storePct: 0, driverPct: 0.08 } : undefined,
+      );
+      return res.json({ hasDriverAssigned: true, fullRefund: false, stage: state, ...split });
     } catch (err) {
       console.error('[Order] getCancellationPreview error:', err.message);
       res.status(500).json({ error: 'Failed to compute cancellation preview' });
@@ -324,6 +336,16 @@ class OrderController {
       // to the customer. Replaces the old 25%-of-delivery-fee penalty,
       // which never actually issued a real refund for card orders — it
       // only recorded a penalty amount nothing ever deducted from.
+      //
+      // driver_arrived_store gets its own, harsher-for-the-store tier
+      // (0%/8%/92%, see computeCancellationSplit) rather than reusing
+      // driver_assigned's numbers. This mode was previously named
+      // 'store_refund_no_delivery_refund' (32 chars) which exceeded
+      // order_cancellations.refund_mode's VARCHAR(30) and made every
+      // cancellation attempt at this stage throw and roll back with a bare
+      // 400 -- the customer could not cancel at all once the driver had
+      // arrived at the store. Renamed to fit, and given a real split and
+      // refund branch (see below) instead of silently refunding nothing.
       let refundMode = 'none';
       let split = null;
       if (['payment_pending', 'paid', 'waiting_for_driver'].includes(state)) {
@@ -332,7 +354,8 @@ class OrderController {
         refundMode = 'pre_pickup_split';
         split = computeCancellationSplit(order);
       } else if (state === 'driver_arrived_store') {
-        refundMode = 'store_refund_no_delivery_refund';
+        refundMode = 'store_arrival_split';
+        split = computeCancellationSplit(order, { storePct: 0, driverPct: 0.08 });
       }
 
       // Wallet reversal, the driver's split compensation (if any), the
@@ -354,7 +377,10 @@ class OrderController {
 
         if (split && order.driver_id && split.driverAmount > 0) {
           await DriverWallet.creditAvailable(
-            client, order.driver_id, split.driverAmount, order.id, 'pre_pickup_cancellation_compensation',
+            client, order.driver_id, split.driverAmount, order.id,
+            refundMode === 'store_arrival_split'
+              ? 'store_arrival_cancellation_compensation'
+              : 'pre_pickup_cancellation_compensation',
           );
         }
 
@@ -426,7 +452,10 @@ class OrderController {
             req.userId,
             req.body?.reason || 'customer_cancellation',
           );
-        } else if (refundMode === 'pre_pickup_split' && isCardPaid && split.totalCustomerRefund > 0) {
+        } else if (
+          (refundMode === 'pre_pickup_split' || refundMode === 'store_arrival_split')
+          && isCardPaid && split.totalCustomerRefund > 0
+        ) {
           refund = await RefundService.refundOrderPayment(
             orderId,
             req.userId,

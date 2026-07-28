@@ -169,11 +169,15 @@ const REFUND_MODE_VALUES = [
   { value: 'none', label: 'No Refund' },
   { value: 'full_refund', label: 'Full Refund' },
   { value: 'pre_pickup_split', label: 'Pre-Pickup Split' },
-  { value: 'store_refund_no_delivery_refund', label: 'Store Refund (No Delivery Refund)' },
+  { value: 'store_arrival_split', label: 'Store Arrival Split' },
   // Legacy value, found live in real historical data — predates the
   // pre_pickup_split rename. Kept here purely so old rows still get a
   // readable badge instead of falling through to the raw string.
   { value: 'store_refund_keep_delivery', label: 'Store Refund (Legacy — Delivery Fee Kept)' },
+  // NOTE: 'store_refund_no_delivery_refund' (the old, pre-fix name for what's
+  // now 'store_arrival_split') never actually appears in real data — it was
+  // 32 chars against a VARCHAR(30) column, so every attempted INSERT using it
+  // threw and rolled back the whole cancellation. No badge entry needed.
 ];
 
 const CANCELLED_BY_ROLE_VALUES = [
@@ -398,11 +402,79 @@ async function attachWalletSummary(response) {
   return response;
 }
 
+// Trusted Driver scorecard (critical-flow/edge-case audit §2.8) -- founder's
+// decision: admin panel only, not the driver app (an ops/quality-review
+// tool, not driver-facing gamification). Every number here is computed
+// directly from data that already exists — no new tracking columns, no
+// new writes. Duplicate-rating prevention was confirmed already sufficient
+// (driver_ratings.order_id has a real UNIQUE constraint) and needed no fix.
+async function attachTrustedDriverScorecard(response) {
+  const record = response.record;
+  if (!record?.params) return response;
+  const driverId = record.id;
+
+  const [ratingCountRes, penaltyRes, trustedRes, sosRes] = await Promise.all([
+    pgPool.query('SELECT COUNT(*) FROM driver_ratings WHERE driver_id = $1', [driverId]),
+    pgPool.query(
+      'SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM driver_penalties WHERE driver_id = $1',
+      [driverId],
+    ),
+    // Only 'accepted' counts as real trust — a still-pending or declined
+    // request hasn't actually been confirmed by the customer.
+    pgPool.query(
+      `SELECT COUNT(*) FROM trusted_drivers WHERE driver_id = $1 AND status = 'accepted'`,
+      [driverId],
+    ),
+    // sos_alerts has no driver_id column of its own (triggered_by_role/
+    // triggered_by_id is polymorphic — same shape as messages.sender_id
+    // elsewhere in this file) -- joins through orders.driver_id instead,
+    // and only counts alerts the CUSTOMER triggered (not the driver's own),
+    // since a driver correctly using SOS for their own safety is the
+    // opposite of a trust concern.
+    pgPool.query(
+      `SELECT COUNT(*) FROM sos_alerts sa
+       JOIN orders o ON o.id = sa.order_id
+       WHERE o.driver_id = $1 AND sa.triggered_by_role = 'user'`,
+      [driverId],
+    ),
+  ]);
+
+  const rating          = parseFloat(record.params.rating) || 0;
+  const totalDeliveries  = parseInt(record.params.total_deliveries, 10) || 0;
+  const cancelCount      = parseInt(record.params.cancel_count, 10) || 0;
+  const cancellationRate = (totalDeliveries + cancelCount) > 0
+    ? ((cancelCount / (totalDeliveries + cancelCount)) * 100).toFixed(1)
+    : '0.0';
+
+  const ratingsCount  = parseInt(ratingCountRes.rows[0].count, 10);
+  const penaltyCount  = parseInt(penaltyRes.rows[0].count, 10);
+  const penaltyTotal  = parseFloat(penaltyRes.rows[0].total) || 0;
+  const trustedCount  = parseInt(trustedRes.rows[0].count, 10);
+  const sosCount       = parseInt(sosRes.rows[0].count, 10);
+
+  record.params.trust_scorecard =
+    `Average rating: ${rating.toFixed(2)} / 5 (${ratingsCount} rating${ratingsCount === 1 ? '' : 's'})\n` +
+    `Completed deliveries: ${totalDeliveries}\n` +
+    `Cancellation rate: ${cancellationRate}% (${cancelCount} unresponsive-reassignment cancellation${cancelCount === 1 ? '' : 's'} out of ${totalDeliveries + cancelCount} assignments)\n` +
+    `Penalties: ${penaltyCount} (R${penaltyTotal.toFixed(2)} total)\n` +
+    `Customers who trust this driver: ${trustedCount}\n` +
+    `Customer-triggered SOS alerts while assigned: ${sosCount} (caveat: counts any customer SOS alert on an order this driver was assigned to -- does not by itself establish driver fault; review the SOS Alerts resource for context before treating this as a negative signal)`;
+
+  return response;
+}
+
 const WALLET_LEDGER_ENTRY_TYPE_VALUES = [
   { value: 'pending_credit', label: 'Pending Credit' },
   { value: 'available_credit', label: 'Available Credit' },
   { value: 'pending_debit', label: 'Pending Debit' },
   { value: 'payout_debit', label: 'Payout Debit' },
+  // Real entry_type values that were already being written (or, for
+  // payout_reversed_recredit, added this pass — see payoutService.js's
+  // handleFailedPayout) but missing from this list, found while touching
+  // this file for §2.7 -- previously fell through to an unstyled raw
+  // string in the admin list instead of a real badge.
+  { value: 'payout_debit_reconcile_required', label: 'Payout Debit (Reconcile Required)' },
+  { value: 'payout_reversed_recredit', label: 'Payout Reversed — Recredited' },
 ];
 
 const PAYOUT_REQUEST_STATUS_VALUES = [
@@ -414,6 +486,27 @@ const PAYOUT_REQUEST_STATUS_VALUES = [
 const PAYOUT_TRANSACTION_STATUS_VALUES = [
   { value: 'initiated', label: 'Initiated' },
   { value: 'success', label: 'Success' },
+  { value: 'failed', label: 'Failed' },
+];
+
+// Real values, confirmed against webhookController.js/models/Payment.js/
+// paymentController.js (payments.status) and refundService.js
+// (payment_refunds.status). pending_cash (Payment.createCashPayment) was
+// found live in real data while verifying this resource in a real browser
+// — a cash order's payments row is inserted as pending_cash and, unlike a
+// card payment, is never updated afterward (the real "was cash actually
+// collected" state lives on orders.payment_status/cash_received_at, not
+// this row) — still a real, correct value to render as a badge, not a bug.
+const PAYMENT_STATUS_VALUES = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'pending_cash', label: 'Pending Cash' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'failed', label: 'Failed' },
+];
+
+const PAYMENT_REFUND_STATUS_VALUES = [
+  { value: 'processing', label: 'Processing' },
+  { value: 'completed', label: 'Completed' },
   { value: 'failed', label: 'Failed' },
 ];
 
@@ -646,10 +739,13 @@ function buildResources(db) {
             // Virtual — wallet/payout at-a-glance summary (Phase 2), populated
             // by attachWalletSummary below.
             wallet_summary: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
+            // Virtual — Trusted Driver scorecard (§2.8), populated by
+            // attachTrustedDriverScorecard below.
+            trust_scorecard: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
           },
           actions: {
             list: { after: [stripSensitive] },
-            show: { after: [stripSensitive, attachDriverDocuments, attachWalletSummary] },
+            show: { after: [stripSensitive, attachDriverDocuments, attachWalletSummary, attachTrustedDriverScorecard] },
             edit: { after: [stripSensitive] },
             approveDriver: {
               actionType: 'record',
@@ -693,7 +789,7 @@ function buildResources(db) {
           // number instead of a raw UUID, and makes order_number (not `id`)
           // the primary/title column for orders itself.
           titleProperty: 'order_number',
-          listProperties: ['order_number', 'user_id', 'driver_id', 'status', 'payment_method', 'total', 'created_at'],
+          listProperties: ['order_number', 'user_id', 'driver_id', 'status', 'stuck_delivery_flagged_at', 'driver_connection_flagged_at', 'payment_method', 'total', 'created_at'],
           properties: {
             // See the identical responsive fix's full explanation on
             // drivers.name above — order_number doesn't match AdminJS's
@@ -702,6 +798,20 @@ function buildResources(db) {
             cash_otp_hash: { isVisible: false },
             cash_otp_plain: { isVisible: false },
             status: { availableValues: ORDER_STATUS_VALUES },
+            // Critical-flow/edge-case audit §2.1 — set once, idempotently,
+            // by the new stuck-at-delivered cron in server.js. Non-null
+            // means: the customer never confirmed delivery via OTP within
+            // 2 hours, and this driver's payout for this order is pending
+            // until it's resolved. Placed right next to `status` in the
+            // list so it's impossible to miss while scanning orders, not
+            // buried on the detail page.
+            stuck_delivery_flagged_at: { label: 'Stuck At Delivered (flagged)' },
+            // Critical-flow/edge-case audit §2.2 — same idempotent
+            // flag-for-review mechanism, distinct root cause: this driver
+            // hasn't sent a location ping in over 25 minutes while the
+            // order is picked_up/in_transit — their connection may be
+            // lost. Same reasoning for placement as the flag above.
+            driver_connection_flagged_at: { label: 'Driver Connection Lost (flagged)' },
             payment_method: { availableValues: [{ value: 'cash', label: 'Cash' }, { value: 'card', label: 'Card' }] },
             // Virtual — none of these four are real columns on orders. All
             // show-only: the unified order-detail view (customer/driver
@@ -992,6 +1102,49 @@ function buildResources(db) {
             bulkDelete: { isAccessible: false },
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.payout_transactions),
+      },
+      // Critical-flow/edge-case audit §2.7 -- previously payments/
+      // payment_refunds only fed dashboard aggregate totals (adminCoverage.js's
+      // "financial-picture view"/"refunds-issued total" phrasing), with no
+      // way to search or click into an individual transaction or refund.
+      // user_id references users, which can't be a registered resource (see
+      // suppressReference's own comment above) -- same fix as every other
+      // user_id column in this file. order_id resolves to the real orders
+      // resource automatically (orders.titleProperty is already set).
+      {
+        resource: suppressReference(db.table('payments'), 'user_id'),
+        options: withChronologicalDefaults({
+          listProperties: ['order_id', 'amount', 'method', 'provider', 'status', 'type', 'created_at'],
+          properties: {
+            status: { availableValues: PAYMENT_STATUS_VALUES },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.payments),
+      },
+      {
+        // payment_id resolves to the payments resource just registered above.
+        resource: suppressReference(db.table('payment_refunds'), 'user_id'),
+        options: withChronologicalDefaults({
+          listProperties: ['order_id', 'payment_id', 'amount', 'status', 'refund_reference', 'created_at', 'completed_at'],
+          properties: {
+            status: { availableValues: PAYMENT_REFUND_STATUS_VALUES },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.payment_refunds),
       },
       {
         // Phase 3 (§3's original text: "driver-rating trends (aggregation
@@ -1408,7 +1561,7 @@ async function mountAdminPanel(app) {
 
   adminPanelRouter.use(router);
 
-  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, driver_ratings, flagged_accounts, flash_inventory)`);
+  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, payments, payment_refunds, driver_ratings, flagged_accounts, flash_inventory)`);
 }
 
 module.exports = { mountAdminPanel, ADMIN_PANEL_PATH, buildResources };

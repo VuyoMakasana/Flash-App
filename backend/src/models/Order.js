@@ -286,6 +286,20 @@ class Order extends BaseModel {
              d.rating as driver_rating, d.total_deliveries as driver_total_deliveries,
              d.status as driver_verification_status,
              d.current_lat as driver_lat, d.current_lng as driver_lng,
+             -- drivers.updated_at is timestamp WITHOUT time zone (a
+             -- pre-existing schema inconsistency, flagged separately, not
+             -- fixed column-wide here). Its stored digits are genuinely
+             -- UTC (this pool's session timezone is UTC, confirmed live,
+             -- same as every other connection to this DB), but sent as-is
+             -- they are a bare, unmarked string -- a real phone's own
+             -- local JS Date parser (e.g. a South African user's phone,
+             -- SAST = UTC+2) treats an offset-less timestamp string as
+             -- LOCAL time, silently shifting this specific value by 2
+             -- hours. AT TIME ZONE 'UTC' re-tags those same correct digits
+             -- as a real timestamptz, so any client anywhere parses it
+             -- unambiguously. Scoped to just this one new field, not a
+             -- column-wide migration.
+             (d.updated_at AT TIME ZONE 'UTC') as driver_location_updated_at,
              EXISTS(SELECT 1 FROM driver_ratings dr WHERE dr.order_id = o.id) as has_rating,
              EXISTS(SELECT 1 FROM return_requests rr WHERE rr.order_id = o.id) as return_requested,
              json_agg(json_build_object(

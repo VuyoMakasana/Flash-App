@@ -236,6 +236,21 @@ class Driver extends BaseModel {
     };
   }
 
+  // Real-time checkout-time check (audit §2.5, critical-flow-edge-case
+  // audit) -- previously nothing in the checkout path checked whether any
+  // driver was online at all before accepting payment; confirmed live, an
+  // order could reach payment_pending and be paid for with zero drivers
+  // online, only getting auto-refunded up to 30 minutes later by the
+  // existing no-driver-timeout cron. This is a lightweight boolean-only
+  // check (no names/locations), unlike getNearby, so it's safe to call
+  // without exposing any driver PII.
+  static async anyOnline() {
+    const result = await this.query(
+      `SELECT EXISTS(SELECT 1 FROM drivers WHERE is_online = true AND status = 'approved') as any_online`,
+    );
+    return result.rows[0].any_online;
+  }
+
   static async setOnlineStatus(driverId, online) {
     await this.query(
       "UPDATE drivers SET is_online=$1, updated_at=NOW() WHERE id=$2",

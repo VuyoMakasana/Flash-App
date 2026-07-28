@@ -165,6 +165,16 @@ router.get(
   DriverController.getNearbyDrivers,
 );
 
+// Real-time checkout-time driver-availability check (audit §2.6) -- a
+// boolean-only signal (no names/locations/PII), safe for the checkout
+// screen to poll right before payment, unlike /nearby.
+router.get(
+  "/availability",
+  authenticate,
+  requireRole("user"),
+  DriverController.getAvailability,
+);
+
 // ── Bank Account / Payout setup ────────────────────────────────────────────
 // Drivers must register a bank account before they can request payouts.
 router.get(

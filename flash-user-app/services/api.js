@@ -236,7 +236,8 @@ const payments = {
 
 // ── Nearby drivers (for "Pick a Driver" checkout mode) ──────────────────────
 const drivers = {
-  getNearby: (lat, lng) => request(`/drivers/nearby${lat && lng ? `?lat=${lat}&lng=${lng}` : ''}`),
+  getNearby:      (lat, lng) => request(`/drivers/nearby${lat && lng ? `?lat=${lat}&lng=${lng}` : ''}`),
+  getAvailability: ()        => request('/drivers/availability'),
 };
 
 // ── User profile ──────────────────────────────────────────────────────────

@@ -136,6 +136,35 @@ export default function CheckoutScreen() {
       return;
     }
 
+    // Real-time checkout-time driver-availability check — previously
+    // nothing warned a customer that zero drivers were online before they
+    // paid; the order would still go through and only get auto-refunded up
+    // to 30 minutes later by the backend's no-driver timeout cron. This
+    // warns but doesn't block — a brief lull shouldn't cost a sale outright,
+    // it should just be a fully informed choice. A failed check (network
+    // error) fails open rather than blocking checkout over an unrelated
+    // connectivity issue.
+    if (deliveryMode !== 'pick') {
+      try {
+        const { anyOnline } = await api.drivers.getAvailability();
+        if (!anyOnline) {
+          const proceedAnyway = await new Promise((resolve) => {
+            Alert.alert(
+              'No drivers online right now',
+              "There aren't any drivers online at the moment. Your order may take longer than usual to be picked up. You can still place it — a driver will be assigned as soon as one comes online.",
+              [
+                { text: 'Wait and check later', style: 'cancel', onPress: () => resolve(false) },
+                { text: 'Continue Anyway', onPress: () => resolve(true) },
+              ],
+            );
+          });
+          if (!proceedAnyway) return;
+        }
+      } catch (_e) {
+        // fail open — don't block checkout over the availability check itself failing
+      }
+    }
+
     setLoading(true);
     try {
       // Flash only delivers within Nelson Mandela Bay — the backend rejects
