@@ -501,6 +501,49 @@ cron.schedule('30 1 * * *', async () => {
     }
   });
 
+  // DRIVER-CONNECTION-LOST DETECTION: Runs every 10 minutes
+  // WHY (critical-flow/edge-case audit §2.2): the reassignment cron above
+  // only covers driver_assigned/driver_arrived_store (pre-pickup) — once
+  // picked_up, the physical item is with that specific driver, so
+  // auto-reassigning the order doesn't make physical sense, and nothing
+  // detects the driver going silent (phone dies, loses connectivity)
+  // either way. Same flag-for-review mechanism as the stuck-at-delivered
+  // cron below (idempotent, admin-panel visible, live fleet_alert) — a
+  // distinct column since this is a distinct root cause. 25 minutes is
+  // well past normal ping cadence (~15s per CLAUDE.md) and comfortably
+  // inside the same order of magnitude as the pre-pickup cron's 45-minute
+  // window, without waiting that long on an order already in progress.
+  cron.schedule('*/10 * * * *', async () => {
+    try {
+      const staleActive = await pool.query(`
+        SELECT o.id, o.order_number, o.driver_id, o.status
+        FROM orders o
+        JOIN drivers d ON d.id = o.driver_id
+        WHERE o.status IN ('picked_up', 'in_transit')
+          AND d.updated_at < NOW() - INTERVAL '25 minutes'
+          AND o.driver_connection_flagged_at IS NULL
+      `);
+
+      for (const order of staleActive.rows) {
+        await pool.query(
+          `UPDATE orders SET driver_connection_flagged_at = NOW() WHERE id = $1`,
+          [order.id],
+        );
+        console.warn(`[Cron] Order ${order.id} (${order.order_number}) — driver ${order.driver_id} hasn't sent a location update in over 25 minutes while ${order.status}. Flagged for admin review.`);
+        if (_io) {
+          _io.to('admin').emit('fleet_alert', {
+            type: 'driver_connection_lost',
+            orderId: order.id,
+            orderNumber: order.order_number,
+            message: `Order ${order.order_number}'s driver hasn't sent a location update in over 25 minutes while the order is ${order.status} — their connection may be lost.`,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[Cron] Driver-connection staleness detection error:', e.message);
+    }
+  });
+
   // STUCK-AT-DELIVERED DETECTION: Runs every 30 minutes
   // WHY (critical-flow/edge-case audit §2.1): the delivered->completed
   // transition requires a real OTP only the customer's own app can

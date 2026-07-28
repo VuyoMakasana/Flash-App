@@ -39,6 +39,18 @@ const STATUS_COLORS = {
   completed:            '#16a34a',
 };
 
+// Critical-flow/edge-case audit §2.2 — a driver's location ping used to
+// only ever move the map marker; the real timestamp the backend already
+// sends (both here, via the socket event, and from the initial REST
+// hydration via driver_location_updated_at) was discarded. If a driver's
+// phone died mid-delivery, this screen kept showing their last real
+// position looking exactly as "live" as a fresh one, with zero indication
+// anything was wrong. These statuses are the ones where a driver location
+// genuinely exists and matters — not 'paid' (no driver yet) or the
+// completed/cancelled terminal states.
+const ACTIVE_DELIVERY_STATUSES = ['driver_assigned', 'driver_arrived_store', 'picked_up', 'in_transit'];
+const CONNECTION_LOST_THRESHOLD_MINUTES = 5;
+
 export default function TrackingScreen() {
   const route = useRoute();
   const navigation = useNavigation();
@@ -49,6 +61,10 @@ export default function TrackingScreen() {
   const [driverLocation, setDriverLocation] = useState(null);
   const [loading, setLoading]               = useState(true);
   const [socketConnected, setSocketConnected] = useState(false);
+  // Critical-flow/edge-case audit §2.2 — real freshness tracking for the
+  // driver's location, not just the marker position.
+  const [lastLocationUpdate, setLastLocationUpdate] = useState(null);
+  const [nowTick, setNowTick] = useState(Date.now());
   // Arrival notification banner
   const [arrivalBanner, setArrivalBanner]   = useState(null);
   const [shownMilestones, setShownMilestones] = useState(new Set());
@@ -146,6 +162,9 @@ export default function TrackingScreen() {
         if (data.order.driver_lat && data.order.driver_lng) {
           setDriverLocation({ lat: data.order.driver_lat, lng: data.order.driver_lng });
         }
+        if (data.order.driver_location_updated_at) {
+          setLastLocationUpdate(new Date(data.order.driver_location_updated_at));
+        }
       } catch (_) {
         // Socket fallback will still keep tracking live updates.
       }
@@ -172,6 +191,7 @@ export default function TrackingScreen() {
       socket.on('driver_location', (data) => {
         if (data.driverId) {
           setDriverLocation({ lat: data.lat, lng: data.lng });
+          if (data.timestamp) setLastLocationUpdate(new Date(data.timestamp));
           if (mapRef.current) {
             mapRef.current.animateToRegion({
               latitude:      parseFloat(data.lat),
@@ -245,11 +265,31 @@ export default function TrackingScreen() {
     };
   }, [orderId, showBanner]);
 
+  // Re-render every 15s purely so "last updated Xm ago" and the
+  // connection-lost state stay current even when no new location event
+  // arrives — the whole point of this check is detecting the *absence* of
+  // events, which nothing else here would ever trigger a re-render for.
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 15000);
+    return () => clearInterval(timer);
+  }, []);
+
   const isCancelled = orderStatus === 'cancelled';
   const statusColor = isCancelled ? '#ef4444' : (STATUS_COLORS[orderStatus] || '#6b7280');
   const statusLabel = isCancelled ? 'Order cancelled' : (STATUS_LABELS[orderStatus] || orderStatus);
   const isCompleted = orderStatus === 'completed' || orderStatus === 'delivered';
   const statuses    = Object.keys(STATUS_LABELS);
+
+  // Critical-flow/edge-case audit §2.2 — derived from lastLocationUpdate +
+  // nowTick (not just "did an event ever arrive"), so this correctly
+  // reflects the passage of time even with zero new events.
+  const minutesSinceLocationUpdate = lastLocationUpdate
+    ? Math.floor((nowTick - lastLocationUpdate.getTime()) / 60000)
+    : null;
+  const isActiveDeliveryStage = ACTIVE_DELIVERY_STATUSES.includes(orderStatus);
+  const driverConnectionLost = isActiveDeliveryStage
+    && minutesSinceLocationUpdate !== null
+    && minutesSinceLocationUpdate >= CONNECTION_LOST_THRESHOLD_MINUTES;
 
   const defaultRegion = {
     latitude:      -33.9249,  // Port Elizabeth default
@@ -294,10 +334,19 @@ export default function TrackingScreen() {
           </View>
         )}
 
-        {/* Live indicator */}
-        <View style={[styles.liveBadge, { backgroundColor: socketConnected ? '#16a34a' : '#f59e0b' }]}>
+        {/* Live indicator — critical-flow/edge-case audit §2.2: a stale
+             driver location is a more important signal than "my own socket
+             happens to be connected," so it takes priority over the plain
+             Live/Connecting states rather than sitting silently underneath
+             a badge that still says everything's fine. */}
+        <View style={[
+          styles.liveBadge,
+          { backgroundColor: driverConnectionLost ? '#dc2626' : (socketConnected ? '#16a34a' : '#f59e0b') },
+        ]}>
           <View style={styles.liveDot} />
-          <Text style={styles.liveText}>{socketConnected ? 'Live' : 'Connecting...'}</Text>
+          <Text style={styles.liveText}>
+            {driverConnectionLost ? 'Connection lost' : (socketConnected ? 'Live' : 'Connecting...')}
+          </Text>
         </View>
 
         {/* ── SOS button — one tap, fires immediately, always visible during
@@ -378,6 +427,15 @@ export default function TrackingScreen() {
                 <Ionicons name="star" size={12} color="#f59e0b" style={{ marginHorizontal: 2 }} />
                 <Text style={styles.driverMeta}>  •  {driver.total_deliveries || 0} trips</Text>
               </View>
+              {/* Critical-flow/edge-case audit §2.2 — real freshness, not
+                  just a moving dot. Shown whenever there's a real reading,
+                  not only once it's stale, so "0m ago" is itself a visible,
+                  reassuring signal during normal operation. */}
+              {isActiveDeliveryStage && minutesSinceLocationUpdate !== null && (
+                <Text style={[styles.locationFreshness, driverConnectionLost && styles.locationFreshnessStale]}>
+                  {minutesSinceLocationUpdate < 1 ? 'Location updated moments ago' : `Location last updated ${minutesSinceLocationUpdate}m ago`}
+                </Text>
+              )}
             </View>
             {/* ── Part 2: Call button (masked dialler) ─────────────────── */}
             <Pressable style={styles.iconActionBtn} onPress={handleCall}>
@@ -394,6 +452,21 @@ export default function TrackingScreen() {
             <Text style={styles.waitingText}>Finding a driver nearby...</Text>
           </View>
         ) : null}
+
+        {/* Critical-flow/edge-case audit §2.2 — an unmissable state, not a
+            silent stale pin, for exactly the scenario this section asked
+            about: the driver's phone dies or loses connectivity mid-
+            delivery. Deliberately doesn't say anything alarmist about the
+            order itself — Flash support already knows (the admin panel is
+            flagged separately) and the item is still with the driver. */}
+        {driverConnectionLost && (
+          <View style={styles.connectionLostBanner}>
+            <Ionicons name="cloud-offline-outline" size={18} color="#991b1b" />
+            <Text style={styles.connectionLostText}>
+              We haven't heard from your driver's app in {minutesSinceLocationUpdate} minutes. The map position below may be out of date — Flash support has been notified.
+            </Text>
+          </View>
+        )}
 
         {/* Progress steps — hidden for cancelled orders, where a linear
             "which step are we on" sequence doesn't apply; the status pill
@@ -491,6 +564,15 @@ const styles = StyleSheet.create({
   driverName:    { fontWeight: '800', color: '#111827' },
   driverMeta:    { color: '#6b7280', fontSize: 12, marginTop: 2 },
   driverMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  locationFreshness:      { color: '#9ca3af', fontSize: 11, marginTop: 3 },
+  locationFreshnessStale: { color: '#dc2626', fontWeight: '700' },
+  connectionLostBanner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    backgroundColor: '#fef2f2', borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderWidth: 1, borderColor: '#fecaca',
+  },
+  connectionLostText: { color: '#991b1b', fontWeight: '600', fontSize: 12.5, flex: 1, lineHeight: 17 },
   verifiedBadge: { flexDirection: 'row', alignItems: 'center', gap: 2, backgroundColor: '#ecfdf5', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 },
   verifiedBadgeText: { color: '#10b981', fontSize: 10, fontWeight: '700' },
   iconActionBtn: {

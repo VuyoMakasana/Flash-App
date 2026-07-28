@@ -693,7 +693,7 @@ function buildResources(db) {
           // number instead of a raw UUID, and makes order_number (not `id`)
           // the primary/title column for orders itself.
           titleProperty: 'order_number',
-          listProperties: ['order_number', 'user_id', 'driver_id', 'status', 'stuck_delivery_flagged_at', 'payment_method', 'total', 'created_at'],
+          listProperties: ['order_number', 'user_id', 'driver_id', 'status', 'stuck_delivery_flagged_at', 'driver_connection_flagged_at', 'payment_method', 'total', 'created_at'],
           properties: {
             // See the identical responsive fix's full explanation on
             // drivers.name above — order_number doesn't match AdminJS's
@@ -710,6 +710,12 @@ function buildResources(db) {
             // list so it's impossible to miss while scanning orders, not
             // buried on the detail page.
             stuck_delivery_flagged_at: { label: 'Stuck At Delivered (flagged)' },
+            // Critical-flow/edge-case audit §2.2 — same idempotent
+            // flag-for-review mechanism, distinct root cause: this driver
+            // hasn't sent a location ping in over 25 minutes while the
+            // order is picked_up/in_transit — their connection may be
+            // lost. Same reasoning for placement as the flag above.
+            driver_connection_flagged_at: { label: 'Driver Connection Lost (flagged)' },
             payment_method: { availableValues: [{ value: 'cash', label: 'Cash' }, { value: 'card', label: 'Card' }] },
             // Virtual — none of these four are real columns on orders. All
             // show-only: the unified order-detail view (customer/driver

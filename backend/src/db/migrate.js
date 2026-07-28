@@ -935,6 +935,17 @@ async function migrate() {
     throw err;
   } finally {
     client23.release();
+  }
+
+  // ── v24 ────────────────────────────────────────────────────────────────────
+  const client24 = await pool.connect();
+  try {
+    await migrateV24(client24);
+  } catch (err) {
+    console.error('Migration v24 failed:', err.message);
+    throw err;
+  } finally {
+    client24.release();
     await pool.end();
   }
 
@@ -1485,4 +1496,29 @@ async function migrateV23(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23 };
+// Critical-flow/edge-case audit §2.2 — a driver who goes silent mid-delivery
+// (phone dies, loses connectivity) has no admin-visible signal at all today.
+// The 45-minute reassignment cron only covers driver_assigned/
+// driver_arrived_store (pre-pickup) — once picked_up, the physical item is
+// with that specific driver, so auto-reassigning the order doesn't make
+// physical sense; nothing exists to detect the silence either way. Same
+// pattern as stuck_delivery_flagged_at above (idempotent flag, admin-panel
+// visible, live fleet_alert) — a distinct column since this is a distinct
+// root cause (driver-connection loss during active delivery, vs. a
+// customer-unreachable-at-completion gap), reusing the same mechanism.
+async function migrateV24(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_connection_flagged_at TIMESTAMPTZ`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_driver_connection_check ON orders(status, driver_id) WHERE driver_connection_flagged_at IS NULL`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v24 completed: orders.driver_connection_flagged_at (driver-silent-mid-delivery detection)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v24 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24 };
