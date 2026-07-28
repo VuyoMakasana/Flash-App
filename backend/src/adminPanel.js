@@ -169,11 +169,15 @@ const REFUND_MODE_VALUES = [
   { value: 'none', label: 'No Refund' },
   { value: 'full_refund', label: 'Full Refund' },
   { value: 'pre_pickup_split', label: 'Pre-Pickup Split' },
-  { value: 'store_refund_no_delivery_refund', label: 'Store Refund (No Delivery Refund)' },
+  { value: 'store_arrival_split', label: 'Store Arrival Split' },
   // Legacy value, found live in real historical data — predates the
   // pre_pickup_split rename. Kept here purely so old rows still get a
   // readable badge instead of falling through to the raw string.
   { value: 'store_refund_keep_delivery', label: 'Store Refund (Legacy — Delivery Fee Kept)' },
+  // NOTE: 'store_refund_no_delivery_refund' (the old, pre-fix name for what's
+  // now 'store_arrival_split') never actually appears in real data — it was
+  // 32 chars against a VARCHAR(30) column, so every attempted INSERT using it
+  // threw and rolled back the whole cancellation. No badge entry needed.
 ];
 
 const CANCELLED_BY_ROLE_VALUES = [

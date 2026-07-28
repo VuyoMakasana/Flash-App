@@ -104,6 +104,34 @@ export default function CancelOrderScreen() {
                 No driver has been assigned to this order yet, so you'll receive a full refund to your original payment method (or nothing is charged at all for cash orders).
               </Text>
             </View>
+          ) : preview.stage === 'driver_arrived_store' ? (
+            <View style={styles.card}>
+              <Ionicons name="information-circle-outline" size={22} color="#f59e0b" />
+              <Text style={styles.splitTitle}>Your driver has already arrived at the store</Text>
+              <Text style={styles.splitBody}>
+                Cancelling now: nothing is kept by the store since nothing has left the premises, your driver is compensated 8% for making the trip, and you get the rest back — plus your full delivery fee, since delivery never happened.
+              </Text>
+
+              <View style={styles.breakdown}>
+                <Row label="Item value" value={rand(preview.itemValue)} />
+                <Row label="To your driver (8%)" value={`− ${rand(preview.driverAmount)}`} />
+                <View style={styles.divider} />
+                {preview.isCash ? (
+                  <>
+                    <Row label="You haven't been charged yet" value={rand(0)} bold />
+                    <Text style={styles.cashNote}>
+                      This is a cash order — nothing has been collected from you. Your driver is still compensated {rand(preview.driverAmount)} for making the trip.
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Row label="Refund of item value (92%)" value={rand(preview.customerItemRefund)} />
+                    <Row label="Delivery fee refunded (100%)" value={rand(preview.deliveryFeeRefund)} />
+                    <Row label="Total you'll be refunded" value={rand(preview.totalCustomerRefund)} bold />
+                  </>
+                )}
+              </View>
+            </View>
           ) : (
             <View style={styles.card}>
               <Ionicons name="information-circle-outline" size={22} color="#f59e0b" />
