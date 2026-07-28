@@ -407,6 +407,13 @@ const WALLET_LEDGER_ENTRY_TYPE_VALUES = [
   { value: 'available_credit', label: 'Available Credit' },
   { value: 'pending_debit', label: 'Pending Debit' },
   { value: 'payout_debit', label: 'Payout Debit' },
+  // Real entry_type values that were already being written (or, for
+  // payout_reversed_recredit, added this pass — see payoutService.js's
+  // handleFailedPayout) but missing from this list, found while touching
+  // this file for §2.7 -- previously fell through to an unstyled raw
+  // string in the admin list instead of a real badge.
+  { value: 'payout_debit_reconcile_required', label: 'Payout Debit (Reconcile Required)' },
+  { value: 'payout_reversed_recredit', label: 'Payout Reversed — Recredited' },
 ];
 
 const PAYOUT_REQUEST_STATUS_VALUES = [
@@ -418,6 +425,27 @@ const PAYOUT_REQUEST_STATUS_VALUES = [
 const PAYOUT_TRANSACTION_STATUS_VALUES = [
   { value: 'initiated', label: 'Initiated' },
   { value: 'success', label: 'Success' },
+  { value: 'failed', label: 'Failed' },
+];
+
+// Real values, confirmed against webhookController.js/models/Payment.js/
+// paymentController.js (payments.status) and refundService.js
+// (payment_refunds.status). pending_cash (Payment.createCashPayment) was
+// found live in real data while verifying this resource in a real browser
+// — a cash order's payments row is inserted as pending_cash and, unlike a
+// card payment, is never updated afterward (the real "was cash actually
+// collected" state lives on orders.payment_status/cash_received_at, not
+// this row) — still a real, correct value to render as a badge, not a bug.
+const PAYMENT_STATUS_VALUES = [
+  { value: 'pending', label: 'Pending' },
+  { value: 'pending_cash', label: 'Pending Cash' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'failed', label: 'Failed' },
+];
+
+const PAYMENT_REFUND_STATUS_VALUES = [
+  { value: 'processing', label: 'Processing' },
+  { value: 'completed', label: 'Completed' },
   { value: 'failed', label: 'Failed' },
 ];
 
@@ -1011,6 +1039,49 @@ function buildResources(db) {
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.payout_transactions),
       },
+      // Critical-flow/edge-case audit §2.7 -- previously payments/
+      // payment_refunds only fed dashboard aggregate totals (adminCoverage.js's
+      // "financial-picture view"/"refunds-issued total" phrasing), with no
+      // way to search or click into an individual transaction or refund.
+      // user_id references users, which can't be a registered resource (see
+      // suppressReference's own comment above) -- same fix as every other
+      // user_id column in this file. order_id resolves to the real orders
+      // resource automatically (orders.titleProperty is already set).
+      {
+        resource: suppressReference(db.table('payments'), 'user_id'),
+        options: withChronologicalDefaults({
+          listProperties: ['order_id', 'amount', 'method', 'provider', 'status', 'type', 'created_at'],
+          properties: {
+            status: { availableValues: PAYMENT_STATUS_VALUES },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.payments),
+      },
+      {
+        // payment_id resolves to the payments resource just registered above.
+        resource: suppressReference(db.table('payment_refunds'), 'user_id'),
+        options: withChronologicalDefaults({
+          listProperties: ['order_id', 'payment_id', 'amount', 'status', 'refund_reference', 'created_at', 'completed_at'],
+          properties: {
+            status: { availableValues: PAYMENT_REFUND_STATUS_VALUES },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.payment_refunds),
+      },
       {
         // Phase 3 (§3's original text: "driver-rating trends (aggregation
         // query over existing rating data)"). order_id/driver_id are real
@@ -1426,7 +1497,7 @@ async function mountAdminPanel(app) {
 
   adminPanelRouter.use(router);
 
-  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, driver_ratings, flagged_accounts, flash_inventory)`);
+  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, payments, payment_refunds, driver_ratings, flagged_accounts, flash_inventory)`);
 }
 
 module.exports = { mountAdminPanel, ADMIN_PANEL_PATH, buildResources };

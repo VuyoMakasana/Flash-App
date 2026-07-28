@@ -59,8 +59,8 @@ module.exports = {
     admin_actions: 'Phase 0 — the audit log itself. AdminAction.getRecent() already exists to read it back; a real UI view showing it is a natural near-term addition.',
 
     // ── Phase 2 — financial and dispute visibility ──────────────────────
-    payments:                'Phase 2 — core transaction ledger feeding the financial-picture view.',
-    payment_refunds:         'Phase 2 — refunds-issued total; also the reconciliation-check target (Addendum 1 §4.4).',
+    payments:                'Phase 2 — real, browsable AdminJS resource (critical-flow/edge-case audit §2.7), per-transaction, not just dashboard totals.',
+    payment_refunds:         'Phase 2 — real, browsable AdminJS resource (critical-flow/edge-case audit §2.7), per-refund, not just the aggregate reconciliation-check target (Addendum 1 §4.4).',
     driver_commission_debts: 'Phase 2 — cash-order commission revenue line (Addendum 1 §4.3).',
     driver_wallet_ledger:    'Phase 2 — real AdminJS resource + inline summary on a driver\'s own page, now built and verified live.',
     driver_wallets:          'Phase 2 — real AdminJS resource + inline summary on a driver\'s own page, now built and verified live.',
