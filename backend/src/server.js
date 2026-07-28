@@ -59,7 +59,6 @@ const { errorHandler, notFound } = require("./middleware/errorHandler");
 const {
   limiter,
   authLimiter,
-  orderLimiter,
 } = require("./middleware/rateLimiter");
 const { corsMiddleware } = require("./middleware/cors");
 const { redisClient } = require("./middleware/cache");
@@ -176,7 +175,8 @@ function createApp() {
 // Rate limiting
   app.use("/api/", limiter);
   app.use("/api/auth/", authLimiter);
-  app.use("/api/orders/", orderLimiter); // Stricter limits for order creation
+  // orderLimiter (order-creation-specific, 5/min) is applied directly on
+  // POST /api/orders in orderRoutes.js, not here -- see that file's comment.
 
 // Routes
   app.use("/api/auth", authRoutes);
