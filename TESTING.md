@@ -120,17 +120,39 @@ applies to this Expo Go path.
    directly — confirmed publicly reachable at the network level; actually
    opening them in Expo Go additionally requires the Viewer access above):
 
-   - **Flash (user app), Android**: `https://u.expo.dev/update/019f706c-a4d4-7a4d-b335-28fc517b92b5`
-   - **Flash (user app), iOS**: `https://u.expo.dev/update/019f7077-4c4d-7468-8fcf-e27fb4ff21f4`
-   - **Flash Driver, Android**: `https://u.expo.dev/update/019f7076-9f00-7bc0-88fb-b660eaf0ddae`
-   - **Flash Driver, iOS**: `https://u.expo.dev/update/019f7077-0bb4-7dca-bc7d-4f94395a36d0`
+   - **Flash (user app), Android**: `https://u.expo.dev/update/019fa949-59e1-70b3-a3d0-fcac1a49fae2`
+   - **Flash (user app), iOS**: `https://u.expo.dev/update/019fa950-f8e1-7e77-8cbb-22749c5d3a75`
+   - **Flash Driver, Android**: `https://u.expo.dev/update/019fa953-e1ff-7b8a-b19c-601f79eaa1fc`
+   - **Flash Driver, iOS**: `https://u.expo.dev/update/019fa959-f760-7fa3-9ca8-667a375aad68`
 
-   (Updated 2026-07-17 — synced `main`'s latest fixes into `expo-go-testing`
-   and republished, including the driver app's new order-chat screen. All
-   four links re-verified live: HTTP 200, no login wall. Previous links
-   above are now stale — they served the pre-chat build. If a link above
-   ever 404s or hangs, it means a newer publish superseded it; check with
-   the project owner for the current one rather than assuming it's broken.)
+   (Updated 2026-07-28 — synced `main`'s full critical-flow/edge-case
+   production audit into `expo-go-testing` and republished from commit
+   `f3caa218` (8 real fixes: stuck-delivery detection, driver-connection-
+   lost detection, the driver_arrived_store cancellation fix + real
+   cancellation-confirmation UI, checkout driver-availability warning,
+   admin payments/refunds resources, Trusted Driver scorecard, plus the
+   payout-recredit and logout/rate-limiter fixes), plus everything already
+   ahead of the last sync (cash-OTP fetch-on-demand, trusted-driver push
+   notifications, driver pickup/dropoff photos). All four links verified
+   for real, not just HTTP 200: fetched each manifest with the actual
+   headers Expo Go sends (`Accept: multipart/mixed`, `expo-platform`,
+   `expo-protocol-version: 1`) and confirmed the response's
+   `expo-update-id` header exactly matches the ID just published, with
+   `expo-manifest-filters: branchname="expo-go-testing"` confirming
+   correct branch scoping — not a login wall, not a stale cached page.
+   Additionally confirmed, by inspecting the actual exported bundle
+   locally before upload: the driver app's iOS bundle is plain
+   JavaScript (`entry-<hash>.js`, starting with the real Metro bundle
+   preamble `var __BUNDLE_START_TIME__=...`), not Hermes bytecode — the
+   `jsEngine: 'jsc'` diagnostic in `app.config.js` genuinely is taking
+   effect (confirmed by contrast: the user app's iOS bundle, which has no
+   such override, exports as `AppEntry-<hash>.hbc`, real Hermes bytecode,
+   as expected). This confirms the *mechanism* of the diagnostic is
+   working as designed — whether it actually resolves the on-device
+   blank-screen symptom still requires a real iPhone test, which remains
+   unconfirmed. If a link above ever 404s or hangs, it means a newer
+   publish superseded it; check with the project owner for the current
+   one rather than assuming it's broken.)
 
 You don't need Expo Go at any particular version — install whatever the App
 Store/Play Store currently gives you. Its current public release is SDK 54,
