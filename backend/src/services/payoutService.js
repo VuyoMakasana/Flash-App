@@ -241,21 +241,71 @@ class PayoutService {
   }
 
   // Called when Paystack fires a transfer.failed or transfer.reversed webhook.
+  //
+  // CRITICAL FIX: previously this only flipped statuses to 'failed' and
+  // never checked whether the wallet had already been debited. Paystack can
+  // report a transfer 'success' up front (finalizeSuccessfulPayout runs,
+  // deducting the wallet immediately) and *later* reverse it via this exact
+  // webhook event (e.g. an invalid bank account) — the driver's wallet
+  // stayed permanently short by that amount even though the money bounced
+  // back into Flash's own Paystack balance, confirmed live (§2.5, critical-
+  // flow-edge-case audit). Re-crediting the exact deducted amount here is a
+  // correction of a confirmed-wrong deduction (Paystack's own signed webhook
+  // is the proof), not a new payment decision, so it's safe to apply
+  // automatically — but it's logged loudly and ledgered so admins notice
+  // and can check the driver's bank details before the next retry.
   static async handleFailedPayout(reference) {
-    await db.query(
-      `UPDATE payout_transactions
-       SET status = 'failed', updated_at = NOW()
-       WHERE reference = $1`,
-      [reference],
-    );
-    // Mark the payout request as failed so the driver can retry.
-    await db.query(
-      `UPDATE driver_payout_requests pr
-       SET status = 'failed', updated_at = NOW()
-       FROM payout_transactions pt
-       WHERE pt.payout_request_id = pr.id AND pt.reference = $1`,
-      [reference],
-    );
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      const txResult = await client.query(
+        `SELECT id, driver_id, amount, payout_request_id, status
+         FROM payout_transactions WHERE reference = $1 FOR UPDATE`,
+        [reference],
+      );
+      if (!txResult.rows.length) {
+        await client.query('COMMIT');
+        return;
+      }
+
+      const tx = txResult.rows[0];
+      const alreadyDeducted = tx.status === 'success';
+
+      await client.query(
+        `UPDATE payout_transactions SET status = 'failed', updated_at = NOW() WHERE id = $1`,
+        [tx.id],
+      );
+      if (tx.payout_request_id) {
+        await client.query(
+          `UPDATE driver_payout_requests SET status = 'failed', updated_at = NOW() WHERE id = $1`,
+          [tx.payout_request_id],
+        );
+      }
+
+      if (alreadyDeducted) {
+        await client.query(
+          `UPDATE driver_wallets SET wallet_balance = wallet_balance + $2, updated_at = NOW() WHERE driver_id = $1`,
+          [tx.driver_id, tx.amount],
+        );
+        await client.query(
+          `INSERT INTO driver_wallet_ledger (driver_id, amount, entry_type, note)
+           VALUES ($1, $2, 'payout_reversed_recredit', $3)`,
+          [tx.driver_id, tx.amount, `payout_ref_${tx.payout_request_id}_transfer_reversed_reference_${reference}`],
+        );
+        console.error(
+          `[CRITICAL][Payout] Transfer reference=${reference} for driverId=${tx.driver_id} amount=${tx.amount} failed/reversed AFTER the wallet had already been debited — re-credited automatically. Admin should verify the driver's bank details before the next payout attempt.`,
+        );
+      }
+
+      await client.query('COMMIT');
+      return { driverId: tx.driver_id, amount: tx.amount, recredited: alreadyDeducted };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 }
 
