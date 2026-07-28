@@ -402,6 +402,67 @@ async function attachWalletSummary(response) {
   return response;
 }
 
+// Trusted Driver scorecard (critical-flow/edge-case audit §2.8) -- founder's
+// decision: admin panel only, not the driver app (an ops/quality-review
+// tool, not driver-facing gamification). Every number here is computed
+// directly from data that already exists — no new tracking columns, no
+// new writes. Duplicate-rating prevention was confirmed already sufficient
+// (driver_ratings.order_id has a real UNIQUE constraint) and needed no fix.
+async function attachTrustedDriverScorecard(response) {
+  const record = response.record;
+  if (!record?.params) return response;
+  const driverId = record.id;
+
+  const [ratingCountRes, penaltyRes, trustedRes, sosRes] = await Promise.all([
+    pgPool.query('SELECT COUNT(*) FROM driver_ratings WHERE driver_id = $1', [driverId]),
+    pgPool.query(
+      'SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total FROM driver_penalties WHERE driver_id = $1',
+      [driverId],
+    ),
+    // Only 'accepted' counts as real trust — a still-pending or declined
+    // request hasn't actually been confirmed by the customer.
+    pgPool.query(
+      `SELECT COUNT(*) FROM trusted_drivers WHERE driver_id = $1 AND status = 'accepted'`,
+      [driverId],
+    ),
+    // sos_alerts has no driver_id column of its own (triggered_by_role/
+    // triggered_by_id is polymorphic — same shape as messages.sender_id
+    // elsewhere in this file) -- joins through orders.driver_id instead,
+    // and only counts alerts the CUSTOMER triggered (not the driver's own),
+    // since a driver correctly using SOS for their own safety is the
+    // opposite of a trust concern.
+    pgPool.query(
+      `SELECT COUNT(*) FROM sos_alerts sa
+       JOIN orders o ON o.id = sa.order_id
+       WHERE o.driver_id = $1 AND sa.triggered_by_role = 'user'`,
+      [driverId],
+    ),
+  ]);
+
+  const rating          = parseFloat(record.params.rating) || 0;
+  const totalDeliveries  = parseInt(record.params.total_deliveries, 10) || 0;
+  const cancelCount      = parseInt(record.params.cancel_count, 10) || 0;
+  const cancellationRate = (totalDeliveries + cancelCount) > 0
+    ? ((cancelCount / (totalDeliveries + cancelCount)) * 100).toFixed(1)
+    : '0.0';
+
+  const ratingsCount  = parseInt(ratingCountRes.rows[0].count, 10);
+  const penaltyCount  = parseInt(penaltyRes.rows[0].count, 10);
+  const penaltyTotal  = parseFloat(penaltyRes.rows[0].total) || 0;
+  const trustedCount  = parseInt(trustedRes.rows[0].count, 10);
+  const sosCount       = parseInt(sosRes.rows[0].count, 10);
+
+  record.params.trust_scorecard =
+    `Average rating: ${rating.toFixed(2)} / 5 (${ratingsCount} rating${ratingsCount === 1 ? '' : 's'})\n` +
+    `Completed deliveries: ${totalDeliveries}\n` +
+    `Cancellation rate: ${cancellationRate}% (${cancelCount} unresponsive-reassignment cancellation${cancelCount === 1 ? '' : 's'} out of ${totalDeliveries + cancelCount} assignments)\n` +
+    `Penalties: ${penaltyCount} (R${penaltyTotal.toFixed(2)} total)\n` +
+    `Customers who trust this driver: ${trustedCount}\n` +
+    `Customer-triggered SOS alerts while assigned: ${sosCount} (caveat: counts any customer SOS alert on an order this driver was assigned to -- does not by itself establish driver fault; review the SOS Alerts resource for context before treating this as a negative signal)`;
+
+  return response;
+}
+
 const WALLET_LEDGER_ENTRY_TYPE_VALUES = [
   { value: 'pending_credit', label: 'Pending Credit' },
   { value: 'available_credit', label: 'Available Credit' },
@@ -678,10 +739,13 @@ function buildResources(db) {
             // Virtual — wallet/payout at-a-glance summary (Phase 2), populated
             // by attachWalletSummary below.
             wallet_summary: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
+            // Virtual — Trusted Driver scorecard (§2.8), populated by
+            // attachTrustedDriverScorecard below.
+            trust_scorecard: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
           },
           actions: {
             list: { after: [stripSensitive] },
-            show: { after: [stripSensitive, attachDriverDocuments, attachWalletSummary] },
+            show: { after: [stripSensitive, attachDriverDocuments, attachWalletSummary, attachTrustedDriverScorecard] },
             edit: { after: [stripSensitive] },
             approveDriver: {
               actionType: 'record',
