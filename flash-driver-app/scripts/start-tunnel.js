@@ -80,16 +80,21 @@ async function main() {
   const url = listener.url();
 
   console.log('Starting Metro on port 8082, proxied through', url, '...');
-  // --clear: found live (critical-flow/edge-case audit follow-up) that a
-  // stale Metro cache left over from an earlier crashed/killed session can
-  // corrupt DependencyGraph's async init, throwing "Cannot read properties
-  // of undefined (reading 'get')" in metro/src/node-haste/DependencyGraph.js
-  // on every real bundle request thereafter -- Metro itself starts up fine
-  // and even serves /status, so this isn't obvious until an actual bundle
-  // is requested. A fresh cache (confirmed via a clean local, non-tunneled
-  // run) avoids it entirely; the cold rebuild this forces is slower
-  // (~6 minutes for this project) but reliable, unlike a corrupted cache.
-  const metro = spawn('npx', ['expo', 'start', '--port', '8082', '--clear'], {
+  // NOT using --clear here (removed): it was added earlier to work around a
+  // stale-cache DependencyGraph crash caused by Metro's file watcher never
+  // properly initializing (see metro.config.js's history comment -- fixed
+  // by actually installing Watchman rather than forcing useWatchman:false).
+  // Now that Watchman is real and active, --clear is no longer needed for
+  // correctness, and confirmed live it's actively harmful on this machine:
+  // Metro's cache-clear step (FileStore.clear()) hit a real, repeatable
+  // ENOTEMPTY deleting C:\Users\<user>\AppData\Local\Temp\metro-cache --
+  // some other process (most likely real-time antivirus scanning or the
+  // Windows Search Indexer) was holding file handles open inside it,
+  // confirmed independently by a plain PowerShell Remove-Item on the same
+  // directory also leaving dozens of subdirectories un-deletable. Running
+  // without --clear sidesteps that step entirely and Watchman's real
+  // file-change tracking keeps the cache valid on its own.
+  const metro = spawn('npx', ['expo', 'start', '--port', '8082'], {
     cwd: path.join(__dirname, '..'),
     stdio: 'inherit',
     shell: true,
