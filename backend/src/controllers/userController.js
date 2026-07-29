@@ -90,6 +90,9 @@ class UserController {
       await User.deleteAccount(req.userId);
       res.json({ success: true });
     } catch (err) {
+      if (err.message === "ACTIVE_ORDER") {
+        return res.status(409).json({ error: "You have an order in progress. Wait for it to complete or cancel it before deleting your account." });
+      }
       if (err.message === "User not found") {
         return res.status(404).json({ error: "User not found" });
       }

@@ -168,6 +168,14 @@ class DriverController {
           });
         }
 
+        // Previously only enforced in getAvailableOrders, which let a
+        // driver with an expired subscription go online and stay online
+        // indefinitely without ever being told why no orders were showing.
+        const subCheck = await checkDriverSubscriptionAllowed(req.userId);
+        if (!subCheck.allowed) {
+          return res.status(403).json({ error: subCheck.reason, requiresSubscription: true });
+        }
+
         // Flash only operates within Nelson Mandela Bay — checked here
         // (rather than only at registration) so a driver can't go online
         // from outside the service area on any given day, not just at

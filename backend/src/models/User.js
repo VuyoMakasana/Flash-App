@@ -91,6 +91,20 @@ class User extends BaseModel {
   }
 
   static async deleteAccount(userId) {
+    // Unlike Driver.deleteAccount, this previously had no active-order
+    // guard at all — a customer could delete mid-delivery, which nulls
+    // phone/address immediately and would strand a driver already en
+    // route with no way to reach them.
+    const activeOrder = await this.query(
+      `SELECT id FROM orders WHERE user_id = $1
+       AND status NOT IN ('completed', 'cancelled')
+       LIMIT 1`,
+      [userId],
+    );
+    if (activeOrder.rows.length) {
+      throw new Error("ACTIVE_ORDER");
+    }
+
     const anonymizedEmail = `deleted-${userId}@flash.invalid`;
     const password_hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
 
