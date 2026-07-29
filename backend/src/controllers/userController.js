@@ -93,6 +93,10 @@ class UserController {
       if (err.message === "ACTIVE_ORDER") {
         return res.status(409).json({ error: "You have an order in progress. Wait for it to complete or cancel it before deleting your account." });
       }
+      if (err.message === "ACTIVE_SUBSCRIPTION") {
+        const dateStr = new Date(err.expiresAt).toLocaleDateString('en-ZA', { year: 'numeric', month: 'long', day: 'numeric' });
+        return res.status(409).json({ error: `You have an active subscription until ${dateStr}. Please wait until it expires before deleting your account.` });
+      }
       if (err.message === "User not found") {
         return res.status(404).json({ error: "User not found" });
       }

@@ -105,6 +105,21 @@ class User extends BaseModel {
       throw new Error("ACTIVE_ORDER");
     }
 
+    // Same filter as Subscription.getPremiumStatus (status='active' AND
+    // expires_at>NOW()) -- see Driver.deleteAccount's matching guard for
+    // why status is checked alongside expires_at, not expires_at alone.
+    const activeSub = await this.query(
+      `SELECT expires_at FROM premium_subscriptions
+       WHERE user_id = $1 AND status = 'active' AND expires_at > NOW()
+       LIMIT 1`,
+      [userId],
+    );
+    if (activeSub.rows.length) {
+      const err = new Error("ACTIVE_SUBSCRIPTION");
+      err.expiresAt = activeSub.rows[0].expires_at;
+      throw err;
+    }
+
     const anonymizedEmail = `deleted-${userId}@flash.invalid`;
     const password_hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
 

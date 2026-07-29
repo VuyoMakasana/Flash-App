@@ -153,6 +153,23 @@ class Driver extends BaseModel {
       throw new Error("UNPAID_BALANCE");
     }
 
+    // Same filter as subscriptionService.checkDriverSubscriptionAllowed
+    // (status='active' AND expires_at>NOW()) rather than just expires_at,
+    // so a superseded row from an old plan (status flipped to 'expired' by
+    // activateDriverPlan when a new one was purchased, even if its own
+    // expires_at hasn't technically passed) doesn't falsely block deletion.
+    const activeSub = await this.query(
+      `SELECT expires_at FROM driver_subscriptions
+       WHERE driver_id = $1 AND status = 'active' AND expires_at > NOW()
+       ORDER BY created_at DESC LIMIT 1`,
+      [driverId],
+    );
+    if (activeSub.rows.length) {
+      const err = new Error("ACTIVE_SUBSCRIPTION");
+      err.expiresAt = activeSub.rows[0].expires_at;
+      throw err;
+    }
+
     const anonymizedEmail = `deleted-${driverId}@flash.invalid`;
     const password_hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
 

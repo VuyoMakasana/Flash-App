@@ -68,6 +68,10 @@ class DriverController {
       if (err.message === 'UNPAID_BALANCE') {
         return res.status(409).json({ error: 'You have an outstanding wallet balance. Request a payout before deleting your account.' });
       }
+      if (err.message === 'ACTIVE_SUBSCRIPTION') {
+        const dateStr = new Date(err.expiresAt).toLocaleDateString('en-ZA', { year: 'numeric', month: 'long', day: 'numeric' });
+        return res.status(409).json({ error: `You have an active subscription until ${dateStr}. Please wait until it expires before deleting your account.` });
+      }
       if (err.message === 'Driver not found') {
         return res.status(404).json({ error: 'Driver not found' });
       }
