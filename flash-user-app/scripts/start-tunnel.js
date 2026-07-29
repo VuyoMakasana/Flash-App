@@ -72,7 +72,14 @@ async function main() {
   const url = listener.url();
 
   console.log('Starting Metro on port 8081, proxied through', url, '...');
-  const metro = spawn('npx', ['expo', 'start', '--port', '8081'], {
+  // --clear: found live in the sibling driver-app script (critical-flow/
+  // edge-case audit follow-up) -- a stale Metro cache left over from an
+  // earlier crashed/killed session can corrupt DependencyGraph's async
+  // init, throwing "Cannot read properties of undefined (reading 'get')"
+  // in metro/src/node-haste/DependencyGraph.js on every real bundle
+  // request thereafter. Metro itself starts up fine and even serves
+  // /status, so this isn't obvious until an actual bundle is requested.
+  const metro = spawn('npx', ['expo', 'start', '--port', '8081', '--clear'], {
     cwd: path.join(__dirname, '..'),
     stdio: 'inherit',
     shell: true,

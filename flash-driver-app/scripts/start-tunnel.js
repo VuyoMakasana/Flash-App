@@ -80,7 +80,16 @@ async function main() {
   const url = listener.url();
 
   console.log('Starting Metro on port 8082, proxied through', url, '...');
-  const metro = spawn('npx', ['expo', 'start', '--port', '8082'], {
+  // --clear: found live (critical-flow/edge-case audit follow-up) that a
+  // stale Metro cache left over from an earlier crashed/killed session can
+  // corrupt DependencyGraph's async init, throwing "Cannot read properties
+  // of undefined (reading 'get')" in metro/src/node-haste/DependencyGraph.js
+  // on every real bundle request thereafter -- Metro itself starts up fine
+  // and even serves /status, so this isn't obvious until an actual bundle
+  // is requested. A fresh cache (confirmed via a clean local, non-tunneled
+  // run) avoids it entirely; the cold rebuild this forces is slower
+  // (~6 minutes for this project) but reliable, unlike a corrupted cache.
+  const metro = spawn('npx', ['expo', 'start', '--port', '8082', '--clear'], {
     cwd: path.join(__dirname, '..'),
     stdio: 'inherit',
     shell: true,
