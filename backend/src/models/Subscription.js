@@ -106,23 +106,34 @@ class Subscription extends BaseModel {
   // Called by webhookController once Paystack confirms a premium_subscription
   // charge succeeded — this is the other half of purchasePremium() above.
   // premium_subscriptions.user_id is UNIQUE, so renewals must upsert rather
-  // than insert a second row.
+  // than insert a second row -- which means this table alone can't answer
+  // "how much has this user paid in total". premium_subscription_payments
+  // (v25) is the fix: a separate append-only row per real, confirmed charge,
+  // written in the same transaction so the two can never disagree.
   static async activatePremium(userId, paystackReference) {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 30);
 
-    const sub = await this.query(
-      `INSERT INTO premium_subscriptions
-         (user_id, price, starts_at, expires_at, status, paystack_reference)
-       VALUES ($1,99,NOW(),$2,'active',$3)
-       ON CONFLICT (user_id) DO UPDATE
-       SET price=99, starts_at=NOW(), expires_at=$2, status='active',
-           paystack_reference=$3, updated_at=NOW()
-       RETURNING *`,
-      [userId, expiresAt, paystackReference],
-    );
+    return await this.transaction(async (client) => {
+      const sub = await client.query(
+        `INSERT INTO premium_subscriptions
+           (user_id, price, starts_at, expires_at, status, paystack_reference)
+         VALUES ($1,99,NOW(),$2,'active',$3)
+         ON CONFLICT (user_id) DO UPDATE
+         SET price=99, starts_at=NOW(), expires_at=$2, status='active',
+             paystack_reference=$3, updated_at=NOW()
+         RETURNING *`,
+        [userId, expiresAt, paystackReference],
+      );
 
-    return sub.rows[0];
+      await client.query(
+        `INSERT INTO premium_subscription_payments (user_id, amount, paystack_reference)
+         VALUES ($1, 99, $2)`,
+        [userId, paystackReference],
+      );
+
+      return sub.rows[0];
+    });
   }
 
   static async checkDriverSubscriptionAllowed(driverId) {

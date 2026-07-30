@@ -130,12 +130,17 @@ class Admin extends BaseModel {
       cardCommission, cashCommissionCollected, cashCommissionOutstanding,
       driverSubscriptions, premiumSubscriptions, cancellationStoreShare,
       driverPayoutsPaid, cancellationDriverCompensation, refundsCompleted,
-      penalties,
+      penalties, premiumDiscountCostAbsorbed, premiumActiveSubscribers,
     ] = await Promise.all([
       // Order.create(): flashCommission = max(10, delivery_fee * 0.25),
       // driverPayout = delivery_fee - flashCommission -- so
       // delivery_fee - driver_payout recovers Flash's commission directly
       // from the two stored columns, without re-deriving the formula.
+      // NOTE: this is the GROSS commission as if no Flash Premium discount
+      // existed -- delivery_fee/driver_payout are deliberately never
+      // discounted themselves (see Order.create()'s premium_discount_applied
+      // comment). The real reduction from premium discounts is netted in
+      // separately below via premiumDiscountCostAbsorbed, not folded in here.
       this.query(
         "SELECT COALESCE(SUM(delivery_fee - driver_payout),0) as v FROM orders WHERE payment_status='paid' AND payment_method != 'cash'",
       ),
@@ -146,7 +151,12 @@ class Admin extends BaseModel {
         "SELECT COALESCE(SUM(commission_amount),0) as v FROM driver_commission_debts WHERE status = 'outstanding'",
       ),
       this.query("SELECT COALESCE(SUM(price),0) as v FROM driver_subscriptions WHERE paystack_reference IS NOT NULL"),
-      this.query("SELECT COALESCE(SUM(price),0) as v FROM premium_subscriptions WHERE paystack_reference IS NOT NULL"),
+      // FIXED (was SUM(price) FROM premium_subscriptions, which only ever
+      // reflects one payment per user since that table's user_id is UNIQUE
+      // and renewals upsert the same row -- see premium_subscription_payments'
+      // migration comment, v25). This sums the real append-only payment log
+      // instead, so a customer who renews multiple times is counted every time.
+      this.query("SELECT COALESCE(SUM(amount),0) as v FROM premium_subscription_payments"),
       this.query("SELECT COALESCE(SUM(store_amount),0) as v FROM order_cancellations"),
       // payout_transactions.status='success' is the real, completed
       // Paystack transfer -- not orders.driver_payout, which includes
@@ -158,6 +168,12 @@ class Admin extends BaseModel {
       // search -- driver_penalties.status is never updated after insert),
       // so summing every row is equivalent to filtering status='applied'.
       this.query("SELECT COALESCE(SUM(amount),0) as v FROM driver_penalties"),
+      // Real cash cost of the Flash Premium delivery-fee discount: the driver
+      // is paid exactly as if no discount existed, so every rand discounted
+      // off a paid order is a rand Flash's gross commission above doesn't
+      // actually collect.
+      this.query("SELECT COALESCE(SUM(premium_discount_applied),0) as v FROM orders WHERE payment_status='paid'"),
+      this.query("SELECT COUNT(*) as v FROM premium_subscriptions WHERE status='active' AND expires_at>NOW()"),
     ]);
 
     const num = (r) => parseFloat(r.rows[0].v);
@@ -175,10 +191,13 @@ class Admin extends BaseModel {
       driverPayoutsPaid: num(driverPayoutsPaid),
       cancellationDriverCompensation: num(cancellationDriverCompensation),
       refundsIssued: num(refundsCompleted),
+      premiumDiscountCostAbsorbed: num(premiumDiscountCostAbsorbed),
     };
     costs.total = Object.values(costs).reduce((a, b) => a + b, 0);
 
     const driverPenaltiesCollected = num(penalties);
+    const premiumRevenue = num(premiumSubscriptions);
+    const premiumCostAbsorbed = num(premiumDiscountCostAbsorbed);
 
     return {
       flashRevenue,
@@ -188,6 +207,17 @@ class Admin extends BaseModel {
       // reducing what Flash pays out), not a separate cost -- netted in,
       // never double-counted as its own cost line (per the audit doc).
       netPosition: flashRevenue.total - costs.total + driverPenaltiesCollected,
+      // Flash Premium, viewed as its own product rather than folded into the
+      // overall P&L above -- same two real numbers (premiumRevenue,
+      // premiumCostAbsorbed) that already feed flashRevenue/costs above,
+      // just surfaced together so the product's own margin is visible
+      // without having to mentally subtract it out of the totals.
+      premiumProduct: {
+        activeSubscribers: parseInt(premiumActiveSubscribers.rows[0].v, 10),
+        revenue: premiumRevenue,
+        discountCostAbsorbed: premiumCostAbsorbed,
+        netMargin: premiumRevenue - premiumCostAbsorbed,
+      },
       excludedFromRevenue: {
         boostAndPromotionPricePaid: 'Not real revenue — no Paystack charge is ever made for boost/promotion purchases (purchaseBoost/createPromotion only insert a DB row). Deliberately excluded.',
       },
@@ -242,8 +272,15 @@ class Admin extends BaseModel {
            SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, price AS amount FROM driver_subscriptions
              WHERE paystack_reference IS NOT NULL AND created_at >= NOW() - ($1 || ' days')::interval
            UNION ALL
-           SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, price AS amount FROM premium_subscriptions
-             WHERE paystack_reference IS NOT NULL AND created_at >= NOW() - ($1 || ' days')::interval
+           -- premium_subscriptions itself can't be used here: user_id is
+           -- UNIQUE and renewals upsert the same row, so both its price and
+           -- its created_at reflect only the very first purchase, not each
+           -- renewal -- a renewing user's later payments would vanish from
+           -- this trend entirely once their original signup date rolls out
+           -- of the window. premium_subscription_payments (v25) is a real
+           -- append-only row per payment with its own correct created_at.
+           SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, amount FROM premium_subscription_payments
+             WHERE created_at >= NOW() - ($1 || ' days')::interval
            UNION ALL
            SELECT TO_CHAR(settled_at, 'YYYY-MM-DD') AS day, commission_amount AS amount FROM driver_commission_debts
              WHERE status IN ('collected_wallet', 'collected_payout') AND settled_at >= NOW() - ($1 || ' days')::interval

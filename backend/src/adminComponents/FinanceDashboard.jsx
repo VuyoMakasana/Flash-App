@@ -194,6 +194,7 @@ const FinanceDashboard = () => {
             <StatBox label="Driver payouts (actually paid out)" value={money(financials.costs.driverPayoutsPaid)} />
             <StatBox label="Cancellation driver compensation" value={money(financials.costs.cancellationDriverCompensation)} />
             <StatBox label="Refunds issued (completed)" value={money(financials.costs.refundsIssued)} />
+            <StatBox label="Flash Premium discount cost absorbed" value={money(financials.costs.premiumDiscountCostAbsorbed)} />
             <StatBox label="Total costs" value={money(financials.costs.total)} />
           </Section>
 
@@ -201,6 +202,18 @@ const FinanceDashboard = () => {
             <StatBox label="Driver penalties collected (offsets payouts)" value={money(financials.driverPenaltiesCollected)} />
             <StatBox label="Net position (revenue - costs + penalties)" value={money(financials.netPosition)} />
             <StatBox label="Cash commission not yet collected" value={money(financials.outstanding.cashCommissionNotYetCollected)} />
+          </Section>
+
+          {/* Flash Premium viewed as its own product, not just folded into
+              the overall P&L above -- same two real numbers (revenue,
+              discountCostAbsorbed) that already feed the sections above,
+              surfaced together so the product's own margin doesn't require
+              mentally subtracting it back out of the totals. */}
+          <Section title="Flash Premium (R99/mo, 25% delivery-fee discount)">
+            <StatBox label="Active subscribers" value={financials.premiumProduct.activeSubscribers} />
+            <StatBox label="Revenue (real, cumulative across renewals)" value={money(financials.premiumProduct.revenue)} />
+            <StatBox label="Discount cost absorbed" value={money(financials.premiumProduct.discountCostAbsorbed)} />
+            <StatBox label="Net margin" value={money(financials.premiumProduct.netMargin)} />
           </Section>
 
           <Box variant="grey" p="lg">

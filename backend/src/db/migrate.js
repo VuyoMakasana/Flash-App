@@ -946,6 +946,17 @@ async function migrate() {
     throw err;
   } finally {
     client24.release();
+  }
+
+  // ── v25 ────────────────────────────────────────────────────────────────────
+  const client25 = await pool.connect();
+  try {
+    await migrateV25(client25);
+  } catch (err) {
+    console.error('Migration v25 failed:', err.message);
+    throw err;
+  } finally {
+    client25.release();
     await pool.end();
   }
 
@@ -1521,4 +1532,50 @@ async function migrateV24(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24 };
+// Flash Premium delivery-fee-discount perk (SUBSCRIPTION_LIFECYCLE_AUDIT.md
+// follow-up, founder-approved 25%-off design). Two things:
+//
+//   1. orders.premium_discount_applied — the actual R amount discounted off
+//      that specific order's delivery fee, recorded explicitly at
+//      Order.create() time rather than re-derived later (same "store the
+//      real number" pattern as order_cancellations.driver_amount/
+//      store_amount from v17), so getFinancials() can report it as its own
+//      honest cost line instead of it disappearing into a silently-reduced
+//      delivery_fee column.
+//
+//   2. premium_subscription_payments — an append-only history log, same
+//      pattern as order_cancellation_store_shares from v17. Needed because
+//      premium_subscriptions.user_id is UNIQUE and Subscription.activatePremium
+//      does ON CONFLICT (user_id) DO UPDATE on renewal, overwriting the same
+//      row -- so SUM(price) FROM premium_subscriptions (the query
+//      getFinancials() used before this fix) only ever counted one payment
+//      per user, ever, undercounting any customer who renews more than
+//      once. driver_subscriptions never had this problem since it inserts a
+//      fresh row per renewal instead of upserting. This table is the fix:
+//      one row per real, webhook-confirmed charge, never updated or deleted.
+async function migrateV25(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS premium_discount_applied DECIMAL(10,2) NOT NULL DEFAULT 0`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS premium_subscription_payments (
+        id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id             UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount              DECIMAL(10,2) NOT NULL,
+        paystack_reference  VARCHAR(255),
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_premium_subscription_payments_user_id ON premium_subscription_payments(user_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v25 completed: orders.premium_discount_applied + premium_subscription_payments (Flash Premium 25%-off perk + real cumulative revenue tracking)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v25 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25 };

@@ -212,7 +212,27 @@ class Order extends BaseModel {
       }
       // ── END PRICE VALIDATION ───────────────────────────────────────────────
 
-      const finalTotal = computedSubtotal + computedDeliveryFee;
+      // Flash Premium (R99/mo) perk, approved 25% off the delivery fee,
+      // uncapped: delivery_fee/driver_payout/flashCommission below are all
+      // still derived from computedDeliveryFee (the full, undiscounted tier
+      // value) exactly as before this feature existed -- the driver is paid
+      // and Flash's gross commission is recorded identically regardless of
+      // premium status. The discount only ever reduces what the customer is
+      // actually billed (finalTotal), via a separate, explicitly-stored
+      // premium_discount_applied column. This deliberately avoids discounting
+      // the stored delivery_fee itself, which would silently zero out
+      // cardOrderCommission in getFinancials() for premium orders and make
+      // the real cost invisible instead of an explicit, reportable line.
+      const premiumCheck = await client.query(
+        `SELECT 1 FROM premium_subscriptions WHERE user_id=$1 AND status='active' AND expires_at>NOW()`,
+        [userId],
+      );
+      const isPremiumCustomer = premiumCheck.rows.length > 0;
+      const premiumDiscountApplied = isPremiumCustomer
+        ? Math.round(computedDeliveryFee * 0.25 * 100) / 100
+        : 0;
+
+      const finalTotal = computedSubtotal + computedDeliveryFee - premiumDiscountApplied;
       if (finalTotal <= 0) {
         throw new Error('Order total must be positive');
       }
@@ -222,11 +242,11 @@ class Order extends BaseModel {
       const orderResult = await client.query(
         `INSERT INTO orders (
           order_number, user_id, status, delivery_mode, time_slot,
-          subtotal, delivery_fee, total, driver_payout,
+          subtotal, delivery_fee, total, driver_payout, premium_discount_applied,
           store_id, preferred_driver_id, preferred_driver_expires_at,
           pickup_address, dropoff_address,
           pickup_lat, pickup_lng, dropoff_lat, dropoff_lng
-        ) VALUES ($1, $2, 'payment_pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        ) VALUES ($1, $2, 'payment_pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         RETURNING *`,
         [
           orderNumber,
@@ -237,6 +257,7 @@ class Order extends BaseModel {
           computedDeliveryFee,
           finalTotal,
           driverPayout,
+          premiumDiscountApplied,
           store_id            || null,
           preferred_driver_id || null,
           preferredDriverExpiresAt,
