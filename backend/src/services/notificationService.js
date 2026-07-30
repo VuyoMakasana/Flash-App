@@ -119,6 +119,14 @@ async function notifyUserOrderUpdate(userId, orderId, status) {
     if (!result.rows.length) return;
 
     const statusMessages = {
+      // Store accept/reject/preparing gate (docs/audits/FLASH_STORE_ADMIN_DESIGN.md
+      // §0) -- none of these three existed as real, specific messages
+      // before (pending_store_acceptance/preparing are brand new;
+      // waiting_for_driver previously fell through to the generic
+      // fallback below, same as these two would without an entry here).
+      pending_store_acceptance: "We've received your order — the store is reviewing it now.",
+      preparing:                "Your order is being prepared!",
+      waiting_for_driver:       "Your order is ready — looking for a nearby driver.",
       driver_assigned:      "Your driver has been assigned!",
       driver_arrived_store: "Your driver is at the store.",
       picked_up:            "Your order has been picked up.",
