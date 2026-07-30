@@ -67,8 +67,9 @@ module.exports = {
     driver_penalties:        'Phase 2 — cost-offset line (nets against payouts, per Addendum 1 §4.3).',
     driver_payout_requests:  'Phase 2 — real AdminJS resource, now built and verified live.',
     payout_transactions:     'Phase 2 — real AdminJS resource, real Paystack transfer trail, now built and verified live.',
-    driver_subscriptions:    'Phase 2 — subscription status/history (added in Addendum 3 §1, fixing the inconsistency where the revenue was counted without the record).',
-    premium_subscriptions:   'Phase 2 — same fix as driver_subscriptions, Addendum 3 §1.',
+    driver_subscriptions:    'Phase 2 — subscription status/history (added in Addendum 3 §1, fixing the inconsistency where the revenue was counted without the record). Aggregate dashboard visibility (active subscriber count, cumulative revenue, cancelled-pending-expiry count, most recent cancellation timestamp) now built and verified live via Admin.getFinancials()\'s driverSubscriptionProduct section — not yet a row-level browsable AdminJS resource, which remains a real future Phase 2 item.',
+    premium_subscriptions:   'Phase 2 — same fix as driver_subscriptions, Addendum 3 §1. Same aggregate dashboard visibility now built and verified live (Admin.getFinancials()\'s premiumProduct section: active subscribers, revenue, discount cost absorbed, net margin, cancellation tracking) — row-level browsing remains a future Phase 2 item, same as driver_subscriptions.',
+    premium_subscription_payments: 'Phase 2 — new table (migrate.js v25), an append-only log of real, webhook-confirmed premium charges (one row per payment, including renewals) added specifically because premium_subscriptions.user_id is UNIQUE and upserts on renewal, so it alone can\'t answer "how much has this user paid in total." Summed directly into premiumProduct.revenue in the dashboard — same aggregate-only visibility as premium_subscriptions above, no row-level resource.',
     driver_documents:        'Phase 2/1 — document review via signed URLs; Admin.getDriverById already does this correctly, no UI yet.',
     messages:                'Phase 2 — order chat now shown inline on the order-detail screen alongside pickup/dropoff photos, now built and verified live.',
 
