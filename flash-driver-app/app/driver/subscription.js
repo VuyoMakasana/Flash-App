@@ -61,6 +61,7 @@ export default function SubscriptionScreen() {
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
   // Which plan we're waiting on backend confirmation for, after the driver
   // returns from the Paystack checkout browser. Distinct from `purchasing`,
   // which only covers the initial purchase-request call.
@@ -139,6 +140,41 @@ export default function SubscriptionScreen() {
     return () => sub.remove();
   }, [confirmPurchase]);
 
+  // Cancel stops future renewal intent only -- it never shortens access
+  // already paid for. The plan stays fully usable (deliveries, priority
+  // matching, everything) until its real expires_at; the only change is
+  // it won't be there to auto-renew if that's ever built later. This
+  // matches the same behavior "not renewing" already had before this
+  // button existed -- the difference is Flash now has an honest record
+  // that the driver chose to stop, instead of no record at all.
+  const handleCancel = () => {
+    if (!subscription) return;
+    const expiresLabel = new Date(subscription.expires_at).toLocaleDateString('en-ZA');
+    Alert.alert(
+      'Cancel Plan?',
+      `You'll lose access to delivery slots after ${expiresLabel}. Until then, your ${subscription.plan_type} plan keeps working exactly as it does now.`,
+      [
+        { text: 'Keep Plan', style: 'cancel' },
+        {
+          text: 'Cancel Plan',
+          style: 'destructive',
+          onPress: async () => {
+            setCancelling(true);
+            try {
+              const data = await driverApi.subscription.cancel();
+              setSubscription(data.subscription);
+              Alert.alert('Plan Cancelled', `You'll keep your delivery slots until ${expiresLabel}.`);
+            } catch (e) {
+              Alert.alert('Error', e.message || 'Could not cancel your plan. Try again.');
+            } finally {
+              setCancelling(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handlePurchase = async (planId) => {
     const plan = PLANS.find(p => p.id === planId);
     Alert.alert(
@@ -203,7 +239,7 @@ export default function SubscriptionScreen() {
           <Ionicons name="checkmark-circle" size={22} color="#10b981" />
           <View style={{ flex: 1 }}>
             <Text style={styles.activePlanTitle}>
-              {subscription.plan_type.charAt(0).toUpperCase() + subscription.plan_type.slice(1)} Plan — Active
+              {subscription.plan_type.charAt(0).toUpperCase() + subscription.plan_type.slice(1)} Plan — {subscription.cancelled_at ? 'Cancelled' : 'Active'}
             </Text>
             {subscription.deliveries_limit && (
               <Text style={styles.activePlanDetail}>
@@ -211,8 +247,15 @@ export default function SubscriptionScreen() {
               </Text>
             )}
             <Text style={styles.activePlanDetail}>
-              Expires {new Date(subscription.expires_at).toLocaleDateString('en-ZA')}
+              {subscription.cancelled_at
+                ? `Access until ${new Date(subscription.expires_at).toLocaleDateString('en-ZA')} — won't renew`
+                : `Expires ${new Date(subscription.expires_at).toLocaleDateString('en-ZA')}`}
             </Text>
+            {!subscription.cancelled_at && (
+              <TouchableOpacity onPress={handleCancel} disabled={cancelling} style={styles.cancelLink}>
+                <Text style={styles.cancelLinkText}>{cancelling ? 'Cancelling…' : 'Cancel Plan'}</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       )}
@@ -312,6 +355,8 @@ const styles = StyleSheet.create({
   activePlanCard: { marginHorizontal: 16, marginBottom: 16, backgroundColor: '#0d2818', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderColor: '#10b981', borderWidth: 1 },
   activePlanTitle: { color: '#10b981', fontWeight: '700', fontSize: 14 },
   activePlanDetail: { color: '#6b7280', fontSize: 12, marginTop: 3 },
+  cancelLink: { marginTop: 8 },
+  cancelLinkText: { color: '#ef4444', fontSize: 12, fontWeight: '700' },
   confirmingCard: { marginHorizontal: 16, marginBottom: 16, backgroundColor: '#2a1f0d', borderRadius: 14, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderColor: '#f59e0b', borderWidth: 1 },
   confirmingTitle: { color: '#f59e0b', fontWeight: '700', fontSize: 14 },
   confirmingDetail: { color: '#9a8459', fontSize: 12, marginTop: 3 },

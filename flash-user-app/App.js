@@ -80,6 +80,7 @@ import ChatScreen               from './screens/ChatScreen';
 import TrustedDriversScreen     from './screens/TrustedDriversScreen';
 import PrivacyPolicyScreen      from './screens/PrivacyPolicyScreen';
 import StoreCreditsScreen       from './screens/StoreCreditsScreen';
+import PremiumScreen            from './screens/PremiumScreen';
 // NEW: Password reset screens
 import ForgotPasswordScreen     from './screens/ForgotPasswordScreen';
 import ResetPasswordScreen      from './screens/ResetPasswordScreen';
@@ -159,6 +160,7 @@ function ProfileStack() {
       <Stack.Screen name="Sizing"         component={SizingScreen}         options={{ title: 'Size Profile' }} />
       <Stack.Screen name="TrustedDrivers" component={TrustedDriversScreen} options={{ title: 'Trusted Drivers' }} />
       <Stack.Screen name="StoreCredits"   component={StoreCreditsScreen}   options={{ title: 'Store Credits', ...headerStyles }} />
+      <Stack.Screen name="Premium"        component={PremiumScreen}        options={{ title: 'Flash Premium', ...headerStyles }} />
       <Stack.Screen name="PrivacyPolicy"  component={PrivacyPolicyScreen}  options={{ title: 'Privacy Policy', ...headerStyles }} />
       {/* H8 FIX: Settings (with the only Delete Account entry point),
           Address, and Notifications were all fully built but never

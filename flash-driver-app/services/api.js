@@ -279,6 +279,7 @@ const subscription = {
     method: 'POST',
     body:   JSON.stringify({ planId }),
   }),
+  cancel:     () => request('/subscriptions/driver/cancel', { method: 'POST' }),
 };
 
 // ── Trusted Driver requests ───────────────────────────────────────────────

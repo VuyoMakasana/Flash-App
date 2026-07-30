@@ -87,6 +87,7 @@ export default function ProfileScreen() {
           { icon: 'card-outline',    label: 'Saved Cards',     sublabel: 'Manage payment cards', color: '#2563eb', onPress: () => navigation.navigate('SavedCards') },
           { icon: 'people-outline',  label: 'Trusted Drivers', sublabel: 'Your preferred drivers', color: '#059669', onPress: () => navigation.navigate('TrustedDrivers') },
           { icon: 'gift-outline',    label: 'Store Credits',   sublabel: 'Your return credits', color: '#f59e0b', onPress: () => navigation.navigate('StoreCredits') },
+          { icon: 'flash',           label: 'Flash Premium',   sublabel: '25% off delivery fees', color: '#f59e0b', onPress: () => navigation.navigate('Premium') },
         ].map(item => (
           <Pressable key={item.label} style={styles.featureRow} onPress={item.onPress}>
             <View style={[styles.featureIcon, { backgroundColor: item.color + '15' }]}>

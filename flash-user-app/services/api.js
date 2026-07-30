@@ -317,6 +317,16 @@ const sos = {
   trigger: (orderId, lat, lng) => request(`/sos/${orderId}/trigger`, { method: 'POST', body: JSON.stringify({ lat, lng }) }),
 };
 
+// ── Flash Premium ────────────────────────────────────────────────────────
+const subscription = {
+  getPremiumStatus:      ()               => request('/subscriptions/premium'),
+  purchasePremiumWithCard: (cardId)       => request('/subscriptions/premium/purchase-with-card', {
+    method: 'POST',
+    body:   JSON.stringify({ cardId }),
+  }),
+  cancelPremium:         ()               => request('/subscriptions/premium/cancel', { method: 'POST' }),
+};
+
 export { BASE_URL, getToken, saveTokens, clearTokens };
 
 export default {
@@ -333,4 +343,5 @@ export default {
   returns,
   messages,
   sos,
+  subscription,
 };
