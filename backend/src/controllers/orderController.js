@@ -88,7 +88,6 @@ class OrderController {
       delivery_mode,
       time_slot,
       subtotal,
-      store_id,
       preferred_driver_id,
       requested_driver_id,
       pickup_mall_id,
@@ -127,7 +126,17 @@ class OrderController {
         delivery_mode,
         time_slot,
         subtotal,
-        store_id,
+        // Not client-supplied, same trust boundary as pickup_lat/pickup_lng
+        // just below -- there is no multi-vendor "stores" concept yet, so a
+        // client-sent store_id has nothing real to validate against. Was
+        // previously passed straight through from req.body with zero
+        // validation; harmless while orders.store_id was free-text VARCHAR
+        // and no real client ever populated it, but store_id is now a real
+        // UUID column (migration v27) -- an arbitrary client string would
+        // 500 the whole order-creation request instead of silently doing
+        // nothing. Explicit null until a real stores table + checkout
+        // store-selection step exists.
+        store_id: null,
         preferred_driver_id: resolvedPreferredDriverId,
         pickup_mall_id,
         dropoff_mall_id,
