@@ -653,6 +653,46 @@ cron.schedule('30 1 * * *', async () => {
     }
   });
 
+  // STORE-ACCEPTANCE TIMEOUT: Runs every 15 minutes, same cadence as the
+  // no-driver auto-cancel cron directly above, for consistency (founder's
+  // explicit instruction). WHY: a customer's money must not sit trapped
+  // waiting on a store that never responds -- if an order has been awaiting
+  // store accept/reject for more than 15 minutes, auto-cancel and refund it,
+  // the same way an unmatched waiting_for_driver order already is above.
+  // Reuses rejectPendingAcceptance (already handles the transaction, the
+  // real order_cancellations record, and the refund call) rather than
+  // duplicating that logic inline a third time -- cancelledByRole: 'system'
+  // so this is recorded as a real timeout, not misattributed as a store
+  // rejection nobody actually made.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const stuckAcceptanceOrders = await pool.query(`
+        SELECT id
+        FROM orders
+        WHERE status = 'pending_store_acceptance'
+          AND updated_at < NOW() - INTERVAL '15 minutes'
+      `);
+
+      for (const order of stuckAcceptanceOrders.rows) {
+        try {
+          const { rejectPendingAcceptance } = require('./services/orderStateMachineService');
+          await rejectPendingAcceptance(order.id, {
+            actorId: null,
+            actorRole: 'system',
+            cancelledByRole: 'system',
+            reason: 'store_acceptance_timeout',
+            io: _io,
+          });
+          console.log(`[Cron] Auto-cancelled unaccepted order ${order.id} after store-acceptance timeout`);
+        } catch (orderErr) {
+          console.warn(`[Cron] Failed to auto-cancel unaccepted order ${order.id}:`, orderErr.message);
+        }
+      }
+    } catch (e) {
+      console.warn('[Cron] Store-acceptance timeout error:', e.message);
+    }
+  });
+
   // WHY: users.flagged_for_cash_abuse/cash_refusal_count are real columns
   // already written to by paymentController.js (a customer flagged after
   // their second cash-payment refusal), but users can't be registered as a

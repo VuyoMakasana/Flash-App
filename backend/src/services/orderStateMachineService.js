@@ -478,10 +478,16 @@ async function requeueOrderForDriverSearch(orderId, context = {}, externalClient
 // credit for and no split to compute -- full refund is the only correct
 // outcome here, not a simplification that happens to also be correct.
 async function rejectPendingAcceptance(orderId, context = {}) {
-  const io        = context.io;
-  const actorId   = context.actorId   || null;
-  const actorRole = context.actorRole || 'admin';
-  const reason    = context.reason    || null;
+  const io              = context.io;
+  const actorId         = context.actorId         || null;
+  const actorRole       = context.actorRole       || 'admin';
+  const reason          = context.reason          || null;
+  // order_cancellations.cancelled_by_role is a separate business-facing
+  // categorization from actorRole (which feeds updateOrderStatus's generic
+  // transition log) -- defaults to 'store' to preserve the existing AdminJS
+  // reject-action's behavior unchanged; the timeout cron passes 'system'
+  // explicitly since nobody actually decided to reject it, it just expired.
+  const cancelledByRole = context.cancelledByRole || 'store';
 
   const client = await pool.connect();
   let order;
@@ -510,8 +516,8 @@ async function rejectPendingAcceptance(orderId, context = {}) {
       `INSERT INTO order_cancellations (
          order_id, cancelled_by_id, cancelled_by_role, reason, refund_mode,
          item_value_at_cancellation, store_amount, driver_amount, customer_item_refund, delivery_fee_refunded
-       ) VALUES ($1, $2, 'store', $3, 'full_refund', $4, 0, 0, $4, $5)`,
-      [orderId, actorId, reason, parseFloat(order.subtotal), parseFloat(order.delivery_fee || 0)],
+       ) VALUES ($1, $2, $3, $4, 'full_refund', $5, 0, 0, $5, $6)`,
+      [orderId, actorId, cancelledByRole, reason, parseFloat(order.subtotal), parseFloat(order.delivery_fee || 0)],
     );
 
     await client.query('COMMIT');
