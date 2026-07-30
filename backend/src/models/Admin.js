@@ -131,6 +131,8 @@ class Admin extends BaseModel {
       driverSubscriptions, premiumSubscriptions, cancellationStoreShare,
       driverPayoutsPaid, cancellationDriverCompensation, refundsCompleted,
       penalties, premiumDiscountCostAbsorbed, premiumActiveSubscribers,
+      premiumCancelledPendingExpiry, premiumMostRecentCancellation,
+      driverActiveSubscribers, driverCancelledPendingExpiry, driverMostRecentCancellation,
     ] = await Promise.all([
       // Order.create(): flashCommission = max(10, delivery_fee * 0.25),
       // driverPayout = delivery_fee - flashCommission -- so
@@ -174,6 +176,15 @@ class Admin extends BaseModel {
       // actually collect.
       this.query("SELECT COALESCE(SUM(premium_discount_applied),0) as v FROM orders WHERE payment_status='paid'"),
       this.query("SELECT COUNT(*) as v FROM premium_subscriptions WHERE status='active' AND expires_at>NOW()"),
+      // Cancelled-but-not-yet-expired: real, visible signal distinct from
+      // "still fully subscribed, no cancellation intent" -- both currently
+      // show as the same active-subscriber count above, cancelled_at is
+      // what actually distinguishes them.
+      this.query("SELECT COUNT(*) as v FROM premium_subscriptions WHERE status='active' AND expires_at>NOW() AND cancelled_at IS NOT NULL"),
+      this.query("SELECT MAX(cancelled_at) as v FROM premium_subscriptions"),
+      this.query("SELECT COUNT(*) as v FROM driver_subscriptions WHERE status='active' AND expires_at>NOW()"),
+      this.query("SELECT COUNT(*) as v FROM driver_subscriptions WHERE status='active' AND expires_at>NOW() AND cancelled_at IS NOT NULL"),
+      this.query("SELECT MAX(cancelled_at) as v FROM driver_subscriptions"),
     ]);
 
     const num = (r) => parseFloat(r.rows[0].v);
@@ -217,6 +228,18 @@ class Admin extends BaseModel {
         revenue: premiumRevenue,
         discountCostAbsorbed: premiumCostAbsorbed,
         netMargin: premiumRevenue - premiumCostAbsorbed,
+        cancelledPendingExpiry: parseInt(premiumCancelledPendingExpiry.rows[0].v, 10),
+        mostRecentCancellation: premiumMostRecentCancellation.rows[0].v,
+      },
+      // Equivalent visibility for driver plans -- no discount-cost/margin
+      // concept applies here (drivers pay Flash directly for a plan, there's
+      // no perk Flash subsidizes), so this is just real subscriber +
+      // cancellation visibility, same standard as premiumProduct above.
+      driverSubscriptionProduct: {
+        activeSubscribers: parseInt(driverActiveSubscribers.rows[0].v, 10),
+        revenue: num(driverSubscriptions),
+        cancelledPendingExpiry: parseInt(driverCancelledPendingExpiry.rows[0].v, 10),
+        mostRecentCancellation: driverMostRecentCancellation.rows[0].v,
       },
       excludedFromRevenue: {
         boostAndPromotionPricePaid: 'Not real revenue — no Paystack charge is ever made for boost/promotion purchases (purchaseBoost/createPromotion only insert a DB row). Deliberately excluded.',

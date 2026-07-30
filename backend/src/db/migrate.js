@@ -957,6 +957,17 @@ async function migrate() {
     throw err;
   } finally {
     client25.release();
+  }
+
+  // ── v26 ────────────────────────────────────────────────────────────────────
+  const client26 = await pool.connect();
+  try {
+    await migrateV26(client26);
+  } catch (err) {
+    console.error('Migration v26 failed:', err.message);
+    throw err;
+  } finally {
+    client26.release();
     await pool.end();
   }
 
@@ -1578,4 +1589,36 @@ async function migrateV25(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25 };
+// Subscription cancellation (both driver_subscriptions and
+// premium_subscriptions). cancelled_at is deliberately a separate column
+// from status/expires_at, never touched by either -- cancelling must not
+// cut short time already paid for (founder-confirmed: access continues
+// until expires_at, matching the standard, expected behavior for this
+// kind of product), so every existing eligibility check
+// (checkDriverSubscriptionAllowed, the premium discount check in
+// Order.create(), the account-deletion guards in Driver.js/User.js) keeps
+// working unchanged -- they all key off status='active' AND
+// expires_at>NOW(), neither of which this touches. cancelled_at is real,
+// not decorative: it's the honest record of "the customer explicitly
+// opted out," visible in the admin panel and distinct from a subscription
+// that simply hasn't been renewed yet -- and it's forward-compatible with
+// a future auto-renewal mechanism, which would check this before
+// attempting to renew. Reset to NULL on a fresh purchase (see
+// Subscription.activatePremium/activateDriverPlan), since a new purchase
+// clearly supersedes any earlier cancellation intent.
+async function migrateV26(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE driver_subscriptions ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE premium_subscriptions ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v26 completed: driver_subscriptions/premium_subscriptions.cancelled_at (real cancellation, access continues until expires_at)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v26 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26 };

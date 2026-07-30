@@ -20,6 +20,11 @@ function money(value) {
   return `R${n.toLocaleString('en-ZA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function timestamp(value) {
+  if (!value) return 'None yet';
+  return new Date(value).toLocaleString('en-ZA', { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 function StatBox({ label, value }) {
   return (
     <Box variant="grey" p="lg" mr="lg" mb="lg" width={220}>
@@ -214,6 +219,15 @@ const FinanceDashboard = () => {
             <StatBox label="Revenue (real, cumulative across renewals)" value={money(financials.premiumProduct.revenue)} />
             <StatBox label="Discount cost absorbed" value={money(financials.premiumProduct.discountCostAbsorbed)} />
             <StatBox label="Net margin" value={money(financials.premiumProduct.netMargin)} />
+            <StatBox label="Cancelled, access until it expires" value={financials.premiumProduct.cancelledPendingExpiry} />
+            <StatBox label="Most recent cancellation" value={timestamp(financials.premiumProduct.mostRecentCancellation)} />
+          </Section>
+
+          <Section title="Driver Subscriptions (delivery plans)">
+            <StatBox label="Active subscribers" value={financials.driverSubscriptionProduct.activeSubscribers} />
+            <StatBox label="Revenue (real, cumulative)" value={money(financials.driverSubscriptionProduct.revenue)} />
+            <StatBox label="Cancelled, access until it expires" value={financials.driverSubscriptionProduct.cancelledPendingExpiry} />
+            <StatBox label="Most recent cancellation" value={timestamp(financials.driverSubscriptionProduct.mostRecentCancellation)} />
           </Section>
 
           <Box variant="grey" p="lg">

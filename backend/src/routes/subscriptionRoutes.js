@@ -21,6 +21,12 @@ router.post(
   requireRole("driver"),
   SubscriptionController.incrementDeliveryCount,
 );
+router.post(
+  "/driver/cancel",
+  authenticate,
+  requireRole("driver"),
+  SubscriptionController.cancelDriverPlan,
+);
 router.get(
   "/premium",
   authenticate,
@@ -32,6 +38,18 @@ router.post(
   authenticate,
   requireRole("user"),
   SubscriptionController.purchasePremium,
+);
+router.post(
+  "/premium/purchase-with-card",
+  authenticate,
+  requireRole("user"),
+  SubscriptionController.purchasePremiumWithCard,
+);
+router.post(
+  "/premium/cancel",
+  authenticate,
+  requireRole("user"),
+  SubscriptionController.cancelPremium,
 );
 
 module.exports = router;

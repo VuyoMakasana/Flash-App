@@ -58,6 +58,52 @@ class SubscriptionController {
       res.status(500).json({ error: "Failed to activate premium" });
     }
   }
+
+  static async purchasePremiumWithCard(req, res) {
+    const { cardId } = req.body;
+    if (!cardId) {
+      return res.status(400).json({ error: "cardId is required" });
+    }
+    try {
+      const result = await Subscription.purchasePremiumWithSavedCard(req.userId, cardId);
+      res.status(202).json(result);
+    } catch (err) {
+      if (err.message === "CARD_NOT_FOUND") {
+        return res.status(404).json({ error: "Saved card not found" });
+      }
+      console.error("Premium saved-card purchase error:", err.message);
+      res.status(500).json({ error: "Failed to charge saved card" });
+    }
+  }
+
+  // req.userId comes only from the verified JWT (middleware/auth.js) --
+  // never from the request body/params -- so there is no field an
+  // attacker could supply to target another driver's subscription here.
+  static async cancelDriverPlan(req, res) {
+    try {
+      const subscription = await Subscription.cancelDriverPlan(req.userId);
+      res.json({ success: true, subscription });
+    } catch (err) {
+      if (err.message === "NO_ACTIVE_SUBSCRIPTION") {
+        return res.status(404).json({ error: "No active subscription to cancel." });
+      }
+      console.error("Driver plan cancellation error:", err.message);
+      res.status(500).json({ error: "Failed to cancel subscription" });
+    }
+  }
+
+  static async cancelPremium(req, res) {
+    try {
+      const subscription = await Subscription.cancelPremium(req.userId);
+      res.json({ success: true, subscription });
+    } catch (err) {
+      if (err.message === "NO_ACTIVE_SUBSCRIPTION") {
+        return res.status(404).json({ error: "No active subscription to cancel." });
+      }
+      console.error("Premium cancellation error:", err.message);
+      res.status(500).json({ error: "Failed to cancel subscription" });
+    }
+  }
 }
 
 module.exports = SubscriptionController;

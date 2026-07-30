@@ -115,13 +115,16 @@ class Subscription extends BaseModel {
     expiresAt.setDate(expiresAt.getDate() + 30);
 
     return await this.transaction(async (client) => {
+      // cancelled_at reset to NULL on the UPDATE branch -- a fresh purchase
+      // clearly supersedes any earlier cancellation. The INSERT branch needs
+      // no explicit value: a brand-new row defaults to NULL already.
       const sub = await client.query(
         `INSERT INTO premium_subscriptions
            (user_id, price, starts_at, expires_at, status, paystack_reference)
          VALUES ($1,99,NOW(),$2,'active',$3)
          ON CONFLICT (user_id) DO UPDATE
          SET price=99, starts_at=NOW(), expires_at=$2, status='active',
-             paystack_reference=$3, updated_at=NOW()
+             paystack_reference=$3, cancelled_at=NULL, updated_at=NOW()
          RETURNING *`,
         [userId, expiresAt, paystackReference],
       );
@@ -134,6 +137,102 @@ class Subscription extends BaseModel {
 
       return sub.rows[0];
     });
+  }
+
+  // Cancellation: stops future renewal intent only -- never touches
+  // status/expires_at, so access (and the premium discount / driver
+  // delivery eligibility) continues exactly as paid for until the real
+  // expiry. WHERE driver_id=$1 scopes this to the authenticated caller's
+  // own subscription only; the controller passes req.userId, never a
+  // client-supplied id, so there is no parameter through which another
+  // driver's subscription could be targeted. AND cancelled_at IS NULL
+  // makes a repeat call a no-op instead of a confusing "not found" on the
+  // second tap.
+  static async cancelDriverPlan(driverId) {
+    const result = await this.query(
+      `UPDATE driver_subscriptions
+       SET cancelled_at = NOW()
+       WHERE driver_id = $1 AND status = 'active' AND expires_at > NOW() AND cancelled_at IS NULL
+       RETURNING *`,
+      [driverId],
+    );
+    if (!result.rows.length) {
+      throw new Error("NO_ACTIVE_SUBSCRIPTION");
+    }
+    return result.rows[0];
+  }
+
+  static async cancelPremium(userId) {
+    const result = await this.query(
+      `UPDATE premium_subscriptions
+       SET cancelled_at = NOW()
+       WHERE user_id = $1 AND status = 'active' AND expires_at > NOW() AND cancelled_at IS NULL
+       RETURNING *`,
+      [userId],
+    );
+    if (!result.rows.length) {
+      throw new Error("NO_ACTIVE_SUBSCRIPTION");
+    }
+    return result.rows[0];
+  }
+
+  // Premium purchase via an existing saved card -- the same direct
+  // server-side charge pattern paymentController.chargeSavedCard already
+  // uses for orders, rather than purchasePremium()'s hosted-checkout
+  // redirect. More appropriate here than hosted checkout because, unlike
+  // driver subscriptions (which structurally cannot have a saved card --
+  // payment_methods.user_id is FK'd to users, not drivers), a premium
+  // customer very likely already has one saved from a real order, and
+  // forcing them out to a browser for a purchase they could complete with
+  // one tap in-app is worse UX with no compensating benefit. No orders
+  // row exists for this charge (same as the hosted-checkout path) --
+  // Payment.getSavedCardById(cardId, userId) is already ownership-scoped
+  // (WHERE id=$1 AND user_id=$2), so a card ID from another account
+  // simply resolves to null here, same protection as the order flow gets.
+  static async purchasePremiumWithSavedCard(userId, cardId) {
+    const Payment = require("./Payment");
+    const crypto = require("crypto");
+
+    const card = await Payment.getSavedCardById(cardId, userId);
+    if (!card) {
+      throw new Error("CARD_NOT_FOUND");
+    }
+
+    const userResult = await this.query("SELECT email FROM users WHERE id=$1", [userId]);
+    if (!userResult.rows.length) {
+      throw new Error("User not found");
+    }
+
+    const reference = `flash_premium_sc_${userId}_${crypto.randomBytes(8).toString("hex")}`;
+
+    const paystackRes = await paystackService.chargeAuthorization(
+      card.authorization_code,
+      userResult.rows[0].email,
+      9900, // R99 in cents
+      { userId, type: "premium_subscription", platform: "flash", source: "saved_card" },
+      reference,
+    );
+
+    if (!paystackRes?.status) {
+      throw new Error(paystackRes?.message || "Card charge failed");
+    }
+
+    if (paystackRes.data?.status !== "success") {
+      return {
+        success: false,
+        status: paystackRes.data?.status || "pending",
+        message: paystackRes.data?.gateway_response || "Payment pending",
+        reference,
+        awaitingWebhook: true,
+      };
+    }
+
+    return {
+      success: true,
+      reference,
+      message: "Charge accepted. Awaiting webhook confirmation.",
+      awaitingWebhook: true,
+    };
   }
 
   static async checkDriverSubscriptionAllowed(driverId) {
