@@ -355,9 +355,17 @@ class OrderController {
       // 400 -- the customer could not cancel at all once the driver had
       // arrived at the store. Renamed to fit, and given a real split and
       // refund branch (see below) instead of silently refunding nothing.
+      // pending_store_acceptance/preparing added alongside the existing
+      // three: a customer cancelling before or during store preparation
+      // has no driver assigned yet either, same as waiting_for_driver --
+      // full refund is correct here for the same reason, not something
+      // these two new states get by accident. Found and fixed before ever
+      // shipping the new states: without this, a cancellation attempt
+      // during either would have fallen through every branch below
+      // (refundMode staying 'none'), silently refunding nothing.
       let refundMode = 'none';
       let split = null;
-      if (['payment_pending', 'paid', 'waiting_for_driver'].includes(state)) {
+      if (['payment_pending', 'paid', 'pending_store_acceptance', 'preparing', 'waiting_for_driver'].includes(state)) {
         refundMode = 'full_refund';
       } else if (state === 'driver_assigned') {
         refundMode = 'pre_pickup_split';

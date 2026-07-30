@@ -16,9 +16,7 @@ const Payment = require('../models/Payment');
 const Subscription = require('../models/Subscription');
 const Boost = require('../models/Boost');
 const RefundService = require('../services/refundService');
-const { autoAssignNearestDriver } = require('../services/autoMatchService');
-const { updateOrderStatus }       = require('../services/orderStateMachineService');
-const { notifyDriversNewOrder }   = require('../services/notificationService');
+const { updateOrderStatus } = require('../services/orderStateMachineService');
 const PayoutService               = require('../services/payoutService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
 
@@ -232,47 +230,26 @@ class WebhookController {
         }
         console.log(`[Webhook] Card order ${orderId} scheduled for morning — outside operating hours`);
       } else {
+        // No longer transitions straight to waiting_for_driver / notifies
+        // drivers here -- a paid order now waits for a real store
+        // accept/reject (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0) before
+        // driver matching begins. That handoff now lives in
+        // orderStateMachineService.markReadyForPickup(), triggered by the
+        // store's own "Mark Ready for Pickup" admin action, not
+        // automatically the moment payment clears.
         try {
-          await updateOrderStatus(orderId, 'waiting_for_driver', {
+          await updateOrderStatus(orderId, 'pending_store_acceptance', {
             actorId:   String(event.id || 'paystack'),
             actorRole: 'webhook',
             io,
           });
         } catch (transitionErr) {
-          console.warn('[Webhook] waiting_for_driver transition skipped:', transitionErr.message);
+          console.warn('[Webhook] pending_store_acceptance transition skipped:', transitionErr.message);
         }
-
-        const prefRow = await pool.query(
-          `SELECT preferred_driver_id, preferred_driver_expires_at FROM orders WHERE id = $1`,
-          [orderId],
-        );
-        const pref = prefRow.rows[0] || {};
-        const hasUnexpiredPreference =
-          pref.preferred_driver_id &&
-          pref.preferred_driver_expires_at &&
-          new Date(pref.preferred_driver_expires_at).getTime() > Date.now();
 
         if (io) {
           io.to(`user:${userId}`).emit('payment_confirmed', { orderId });
-          if (hasUnexpiredPreference) {
-            io.to(`driver:${pref.preferred_driver_id}`).emit('new_order_available', {
-              orderId,
-              isCashDelivery:      false,
-              preferredAssignment: true,
-            });
-          } else {
-            io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: false });
-          }
         }
-
-        await autoAssignNearestDriver(orderId, io).catch(() => null);
-
-        notifyDriversNewOrder(
-          orderId,
-          false,
-          pref.preferred_driver_id || null,
-          pref.preferred_driver_expires_at || null,
-        ).catch(() => null);
       }
 
     } catch (err) {
