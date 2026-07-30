@@ -24,6 +24,7 @@ import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
+import Constants from 'expo-constants';
 
 // ─── CONSTANTS ───────────────────────────────────────────────────────────────
 
@@ -132,6 +133,28 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
  * Returns true if started, false if permissions denied.
  */
 export async function startBackgroundLocation() {
+  // CRITICAL FIX: found live -- a driver going online under Expo Go
+  // exited the app immediately, every time, with no error screen. Root
+  // cause: this file's own header has always documented "Background
+  // tasks require a native build — Expo Go will not work," but nothing
+  // actually checked for that before calling Location.startLocationUpdatesAsync()
+  // below, which needs expo-task-manager's native task registration —
+  // absent from Expo Go's fixed client binary. That failure happens at
+  // the native/bridge layer, not as a normal JS exception, so it isn't
+  // caught by this function's own try/catch or by the .catch() on the
+  // caller's fire-and-forget call in DriverContext.js — it takes the
+  // whole app down instead of logging a warning like every other error
+  // path here assumes. Detecting Expo Go and returning before any of
+  // this function's steps run (including the permission requests, in
+  // case those are also part of what's unsupported) is the only fix that
+  // actually prevents it, matching the same "Expo Go can't do this,
+  // skip gracefully" precedent already used for defineTask() above.
+  const isExpoGo = Constants.appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
+  if (isExpoGo) {
+    console.warn('[BG Location] Skipped — background location requires a native build (EAS build), not supported in Expo Go.');
+    return false;
+  }
+
   try {
     // 1. Check / request foreground permission first (required before
     //    background permission can be requested on Android).
