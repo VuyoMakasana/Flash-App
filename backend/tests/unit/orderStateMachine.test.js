@@ -252,7 +252,12 @@ describe('updateOrderStatus', () => {
   });
 
   test('an externally-joined transaction does not issue its own BEGIN/COMMIT/ROLLBACK', async () => {
-    const orderRow = { id: 'o1', status: 'paid', user_id: 'u1' };
+    // 'paid' no longer transitions directly to 'waiting_for_driver' -- the
+    // store accept/reject/preparing gate (docs/audits/FLASH_STORE_ADMIN_DESIGN.md
+    // §0) sits between them now. Starting from 'preparing' instead keeps
+    // this test verifying what it actually tests (externalClient mechanics),
+    // not a status pair that happens to be illegal after that change.
+    const orderRow = { id: 'o1', status: 'preparing', user_id: 'u1' };
     const client = makeClient(orderRow, {
       applyUpdate: (row, params) => ({ ...row, status: params[0] }),
     });

@@ -13,11 +13,22 @@
 const pool        = require('../config/database');
 const DriverWallet = require('../models/DriverWallet');
 
+// pending_store_acceptance / preparing: the store-facing accept/reject/
+// preparing gate (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0). A paid order
+// previously went straight to waiting_for_driver with no human at the
+// store ever confirming it -- these two states insert that confirmation.
+// "Ready for pickup" deliberately isn't a third new state: it's the
+// existing waiting_for_driver, now reached only via a real store action
+// (the new markReadyForPickup transition, preparing -> waiting_for_driver)
+// instead of automatically the moment payment clears -- exactly the
+// "two new states, not four" collapse the design doc settled on.
 const ORDER_STATES = [
   'created',
   'payment_pending',
   'paid',
   'scheduled_for_morning',
+  'pending_store_acceptance',
+  'preparing',
   'waiting_for_driver',
   'driver_assigned',
   'driver_arrived_store',
@@ -33,18 +44,24 @@ const LEGACY_STATE_MAP = {
 };
 
 const ALLOWED_TRANSITIONS = {
-  created:               ['payment_pending', 'cancelled'],
-  payment_pending:       ['paid', 'scheduled_for_morning', 'cancelled'],
-  paid:                  ['waiting_for_driver', 'scheduled_for_morning', 'cancelled'],
-  scheduled_for_morning: ['waiting_for_driver', 'cancelled'],
-  waiting_for_driver:    ['driver_assigned', 'cancelled'],
-  driver_assigned:       ['driver_arrived_store', 'cancelled'],
-  driver_arrived_store:  ['picked_up', 'cancelled'],
-  picked_up:             ['in_transit'],
-  in_transit:            ['delivered'],
-  delivered:             ['completed'],
-  completed:             [],
-  cancelled:             [],
+  created:                  ['payment_pending', 'cancelled'],
+  payment_pending:          ['paid', 'scheduled_for_morning', 'cancelled'],
+  paid:                     ['pending_store_acceptance', 'scheduled_for_morning', 'cancelled'],
+  // scheduled_for_morning now releases into pending_store_acceptance, not
+  // directly into waiting_for_driver -- an order placed overnight still
+  // needs the same store accept/reject gate once the store opens, not a
+  // free pass just because of when it was placed.
+  scheduled_for_morning:    ['pending_store_acceptance', 'cancelled'],
+  pending_store_acceptance: ['preparing', 'cancelled'],
+  preparing:                ['waiting_for_driver', 'cancelled'],
+  waiting_for_driver:       ['driver_assigned', 'cancelled'],
+  driver_assigned:          ['driver_arrived_store', 'cancelled'],
+  driver_arrived_store:     ['picked_up', 'cancelled'],
+  picked_up:                ['in_transit'],
+  in_transit:               ['delivered'],
+  delivered:                ['completed'],
+  completed:                [],
+  cancelled:                [],
 };
 
 function normalizeState(status) {
@@ -451,6 +468,169 @@ async function requeueOrderForDriverSearch(orderId, context = {}, externalClient
   }
 }
 
+// Store rejects a new order while it's still awaiting acceptance --
+// mirrors orderController.cancelOrder's 'full_refund' branch exactly
+// (same order_cancellations shape, same refund call), deliberately not
+// its driver_assigned/driver_arrived_store split branches: a
+// pending_store_acceptance order can only ever have reached this state via
+// paid -> pending_store_acceptance (see ALLOWED_TRANSITIONS above), never
+// through driver_assigned, so there is no driver_id to reverse a wallet
+// credit for and no split to compute -- full refund is the only correct
+// outcome here, not a simplification that happens to also be correct.
+async function rejectPendingAcceptance(orderId, context = {}) {
+  const io              = context.io;
+  const actorId         = context.actorId         || null;
+  const actorRole       = context.actorRole       || 'admin';
+  const reason          = context.reason          || null;
+  // order_cancellations.cancelled_by_role is a separate business-facing
+  // categorization from actorRole (which feeds updateOrderStatus's generic
+  // transition log) -- defaults to 'store' to preserve the existing AdminJS
+  // reject-action's behavior unchanged; the timeout cron passes 'system'
+  // explicitly since nobody actually decided to reject it, it just expired.
+  const cancelledByRole = context.cancelledByRole || 'store';
+
+  const client = await pool.connect();
+  let order;
+  let cancelledOrder;
+  try {
+    await client.query('BEGIN');
+
+    const orderResult = await client.query(
+      `SELECT * FROM orders WHERE id = $1 FOR UPDATE`,
+      [orderId],
+    );
+    if (!orderResult.rows.length) throw new Error('Order not found');
+    order = orderResult.rows[0];
+
+    if (normalizeState(order.status) !== 'pending_store_acceptance') {
+      throw new Error('Order is not awaiting store acceptance');
+    }
+
+    cancelledOrder = await updateOrderStatus(orderId, 'cancelled', {
+      actorId,
+      actorRole,
+      externalClient: client,
+    });
+
+    await client.query(
+      `INSERT INTO order_cancellations (
+         order_id, cancelled_by_id, cancelled_by_role, reason, refund_mode,
+         item_value_at_cancellation, store_amount, driver_amount, customer_item_refund, delivery_fee_refunded
+       ) VALUES ($1, $2, $3, $4, 'full_refund', $5, 0, 0, $5, $6)`,
+      [orderId, actorId, cancelledByRole, reason, parseFloat(order.subtotal), parseFloat(order.delivery_fee || 0)],
+    );
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  emitOrderUpdate(io, orderId, cancelledOrder.user_id, cancelledOrder.status);
+  await notifyOrderStatusChange(cancelledOrder, 'cancelled');
+
+  // Same isCardPaid gate as orderController.cancelOrder's own refund call --
+  // cash orders never had money taken in the first place (nothing is
+  // charged until real-world delivery), so there is genuinely nothing to
+  // refund; only a card order that's actually paid gets a real Paystack
+  // refund call. A refund-submission failure must not undo the
+  // cancellation that's already committed above -- same reasoning as
+  // cancelOrder's own comment on this exact point.
+  let refund = null;
+  let refundError = null;
+  const isCardPaid = order.payment_method === 'card' && order.payment_status === 'paid';
+  if (isCardPaid) {
+    try {
+      const RefundService = require('./refundService');
+      // refundOrderPayment's own ownership check is `order.user_id ===
+      // userId` -- it's refunding the customer's money, so this must be
+      // the order's real customer id, never the acting admin's id (caught
+      // before ever running this: passing actorId here would always throw
+      // "Not your order", since an admin's id can never match a real
+      // customer's).
+      refund = await RefundService.refundOrderPayment(orderId, order.user_id, reason || 'store_rejected');
+    } catch (err) {
+      console.error('[OrderStateMachine] rejectPendingAcceptance refund submission failed (order already cancelled):', err.message);
+      refundError = err.message;
+    }
+  }
+
+  return { order: cancelledOrder, refund, refundError };
+}
+
+// Store accepts a new order -- the simple half of the gate, no refund/
+// financial logic at all, just the transition plus the same customer
+// notification every other status change already gets.
+async function acceptOrder(orderId, context = {}) {
+  const updatedOrder = await updateOrderStatus(orderId, 'preparing', {
+    actorId:   context.actorId   || null,
+    actorRole: context.actorRole || 'admin',
+    io:        context.io,
+  });
+  await notifyOrderStatusChange(updatedOrder, 'preparing');
+  return updatedOrder;
+}
+
+// Store marks an order ready for pickup -- this is the real handoff point
+// to driver matching, previously fired automatically the moment payment
+// cleared (see the now-removed inline blocks in webhookController.js's
+// handleChargeSuccess and paymentController.js's cashOnDelivery). Both of
+// those blocks are consolidated into this one canonical version rather
+// than duplicated a third time -- they were already near-identical (the
+// card path additionally handled preferred-driver socket targeting the
+// cash path omitted; this version does it uniformly for both, which is
+// correct new behavior for a brand-new event, not a risky change to
+// either path's existing, already-shipped behavior, since both of those
+// inline blocks are being removed, not modified in place).
+async function markReadyForPickup(orderId, context = {}) {
+  const io = context.io;
+
+  const updatedOrder = await updateOrderStatus(orderId, 'waiting_for_driver', {
+    actorId:   context.actorId   || null,
+    actorRole: context.actorRole || 'admin',
+    io,
+  });
+
+  const hasUnexpiredPreference =
+    updatedOrder.preferred_driver_id &&
+    updatedOrder.preferred_driver_expires_at &&
+    new Date(updatedOrder.preferred_driver_expires_at).getTime() > Date.now();
+
+  if (io) {
+    io.to(`user:${updatedOrder.user_id}`).emit('order_update', { orderId, status: 'waiting_for_driver' });
+    if (hasUnexpiredPreference) {
+      io.to(`driver:${updatedOrder.preferred_driver_id}`).emit('new_order_available', {
+        orderId,
+        isCashDelivery:      updatedOrder.payment_method === 'cash',
+        preferredAssignment: true,
+      });
+    } else {
+      io.to('driver_pool').emit('new_order_available', { orderId, isCashDelivery: updatedOrder.payment_method === 'cash' });
+    }
+  }
+
+  // Lazy require -- autoMatchService.js requires this same file at its own
+  // top level (for assignDriver), so a top-level require here would be a
+  // real circular-load-order bug (autoMatchService would receive an
+  // incomplete, still-initializing export object). A lazy, in-function
+  // require resolves correctly since both modules have already finished
+  // loading by the time this function actually runs.
+  const { autoAssignNearestDriver } = require('./autoMatchService');
+  const { notifyDriversNewOrder }   = require('./notificationService');
+
+  await autoAssignNearestDriver(orderId, io).catch(() => null);
+  notifyDriversNewOrder(
+    orderId,
+    updatedOrder.payment_method === 'cash',
+    updatedOrder.preferred_driver_id || null,
+    updatedOrder.preferred_driver_expires_at || null,
+  ).catch(() => null);
+
+  return updatedOrder;
+}
+
 module.exports = {
   ORDER_STATES,
   ALLOWED_TRANSITIONS,
@@ -459,6 +639,9 @@ module.exports = {
   updateOrderStatus,
   assignDriver,
   requeueOrderForDriverSearch,
+  rejectPendingAcceptance,
+  acceptOrder,
+  markReadyForPickup,
   emitOrderUpdate,
   notifyOrderStatusChange,
 };

@@ -2,7 +2,6 @@ const db = require("../config/database");
 const paystackService = require("./paystackService");
 const RefundService = require("./refundService");
 const { updateOrderStatus } = require("./orderStateMachineService");
-const { autoAssignNearestDriver } = require("./autoMatchService");
 
 async function reconcilePendingPayments(io) {
   const result = await db.query(
@@ -40,15 +39,18 @@ async function reconcilePendingPayments(io) {
           });
         } catch (_) {}
 
+        // No longer transitions straight to waiting_for_driver / auto-
+        // assigns below -- a paid order now waits for a real store
+        // accept/reject (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0)
+        // before driver matching begins, same as the webhook/cash paths
+        // this job exists to catch missed webhooks for.
         try {
-          await updateOrderStatus(order.id, "waiting_for_driver", {
+          await updateOrderStatus(order.id, "pending_store_acceptance", {
             actorId: "reconciliation_job",
             actorRole: "system",
             io,
           });
         } catch (_) {}
-
-        await autoAssignNearestDriver(order.id, io).catch(() => null);
       }
     } catch (err) {
       console.warn(`[Reconciliation] orderId=${order.id} failed: ${err.message}`);

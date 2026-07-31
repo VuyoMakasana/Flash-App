@@ -968,6 +968,28 @@ async function migrate() {
     throw err;
   } finally {
     client26.release();
+  }
+
+  // ── v27 ────────────────────────────────────────────────────────────────────
+  const client27 = await pool.connect();
+  try {
+    await migrateV27(client27);
+  } catch (err) {
+    console.error('Migration v27 failed:', err.message);
+    throw err;
+  } finally {
+    client27.release();
+  }
+
+  // ── v28 ────────────────────────────────────────────────────────────────────
+  const client28 = await pool.connect();
+  try {
+    await migrateV28(client28);
+  } catch (err) {
+    console.error('Migration v28 failed:', err.message);
+    throw err;
+  } finally {
+    client28.release();
     await pool.end();
   }
 
@@ -1621,4 +1643,85 @@ async function migrateV26(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26 };
+// orders.store_id was VARCHAR(100), a free-text tag, never a real foreign
+// key -- inconsistent with order_cancellation_store_shares.store_id, which
+// was already the correct UUID type from the start (v17). Standardizing on
+// UUID here, matching every other real ID column in this schema. Confirmed
+// safe before writing this: every real row in production has
+// store_id=NULL today (orderController.createOrder passes the client's raw
+// req.body.store_id straight through with zero validation, but no real
+// client anywhere in either app ever actually populates that field --
+// confirmed by reading flash-user-app's checkout flow directly), so
+// `USING store_id::uuid` is a no-op cast on an all-NULL column, not a real
+// data migration. orderController.js is updated in the same change to stop
+// trusting that raw client value at all (matching how pickup_lat/pickup_lng
+// right next to it already refuse client input for the same "no real
+// multi-vendor concept yet" reason) -- otherwise this type change alone
+// would turn a currently-harmless unused client field into a real 500 the
+// moment any client ever sent a non-UUID string for it.
+async function migrateV27(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ALTER COLUMN store_id TYPE UUID USING store_id::uuid`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v27 completed: orders.store_id VARCHAR->UUID (type consistency with order_cancellation_store_shares.store_id)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v27 failed:', err.message);
+    throw err;
+  }
+}
+
+// Defense-in-depth underneath orderStateMachineService.js's ALLOWED_TRANSITIONS:
+// orders.status was VARCHAR(50) with no CHECK constraint (confirmed directly
+// against production before writing this), so any string could be written by
+// a future bug bypassing the state machine entirely. This enum includes every
+// value in ORDER_STATES (the full canonical list, not just the 4 values
+// observed live today) plus the legacy 'en_route' string, which
+// LEGACY_STATE_MAP still documents as a real historical possibility even
+// though no current row carries it -- keeping it out would risk a hard
+// failure on some future untouched historical row and costs nothing to keep.
+// CREATE TYPE has no native IF NOT EXISTS, so the DO block below is the
+// standard idempotent guard; the DROP/SET DEFAULT around the type change
+// avoids Postgres's "default cannot be cast automatically" error.
+async function migrateV28(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      DO $$ BEGIN
+        CREATE TYPE order_status_enum AS ENUM (
+          'created',
+          'payment_pending',
+          'paid',
+          'scheduled_for_morning',
+          'pending_store_acceptance',
+          'preparing',
+          'waiting_for_driver',
+          'driver_assigned',
+          'driver_arrived_store',
+          'picked_up',
+          'in_transit',
+          'delivered',
+          'completed',
+          'cancelled',
+          'en_route'
+        );
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
+
+    await client.query(`ALTER TABLE orders ALTER COLUMN status DROP DEFAULT`);
+    await client.query(`ALTER TABLE orders ALTER COLUMN status TYPE order_status_enum USING status::order_status_enum`);
+    await client.query(`ALTER TABLE orders ALTER COLUMN status SET DEFAULT 'created'::order_status_enum`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v28 completed: orders.status VARCHAR->ENUM (order_status_enum), defense-in-depth underneath ALLOWED_TRANSITIONS');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v28 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28 };

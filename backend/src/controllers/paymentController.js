@@ -16,9 +16,8 @@ const Order             = require('../models/Order');
 const paystackService   = require('../services/paystackService');
 const db                = require('../config/database');
 const { updateOrderStatus, emitOrderUpdate, notifyOrderStatusChange } = require('../services/orderStateMachineService');
-const { autoAssignNearestDriver }  = require('../services/autoMatchService');
 const cashOtpService               = require('../services/cashOtpService');
-const { notifyDriversNewOrder, sendPushNotification } = require('../services/notificationService');
+const { sendPushNotification } = require('../services/notificationService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
 const { recordCashCommission, checkCommissionBlock } = require('../services/driverCommissionService');
 
@@ -99,7 +98,13 @@ class PaymentController {
           externalClient: client,
         });
       } else {
-        finalOrder = await updateOrderStatus(orderId, 'waiting_for_driver', {
+        // No longer transitions straight to waiting_for_driver / notifies
+        // drivers below -- a paid order now waits for a real store
+        // accept/reject (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0) before
+        // driver matching begins. That handoff now lives in
+        // orderStateMachineService.markReadyForPickup(), triggered by the
+        // store's own "Mark Ready for Pickup" admin action.
+        finalOrder = await updateOrderStatus(orderId, 'pending_store_acceptance', {
           actorId:       req.userId,
           actorRole:     'user',
           externalClient: client,
@@ -132,8 +137,6 @@ class PaymentController {
       return res.json({ ...result, scheduled: true, openAt });
     }
 
-    autoAssignNearestDriver(orderId, io).catch(() => null);
-    notifyDriversNewOrder(orderId, true).catch(() => null);
     return res.json(result);
   }
 

@@ -362,7 +362,11 @@ cron.schedule('30 1 * * *', async () => {
 
   // OPERATING HOURS: Every day at 07:00 SAST (05:00 UTC), release all orders
   // that were placed overnight and are waiting in 'scheduled_for_morning'.
-  // These are converted to 'waiting_for_driver' so drivers can start accepting them.
+  // These are converted to 'pending_store_acceptance', not directly to
+  // 'waiting_for_driver' -- an order placed overnight still needs the same
+  // real store accept/reject gate once the store opens
+  // (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0), not a free pass into
+  // driver matching just because of when it was placed.
   cron.schedule('0 5 * * *', async () => {
     try {
       const { updateOrderStatus } = require('./services/orderStateMachineService');
@@ -373,7 +377,7 @@ cron.schedule('30 1 * * *', async () => {
       );
       for (const order of scheduledOrders.rows) {
         try {
-          await updateOrderStatus(order.id, 'waiting_for_driver', {
+          await updateOrderStatus(order.id, 'pending_store_acceptance', {
             actorId: 'system',
             actorRole: 'system',
             io: _io,
@@ -381,11 +385,11 @@ cron.schedule('30 1 * * *', async () => {
           if (_io) {
             _io.to(`user:${order.user_id}`).emit('order_update', {
               orderId: order.id,
-              status: 'waiting_for_driver',
-              message: 'Good morning! Flash is now open. Your order is being assigned to a driver.',
+              status: 'pending_store_acceptance',
+              message: 'Good morning! Flash is now open. Your order is being reviewed by the store.',
             });
           }
-          console.log(`[OperatingHours] Released scheduled order ${order.id} to driver pool`);
+          console.log(`[OperatingHours] Released scheduled order ${order.id} for store acceptance`);
         } catch (e) {
           console.warn(`[OperatingHours] Failed to release order ${order.id}:`, e.message);
         }
@@ -646,6 +650,46 @@ cron.schedule('30 1 * * *', async () => {
       }
     } catch (e) {
       console.warn('[Cron] No-driver auto-cancel error:', e.message);
+    }
+  });
+
+  // STORE-ACCEPTANCE TIMEOUT: Runs every 15 minutes, same cadence as the
+  // no-driver auto-cancel cron directly above, for consistency (founder's
+  // explicit instruction). WHY: a customer's money must not sit trapped
+  // waiting on a store that never responds -- if an order has been awaiting
+  // store accept/reject for more than 15 minutes, auto-cancel and refund it,
+  // the same way an unmatched waiting_for_driver order already is above.
+  // Reuses rejectPendingAcceptance (already handles the transaction, the
+  // real order_cancellations record, and the refund call) rather than
+  // duplicating that logic inline a third time -- cancelledByRole: 'system'
+  // so this is recorded as a real timeout, not misattributed as a store
+  // rejection nobody actually made.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const stuckAcceptanceOrders = await pool.query(`
+        SELECT id
+        FROM orders
+        WHERE status = 'pending_store_acceptance'
+          AND updated_at < NOW() - INTERVAL '15 minutes'
+      `);
+
+      for (const order of stuckAcceptanceOrders.rows) {
+        try {
+          const { rejectPendingAcceptance } = require('./services/orderStateMachineService');
+          await rejectPendingAcceptance(order.id, {
+            actorId: null,
+            actorRole: 'system',
+            cancelledByRole: 'system',
+            reason: 'store_acceptance_timeout',
+            io: _io,
+          });
+          console.log(`[Cron] Auto-cancelled unaccepted order ${order.id} after store-acceptance timeout`);
+        } catch (orderErr) {
+          console.warn(`[Cron] Failed to auto-cancel unaccepted order ${order.id}:`, orderErr.message);
+        }
+      }
+    } catch (e) {
+      console.warn('[Cron] Store-acceptance timeout error:', e.message);
     }
   });
 

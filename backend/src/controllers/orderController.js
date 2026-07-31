@@ -88,7 +88,6 @@ class OrderController {
       delivery_mode,
       time_slot,
       subtotal,
-      store_id,
       preferred_driver_id,
       requested_driver_id,
       pickup_mall_id,
@@ -127,7 +126,17 @@ class OrderController {
         delivery_mode,
         time_slot,
         subtotal,
-        store_id,
+        // Not client-supplied, same trust boundary as pickup_lat/pickup_lng
+        // just below -- there is no multi-vendor "stores" concept yet, so a
+        // client-sent store_id has nothing real to validate against. Was
+        // previously passed straight through from req.body with zero
+        // validation; harmless while orders.store_id was free-text VARCHAR
+        // and no real client ever populated it, but store_id is now a real
+        // UUID column (migration v27) -- an arbitrary client string would
+        // 500 the whole order-creation request instead of silently doing
+        // nothing. Explicit null until a real stores table + checkout
+        // store-selection step exists.
+        store_id: null,
         preferred_driver_id: resolvedPreferredDriverId,
         pickup_mall_id,
         dropoff_mall_id,
@@ -346,9 +355,17 @@ class OrderController {
       // 400 -- the customer could not cancel at all once the driver had
       // arrived at the store. Renamed to fit, and given a real split and
       // refund branch (see below) instead of silently refunding nothing.
+      // pending_store_acceptance/preparing added alongside the existing
+      // three: a customer cancelling before or during store preparation
+      // has no driver assigned yet either, same as waiting_for_driver --
+      // full refund is correct here for the same reason, not something
+      // these two new states get by accident. Found and fixed before ever
+      // shipping the new states: without this, a cancellation attempt
+      // during either would have fallen through every branch below
+      // (refundMode staying 'none'), silently refunding nothing.
       let refundMode = 'none';
       let split = null;
-      if (['payment_pending', 'paid', 'waiting_for_driver'].includes(state)) {
+      if (['payment_pending', 'paid', 'pending_store_acceptance', 'preparing', 'waiting_for_driver'].includes(state)) {
         refundMode = 'full_refund';
       } else if (state === 'driver_assigned') {
         refundMode = 'pre_pickup_split';

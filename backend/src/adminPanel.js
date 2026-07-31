@@ -22,6 +22,11 @@ const bcrypt = require('bcryptjs');
 const Admin = require('./models/Admin');
 const AdminAction = require('./models/AdminAction');
 const Return = require('./models/Return');
+const {
+  acceptOrder,
+  rejectPendingAcceptance,
+  markReadyForPickup,
+} = require('./services/orderStateMachineService');
 const SosAlert = require('./models/SosAlert');
 const Inventory = require('./models/Inventory');
 const Fleet = require('./models/Fleet');
@@ -139,7 +144,12 @@ const ORDER_STATUS_VALUES = [
   { value: 'payment_pending', label: 'Payment Pending' },
   { value: 'paid', label: 'Paid' },
   { value: 'scheduled_for_morning', label: 'Scheduled For Morning' },
-  { value: 'waiting_for_driver', label: 'Waiting For Driver' },
+  // Store accept/reject gate (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0) --
+  // orderStateMachineService.js's own ORDER_STATES/ALLOWED_TRANSITIONS is
+  // the real source of truth; this is just the display label list.
+  { value: 'pending_store_acceptance', label: 'New Order — Awaiting Acceptance' },
+  { value: 'preparing', label: 'Preparing' },
+  { value: 'waiting_for_driver', label: 'Ready For Pickup — Waiting For Driver' },
   { value: 'driver_assigned', label: 'Driver Assigned' },
   { value: 'driver_arrived_store', label: 'Driver Arrived At Store' },
   { value: 'picked_up', label: 'Picked Up' },
@@ -182,6 +192,7 @@ const REFUND_MODE_VALUES = [
 
 const CANCELLED_BY_ROLE_VALUES = [
   { value: 'user', label: 'Customer' },
+  { value: 'store', label: 'Store (Rejected)' },
   { value: 'system', label: 'System (Auto-Cancelled)' },
 ];
 
@@ -839,11 +850,65 @@ function buildResources(db) {
             // app/driver flows and the order state machine
             // (orderStateMachineService.js), never by an admin editing a row
             // directly. Phase 1's own scope was "a real order list with
-            // filtering," not order mutation.
+            // filtering," not order mutation. The three real exceptions
+            // below are the store accept/reject/ready-for-pickup gate
+            // (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0) -- real,
+            // single-purpose custom actions calling the real state-machine
+            // functions directly, same shape as return_requests'
+            // approveReturn/rejectReturn above, not a generic status editor.
             edit: { isAccessible: false },
             new: { isAccessible: false },
             delete: { isAccessible: false },
             bulkDelete: { isAccessible: false },
+            acceptOrder: {
+              actionType: 'record',
+              component: false,
+              guard: 'Accept this order? It will move to Preparing.',
+              isAccessible: ({ record }) => record.param('status') === 'pending_store_acceptance',
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                await acceptOrder(record.id(), { actorId: currentAdmin.id, actorRole: 'admin' });
+                AdminAction.log(currentAdmin.id, 'order_accept', 'orders', record.id());
+                record.set('status', 'preparing');
+                return { record: record.toJSON(currentAdmin), notice: { message: 'Order accepted — now preparing.', type: 'success' } };
+              },
+            },
+            // Same documented, deliberate scope cut as return_requests'
+            // rejectReturn above: a real per-rejection text-input reason
+            // needs a custom AdminJS frontend component, not proven yet in
+            // this setup -- a fixed, generic reason is used instead,
+            // matching that exact precedent. This is still a real record
+            // (order_cancellations.reason), not just a status flip.
+            rejectOrder: {
+              actionType: 'record',
+              component: false,
+              guard: 'Reject this order? The customer will be refunded in full.',
+              isAccessible: ({ record }) => record.param('status') === 'pending_store_acceptance',
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                await rejectPendingAcceptance(record.id(), {
+                  actorId:   currentAdmin.id,
+                  actorRole: 'admin',
+                  reason:    'Rejected by store via admin panel',
+                });
+                AdminAction.log(currentAdmin.id, 'order_reject', 'orders', record.id());
+                record.set('status', 'cancelled');
+                return { record: record.toJSON(currentAdmin), notice: { message: 'Order rejected — customer refunded in full.', type: 'success' } };
+              },
+            },
+            markReadyForPickup: {
+              actionType: 'record',
+              component: false,
+              guard: 'Mark this order ready for pickup? Driver matching will begin immediately.',
+              isAccessible: ({ record }) => record.param('status') === 'preparing',
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                await markReadyForPickup(record.id(), { actorId: currentAdmin.id, actorRole: 'admin' });
+                AdminAction.log(currentAdmin.id, 'order_mark_ready_for_pickup', 'orders', record.id());
+                record.set('status', 'waiting_for_driver');
+                return { record: record.toJSON(currentAdmin), notice: { message: 'Order marked ready — driver matching started.', type: 'success' } };
+              },
+            },
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.orders),
       },
