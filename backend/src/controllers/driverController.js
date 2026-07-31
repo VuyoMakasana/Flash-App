@@ -1,5 +1,6 @@
 'use strict';
 
+const jwt = require('jsonwebtoken');
 const Driver = require('../models/Driver');
 const Order = require('../models/Order');
 const { checkDriverSubscriptionAllowed } = require('../services/subscriptionService');
@@ -60,6 +61,28 @@ class DriverController {
   static async deleteAccount(req, res) {
     try {
       await Driver.deleteAccount(req.userId);
+
+      // CRITICAL FIX: same gap as UserController.deleteAccount -- only the
+      // refresh token was revoked, the current access token stayed valid
+      // for its remaining lifetime. Confirmed live: GET /api/drivers/me
+      // still returned 200 immediately after "deletion". Same proven jti +
+      // revoked_tokens mechanism already used by AuthController.logout()/
+      // AdminController.logout().
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith('Bearer ')) {
+        try {
+          const token = authHeader.replace('Bearer ', '');
+          const decoded = jwt.decode(token);
+          if (decoded?.jti) {
+            const expiresAt = new Date(decoded.exp * 1000);
+            await db.query(
+              `INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+              [decoded.jti, expiresAt],
+            );
+          }
+        } catch (_) {}
+      }
+
       res.json({ success: true });
     } catch (err) {
       if (err.message === 'ACTIVE_ORDER') {
