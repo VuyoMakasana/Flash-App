@@ -30,6 +30,15 @@ import Constants from 'expo-constants';
 
 export const BACKGROUND_LOCATION_TASK = 'FLASH_DRIVER_BACKGROUND_LOCATION';
 
+// Shared by every call site in this file and by DriverContext.js's
+// hydration effect, which independently calls Location.hasStartedLocationUpdatesAsync()
+// and hit the exact same native-bridge-level crash this was originally
+// written to guard startBackgroundLocation() against — a single definition
+// here means both call sites can never drift out of sync with each other.
+export function isExpoGoRuntime() {
+  return Constants.appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
+}
+
 // How often the OS delivers location updates (milliseconds).
 // 10 000 ms == every ~10 seconds. Fine-grained enough for customer tracking,
 // conservative enough to respect battery on long shifts.
@@ -149,8 +158,7 @@ export async function startBackgroundLocation() {
   // case those are also part of what's unsupported) is the only fix that
   // actually prevents it, matching the same "Expo Go can't do this,
   // skip gracefully" precedent already used for defineTask() above.
-  const isExpoGo = Constants.appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
-  if (isExpoGo) {
+  if (isExpoGoRuntime()) {
     console.warn('[BG Location] Skipped — background location requires a native build (EAS build), not supported in Expo Go.');
     return false;
   }

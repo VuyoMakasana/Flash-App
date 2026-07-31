@@ -25,6 +25,7 @@ import {
   BACKGROUND_LOCATION_TASK,
   startBackgroundLocation,
   stopBackgroundLocation,
+  isExpoGoRuntime,
 } from '../tasks/backgroundLocationTask';
 
 const DriverContext = createContext(null);
@@ -88,8 +89,23 @@ export const DriverProvider = ({ children }) => {
         // server-side is_online=true — rather than defaulting the UI to
         // false while a background task may still be silently running.
         if (t) {
+          // CRITICAL FIX: Location.hasStartedLocationUpdatesAsync() hits the
+          // exact same native-bridge-level failure under Expo Go that
+          // startLocationUpdatesAsync() did (see backgroundLocationTask.js's
+          // own fix) -- but this call runs unconditionally on every cold
+          // start for any driver with a persisted session, not just when
+          // tapping "Go Online". Found live: blank-screened on every open
+          // once a real login had been completed once before, with no error
+          // screen -- the .catch() below never runs because the failure
+          // isn't a normal JS rejection. Background location never actually
+          // runs under Expo Go regardless (backgroundLocationTask.js's own
+          // header), so treating the OS task as never-running there is
+          // correct, not a workaround -- the profile fetch alongside it is
+          // pure network logic and carries no native-module risk.
           const [osTaskRunning, profile] = await Promise.all([
-            Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(() => false),
+            isExpoGoRuntime()
+              ? Promise.resolve(false)
+              : Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK).catch(() => false),
             driverApi.driver.getProfile().catch(() => null),
           ]);
           const serverOnline = profile?.driver?.is_online ?? false;
