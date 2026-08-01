@@ -1034,6 +1034,17 @@ async function migrate() {
     throw err;
   } finally {
     client32.release();
+  }
+
+  // ── v33 ────────────────────────────────────────────────────────────────────
+  const client33 = await pool.connect();
+  try {
+    await migrateV33(client33);
+  } catch (err) {
+    console.error('Migration v33 failed:', err.message);
+    throw err;
+  } finally {
+    client33.release();
     await pool.end();
   }
 
@@ -1844,28 +1855,76 @@ async function migrateV29(client) {
 // NULL through the conversion to preserve their existing constraint.
 // order_cancellation_store_shares.store_id is already UUID and nullable
 // (confirmed empty too) -- just needs the FK constraint added.
+// Idempotency note (found during Stage 2's migration run, when the full
+// script re-ran from v1 as it always does): the ALTER COLUMN ... TYPE UUID
+// USING NULLIF(store_id, '')::uuid casts below fail on a second run once
+// store_id is already UUID, because comparing an already-UUID column against
+// the text literal '' requires casting '' to uuid, which is never valid --
+// so each is now skipped once the column is confirmed already UUID. The
+// ADD CONSTRAINT statements are wrapped in the same DO $$ ... EXCEPTION WHEN
+// duplicate_object pattern migrateV28 already uses for its ENUM type, for
+// the same reason (re-adding a same-named constraint always errors).
+async function columnIsUuid(client, table, column) {
+  const result = await client.query(
+    `SELECT data_type FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  return result.rows[0]?.data_type === 'uuid';
+}
+
 async function migrateV30(client) {
   await client.query('BEGIN');
   try {
-    await client.query(`ALTER TABLE orders ADD CONSTRAINT orders_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE orders ADD CONSTRAINT orders_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
     await client.query(`UPDATE orders SET store_id = (SELECT id FROM stores LIMIT 1) WHERE store_id IS NULL`);
 
-    await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id DROP NOT NULL`);
-    await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
-    await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id SET NOT NULL`);
-    await client.query(`ALTER TABLE store_boosts ADD CONSTRAINT store_boosts_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+    if (!(await columnIsUuid(client, 'store_boosts', 'store_id'))) {
+      await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id DROP NOT NULL`);
+      await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
+      await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id SET NOT NULL`);
+    }
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE store_boosts ADD CONSTRAINT store_boosts_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
 
-    await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id DROP NOT NULL`);
-    await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
-    await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id SET NOT NULL`);
-    await client.query(`ALTER TABLE store_promotions ADD CONSTRAINT store_promotions_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+    if (!(await columnIsUuid(client, 'store_promotions', 'store_id'))) {
+      await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id DROP NOT NULL`);
+      await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
+      await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id SET NOT NULL`);
+    }
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE store_promotions ADD CONSTRAINT store_promotions_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
 
-    await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id DROP NOT NULL`);
-    await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
-    await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id SET NOT NULL`);
-    await client.query(`ALTER TABLE brand_size_mappings ADD CONSTRAINT brand_size_mappings_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+    if (!(await columnIsUuid(client, 'brand_size_mappings', 'store_id'))) {
+      await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id DROP NOT NULL`);
+      await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
+      await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id SET NOT NULL`);
+    }
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE brand_size_mappings ADD CONSTRAINT brand_size_mappings_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
 
-    await client.query(`ALTER TABLE order_cancellation_store_shares ADD CONSTRAINT order_cancellation_store_shares_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE order_cancellation_store_shares ADD CONSTRAINT order_cancellation_store_shares_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
 
     // Real index for future query performance at scale, per the blueprint's
     // own §7 performance section -- every store-scoped WHERE clause needs
@@ -2035,4 +2094,63 @@ async function migrateV32(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32 };
+// Multi-tenant Stage 2 (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §3.2/§5.3-5.4)
+// — store-scoped authentication. store_users is deliberately a structurally
+// separate table from admins (never a shared query shape between the two
+// trust domains, per §2's reasoning), gated by the six real roles §5.3
+// defines. store_actions mirrors admin_actions exactly but adds its own
+// store_id column, since (unlike a platform-wide admin) a store action's
+// tenant scope must be provable from the log itself later, independent of
+// the actor (§5.4). No refresh-token table -- Stage 2 mirrors the internal
+// Admin Panel's own real auth pattern (one access token, jti-based
+// revocation via the existing shared revoked_tokens table on logout), per
+// the founder's explicit direction, not the user/driver refresh-token flow
+// the earlier design draft assumed. No rows are seeded here: there is no
+// staff-creation endpoint yet (that's Stage 3's Owner-managed Settings
+// screen), so a real store_users row can only be created by a deliberate,
+// explicit action once that exists -- not guessed at by this migration.
+async function migrateV33(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id UUID NOT NULL REFERENCES stores(id),
+        name VARCHAR(200) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(20) NOT NULL CHECK (role IN (
+          'owner', 'store_manager', 'inventory_staff', 'sales_staff', 'finance', 'marketing'
+        )),
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_users_store_id ON store_users(store_id)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_actions (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_user_id UUID NOT NULL REFERENCES store_users(id) ON DELETE CASCADE,
+        store_id      UUID NOT NULL REFERENCES stores(id),
+        action_type   VARCHAR(50) NOT NULL,
+        target_table  VARCHAR(50),
+        target_id     UUID,
+        metadata      JSONB,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_actions_store_user_id ON store_actions(store_user_id, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_actions_store_id ON store_actions(store_id, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v33 completed: store_users + store_actions tables created (multi-tenant Stage 2, schema only, zero rows seeded)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v33 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33 };

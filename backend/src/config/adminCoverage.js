@@ -115,5 +115,9 @@ module.exports = {
     feed_post_products:   'Tagged-product metadata on a feed post, no independent moderation need beyond the post itself (feed_posts, Phase 4).',
     payflex_webhook_events: 'Legacy Payflex integration history, preserved only per the CRITICAL-3 FIX that removed Payflex entirely — no new rows are ever written, and there is no admin action possible on dead-integration history.',
     driver_locations:       'Raw location ping history, pruned after 30 days by the existing daily cron — no planned aggregate view. Live online/offline status and current position come from drivers.is_online/current_lat/current_lng directly, not this history table.',
+
+    // ── Multi-tenant Stage 2 — genuinely belong to the separate Store Admin Portal, never this panel ──
+    store_users:   'Multi-tenant Stage 2 (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §1/§3) — partner-store staff accounts. Never a resource in this internal panel, by design, not an oversight: the whole point of this design is that a store account is a fundamentally different trust domain from a Flash-internal admin, with no shared table, query, or UI surface. Managed (Stage 3+) by the separate Store Admin Portal frontend, not adminPanel.js.',
+    store_actions: 'Multi-tenant Stage 2 (§5.4) — the Store Admin Portal\'s own audit log, structurally separate from admin_actions for the same reason as store_users above. Reviewed (Stage 3+) inside the Store Admin Portal itself, never surfaced here.',
   },
 };
