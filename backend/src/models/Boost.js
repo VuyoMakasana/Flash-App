@@ -1,8 +1,6 @@
 const BaseModel = require("./BaseModel");
 const paystackService = require("../services/paystackService");
 
-const FLASH_STORE_ID = "flash_closet";
-
 const BOOST_PLANS = {
   search_top: {
     price: 500,
@@ -101,10 +99,18 @@ class Boost extends BaseModel {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + plan.days);
 
+    // Multi-tenant Stage 1 (migrate.js v30) converted store_boosts.store_id
+    // from a free-text tag to a real UUID FK against the new stores table —
+    // FLASH_STORE_ID's old "flash_closet" string is no longer a valid value
+    // for this column, so the real seeded store row is looked up here instead.
+    const storeResult = await this.query(`SELECT id FROM stores WHERE is_active = true LIMIT 1`);
+    if (!storeResult.rows.length) throw new Error("No active store found");
+    const storeId = storeResult.rows[0].id;
+
     const result = await this.query(
       `INSERT INTO store_boosts (store_id, store_name, boost_type, price_paid, starts_at, expires_at, status, product_id, paystack_reference)
        VALUES ($1,$2,$3,$4,NOW(),$5,'active',$6,$7) RETURNING *`,
-      [FLASH_STORE_ID, "Flash", boostType, plan.price, expiresAt, productId, paystackReference],
+      [storeId, "Flash", boostType, plan.price, expiresAt, productId, paystackReference],
     );
 
     return result.rows[0];
