@@ -1045,6 +1045,17 @@ async function migrate() {
     throw err;
   } finally {
     client33.release();
+  }
+
+  // ── v34 ────────────────────────────────────────────────────────────────────
+  const client34 = await pool.connect();
+  try {
+    await migrateV34(client34);
+  } catch (err) {
+    console.error('Migration v34 failed:', err.message);
+    throw err;
+  } finally {
+    client34.release();
     await pool.end();
   }
 
@@ -2153,4 +2164,62 @@ async function migrateV33(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33 };
+// Multi-tenant Stage 4 (store-scoped Inventory) -- flash_inventory has no
+// store_id at all today, unlike orders (which at least had an unused
+// nullable column before Stage 3 wired it up). The internal Flash Admin
+// Panel's own "Add Product"/"Edit Product" forms (adminPanel.js's
+// db.table('flash_inventory') resource) do a raw INSERT/UPDATE straight
+// against this table via AdminJS's own SQL adapter -- completely bypassing
+// Inventory.addProduct/updateStock/deleteProduct, and with no knowledge of
+// store_id at all. Making the new column NOT NULL with no DB-level default
+// would either surface it as a confusing required field on that form, or
+// silently break "Add Product" the moment AdminJS's INSERT omits it -- so
+// the column gets a real DEFAULT pointing at the one real seeded store
+// (looked up live, not a guessed/hardcoded UUID), and adminPanel.js's own
+// resource config (separately) hides it from the new/edit forms so nobody
+// ever has to think about it there. Every *new* store-portal-created
+// product still gets a real, explicit store_id passed by the new
+// storeInventoryController -- the default only exists for callers (the
+// internal panel, the existing Flash-admin-only /api/inventory REST
+// endpoints) that were never store-aware and must stay working exactly as
+// they are.
+async function migrateV34(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE flash_inventory ADD COLUMN IF NOT EXISTS store_id UUID`);
+
+    const defaultStore = await client.query(`SELECT id FROM stores WHERE is_active = true LIMIT 1`);
+    if (!defaultStore.rows.length) {
+      throw new Error('No active store found to backfill flash_inventory.store_id');
+    }
+    const defaultStoreId = defaultStore.rows[0].id;
+    // Defense in depth: defaultStoreId comes from gen_random_uuid() in the
+    // DB itself, never user input, but this value gets string-interpolated
+    // into a DDL statement below (ALTER COLUMN ... SET DEFAULT does not
+    // accept a bind parameter) -- validate its shape before that happens.
+    if (!/^[0-9a-f-]{36}$/i.test(defaultStoreId)) {
+      throw new Error(`Unexpected non-UUID store id: ${defaultStoreId}`);
+    }
+
+    await client.query(`UPDATE flash_inventory SET store_id = $1 WHERE store_id IS NULL`, [defaultStoreId]);
+    await client.query(`ALTER TABLE flash_inventory ALTER COLUMN store_id SET NOT NULL`);
+    await client.query(`ALTER TABLE flash_inventory ALTER COLUMN store_id SET DEFAULT '${defaultStoreId}'`);
+
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE flash_inventory ADD CONSTRAINT flash_inventory_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_flash_inventory_store_id ON flash_inventory(store_id)`);
+
+    await client.query('COMMIT');
+    console.log(`Flash database migration v34 completed: flash_inventory.store_id added (FK+index), all existing products backfilled to the real seeded store (${defaultStoreId}), real DB-level DEFAULT set for future admin-panel-created products`);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v34 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34 };

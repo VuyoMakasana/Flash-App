@@ -1296,6 +1296,15 @@ function buildResources(db) {
             // stock legitimately needs to see and set it).
             cost_price: { isVisible: { list: false, show: true, edit: true, filter: false } },
             is_active: { isVisible: { edit: false }, availableValues: INVENTORY_ACTIVE_VALUES },
+            // Multi-tenant Stage 4 (migrate.js v34) -- flash_inventory.store_id
+            // now exists, with a real DB-level DEFAULT (the one real seeded
+            // store) so this panel's own new/edit forms keep working exactly
+            // as before with zero AdminJS-side changes. Hidden from those
+            // forms outright (not just relying on the default) so nobody is
+            // ever tempted to hand-edit a raw store UUID here -- store
+            // assignment for a real second store belongs to the Store Admin
+            // Portal, not this panel. Left visible on show, for reference.
+            store_id: { isVisible: { list: false, show: true, edit: false, new: false, filter: false } },
           },
           actions: {
             list: {},
