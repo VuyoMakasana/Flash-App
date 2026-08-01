@@ -9,6 +9,7 @@
 //   to 400 so the user app can surface a meaningful error message.
 
 const Order = require('../models/Order');
+const Store = require('../models/Store');
 const Rating = require('../models/Rating');
 const db = require('../config/database');
 const DriverWallet = require('../models/DriverWallet');
@@ -136,17 +137,14 @@ class OrderController {
         delivery_mode,
         time_slot,
         subtotal,
-        // Not client-supplied, same trust boundary as pickup_lat/pickup_lng
-        // just below -- there is no multi-vendor "stores" concept yet, so a
-        // client-sent store_id has nothing real to validate against. Was
-        // previously passed straight through from req.body with zero
-        // validation; harmless while orders.store_id was free-text VARCHAR
-        // and no real client ever populated it, but store_id is now a real
-        // UUID column (migration v27) -- an arbitrary client string would
-        // 500 the whole order-creation request instead of silently doing
-        // nothing. Explicit null until a real stores table + checkout
-        // store-selection step exists.
-        store_id: null,
+        // Multi-tenant Stage 3 — the real stores table now exists (Stage 1)
+        // and there is exactly one real store, so every new order is
+        // attributed to it. Never client-supplied — same trust boundary as
+        // pickup_lat/pickup_lng just below. Once a genuine second store
+        // exists, this single-store default becomes the place that needs a
+        // real checkout store-selection step (see Store.getDefaultStoreId's
+        // own comment) — not a hunt through this file for a hardcoded value.
+        store_id: await Store.getDefaultStoreId(),
         preferred_driver_id: resolvedPreferredDriverId,
         pickup_mall_id,
         dropoff_mall_id,

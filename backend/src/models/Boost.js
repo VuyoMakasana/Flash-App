@@ -1,5 +1,6 @@
 const BaseModel = require("./BaseModel");
 const paystackService = require("../services/paystackService");
+const Store = require("./Store");
 
 const BOOST_PLANS = {
   search_top: {
@@ -103,9 +104,8 @@ class Boost extends BaseModel {
     // from a free-text tag to a real UUID FK against the new stores table —
     // FLASH_STORE_ID's old "flash_closet" string is no longer a valid value
     // for this column, so the real seeded store row is looked up here instead.
-    const storeResult = await this.query(`SELECT id FROM stores WHERE is_active = true LIMIT 1`);
-    if (!storeResult.rows.length) throw new Error("No active store found");
-    const storeId = storeResult.rows[0].id;
+    const storeId = await Store.getDefaultStoreId();
+    if (!storeId) throw new Error("No active store found");
 
     const result = await this.query(
       `INSERT INTO store_boosts (store_id, store_name, boost_type, price_paid, starts_at, expires_at, status, product_id, paystack_reference)
