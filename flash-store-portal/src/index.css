@@ -1,0 +1,69 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f5f6f8;
+  color: #1a1a1a;
+}
+
+.login-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+.login-card {
+  background: #fff;
+  padding: 32px;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.login-card h1 { font-size: 20px; margin: 0 0 8px; }
+.login-card label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #555; }
+.login-card input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+.login-card button {
+  background: #111; color: #fff; border: none; padding: 10px; border-radius: 4px;
+  font-size: 14px; cursor: pointer; margin-top: 8px;
+}
+.login-card button:disabled { opacity: 0.6; cursor: not-allowed; }
+.form-error { color: #c0392b; font-size: 13px; margin: 0; }
+
+.orders-page { max-width: 900px; margin: 0 auto; padding: 24px; }
+.portal-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;
+}
+.portal-header-right { display: flex; align-items: center; gap: 12px; font-size: 13px; }
+.portal-header-right button { padding: 6px 12px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; }
+
+.new-orders-section { background: #fff8f0; border: 1px solid #f0c36d; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+.new-orders-section h2 { margin-top: 0; color: #b8860b; }
+
+.order-row {
+  display: flex; align-items: center; gap: 12px;
+  background: #fff; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+.order-row-main { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.order-row-actions { display: flex; gap: 8px; }
+
+.status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.status-dot.status-urgent, .status-label.status-urgent { color: #d35400; }
+.status-dot.status-urgent { background: #e67e22; }
+.status-dot.status-active { background: #2980b9; }
+.status-label.status-active { color: #2980b9; }
+.status-dot.status-done { background: #27ae60; }
+.status-label.status-done { color: #27ae60; }
+.status-dot.status-cancelled { background: #c0392b; }
+.status-label.status-cancelled { color: #c0392b; }
+.status-dot.status-neutral { background: #95a5a6; }
+.status-label.status-neutral { color: #7f8c8d; }
+.status-label { font-size: 12px; font-weight: 600; }
+
+.btn-accept { background: #27ae60; color: #fff; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
+.btn-reject { background: #c0392b; color: #fff; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
+.btn-mark-ready { background: #2980b9; color: #fff; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
+button:disabled { opacity: 0.6; cursor: not-allowed; }
