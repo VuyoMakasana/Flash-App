@@ -130,12 +130,24 @@ applies to this Expo Go path.
    *published* update, so prefixing a `u.expo.dev/update/...` path with it produces
    undefined behavior, not a real app bug. If you're ever unsure which
    scheme a shared link uses, check the start of the string before
-   pasting it into "Enter URL manually".
+   pasting it into "Enter URL manually". **Later the same day, `exp://`
+   prefixed onto a *user-app* `u.expo.dev/update/...` link was separately
+   reported as working** — inconsistent with the driver-app result just
+   above for the same URL shape. Not reconciled; recorded honestly as two
+   separate, real, contradictory-looking observations rather than
+   silently picked one to believe. Always use `https://` regardless.
 
-   - **Flash Driver, iOS**: `https://u.expo.dev/update/019fb891-1b82-777b-82d9-6856be492ae0` — **confirmed working on real hardware, by the project owner directly** (open → login → go online, no blank screen, no crash)
-   - **Flash Driver, Android**: `https://u.expo.dev/update/019fb89a-a1d8-7d67-8470-e0ff0259717f` — confirmed correct only at the server/build level (manifest resolves, bundle builds clean); **never opened on a real Android device** — the project owner doesn't own one, a standing gap, not a failure
-   - **Flash (user app), iOS**: `https://u.expo.dev/update/019fb8b0-a22b-79ab-9fb8-00c0f4eafa4b` — **confirmed working on real hardware, by the project owner directly**
-   - **Flash (user app), Android**: `https://u.expo.dev/update/019fb8a5-2807-75cd-855d-751fa7675e06` — same as driver Android: server-confirmed only, never device-tested
+   - **Flash Driver, iOS**: `https://u.expo.dev/update/019fbac8-d09f-7b92-aaa7-3f918ffe0e10` — server/build-confirmed only (manifest resolves, bundle builds clean, and a fresh local export of this exact commit confirmed the `jsEngine: 'jsc'` override genuinely produces a plain-JS bundle, not Hermes). **Not currently confirmed working on a real device as of 2026-08-01** — see the standing gap note immediately below, which is the honest current state, not this bullet's older claim.
+   - **Flash Driver, Android**: `https://u.expo.dev/update/019fbacb-8011-7e23-93db-58e25e3a4731` — confirmed correct only at the server/build level; **never opened on a real Android device** — the project owner doesn't own one, a standing gap, not a failure
+   - **Flash (user app), iOS**: `https://u.expo.dev/update/019fbace-d65f-7f2f-8704-667e89554c1f` — **confirmed working on real hardware (iPhone 11), by the project owner directly**. A real, durable published update — will keep working after any local machine is off.
+   - **Flash (user app), Android**: `https://u.expo.dev/update/019fbad1-fb26-74cf-adea-8797d3b71031` — same as driver Android: server-confirmed only, never device-tested
+
+   **STANDING GAP, honest as of 2026-08-01 — do not claim otherwise until this is genuinely re-confirmed:** the driver app's *published* iOS update is not currently confirmed working on a real device. What **is** confirmed working, repeatedly, cold-started, on the project owner's real iPhone 11, is the **live diagnostic tunnel** — a structurally different thing from a published update:
+
+   - Tunnel link (driver app only, right now): `exp://saddling-manicure-move.ngrok-free.dev`
+   - This is **not durable** — it only works while a developer is actively running `npm run tunnel` in `flash-driver-app` on a live machine. It stops working the instant that process ends. It cannot be handed to an independent tester the way a published update can.
+   - The real driver-app code fixes (both `startBackgroundLocation()` and the `DriverContext.js` hydration guard, `d7d8a25`) are genuinely in this exact commit and were verified live through this tunnel, twice, cold-started each time — that part is solid. What remains unresolved is specifically *why the identical code behaves differently once exported and published* rather than served live by Metro. A real export of the published commit confirmed the bundle is plain JS (not Hermes) and contains no `__DEV__`-conditional code — both leading hypotheses were checked and ruled out. The actual cause of the published-build-specific failure is still open. If it recurs, get real error text via Expo Go's dev-menu shake before attempting another fix — that evidence has not yet been captured for the published build specifically.
+   - **Do not treat the tunnel link as equivalent to the published link, and do not report the driver-app iOS issue as solved** — only the tunnel workaround is proven; the underlying published-build issue is not.
 
    **True as of 2026-07-31, commit `d4c7f4d7a91b8c15eaefd20dfdf7514aff7d0a3b`
    on `expo-go-testing`.** This publish fixed a real, two-part driver-app
