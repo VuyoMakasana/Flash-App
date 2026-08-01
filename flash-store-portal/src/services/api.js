@@ -31,6 +31,12 @@ export const storeApi = {
   acceptOrder: (orderId) => request(`/api/store-orders/${orderId}/accept`, { method: 'POST' }),
   rejectOrder: (orderId) => request(`/api/store-orders/${orderId}/reject`, { method: 'POST' }),
   markReady: (orderId) => request(`/api/store-orders/${orderId}/mark-ready`, { method: 'POST' }),
+  getProducts: () => request('/api/store-inventory'),
+  getProduct: (productId) => request(`/api/store-inventory/${productId}`),
+  addProduct: (data) => request('/api/store-inventory', { method: 'POST', body: JSON.stringify(data) }),
+  updateStock: (productId, stockBySize) =>
+    request(`/api/store-inventory/${productId}/stock`, { method: 'PATCH', body: JSON.stringify({ stock_by_size: stockBySize }) }),
+  deactivateProduct: (productId) => request(`/api/store-inventory/${productId}/deactivate`, { method: 'PATCH' }),
 };
 
 export { getToken };

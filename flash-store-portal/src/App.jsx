@@ -3,6 +3,7 @@ import { StoreAuthProvider } from './context/StoreAuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
 import OrdersPage from './pages/OrdersPage';
+import InventoryPage from './pages/InventoryPage';
 
 export default function App() {
   return (
@@ -15,6 +16,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <OrdersPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/inventory"
+            element={
+              <ProtectedRoute>
+                <InventoryPage />
               </ProtectedRoute>
             }
           />

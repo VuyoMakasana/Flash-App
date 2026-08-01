@@ -1,10 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { storeApi } from '../services/api';
-import { useStoreAuth } from '../context/StoreAuthContext';
 import { statusInfo } from '../utils/orderStatus';
+import PortalLayout from '../components/PortalLayout';
 
 export default function OrdersPage() {
-  const { storeUser, logout } = useStoreAuth();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -55,15 +54,8 @@ export default function OrdersPage() {
   const otherOrders = orders.filter((o) => o.status !== 'pending_store_acceptance');
 
   return (
-    <div className="orders-page">
-      <header className="portal-header">
-        <h1>Orders</h1>
-        <div className="portal-header-right">
-          <span>{storeUser?.name} ({storeUser?.role})</span>
-          <button onClick={logout}>Sign out</button>
-        </div>
-      </header>
-
+    <PortalLayout>
+      <h1>Orders</h1>
       {error && <p className="form-error">{error}</p>}
       {loading ? (
         <p>Loading…</p>
@@ -127,7 +119,7 @@ export default function OrdersPage() {
           </section>
         </>
       )}
-    </div>
+    </PortalLayout>
   );
 }
 
