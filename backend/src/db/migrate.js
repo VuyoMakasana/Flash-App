@@ -990,6 +990,50 @@ async function migrate() {
     throw err;
   } finally {
     client28.release();
+  }
+
+  // ── v29 ────────────────────────────────────────────────────────────────────
+  const client29 = await pool.connect();
+  try {
+    await migrateV29(client29);
+  } catch (err) {
+    console.error('Migration v29 failed:', err.message);
+    throw err;
+  } finally {
+    client29.release();
+  }
+
+  // ── v30 ────────────────────────────────────────────────────────────────────
+  const client30 = await pool.connect();
+  try {
+    await migrateV30(client30);
+  } catch (err) {
+    console.error('Migration v30 failed:', err.message);
+    throw err;
+  } finally {
+    client30.release();
+  }
+
+  // ── v31 ────────────────────────────────────────────────────────────────────
+  const client31 = await pool.connect();
+  try {
+    await migrateV31(client31);
+  } catch (err) {
+    console.error('Migration v31 failed:', err.message);
+    throw err;
+  } finally {
+    client31.release();
+  }
+
+  // ── v32 ────────────────────────────────────────────────────────────────────
+  const client32 = await pool.connect();
+  try {
+    await migrateV32(client32);
+  } catch (err) {
+    console.error('Migration v32 failed:', err.message);
+    throw err;
+  } finally {
+    client32.release();
     await pool.end();
   }
 
@@ -1724,4 +1768,271 @@ async function migrateV28(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28 };
+// ── Multi-tenant foundation, Stage 1 (schema only) ──────────────────────────
+// docs/audits/MULTI_TENANT_ARCHITECTURE_BLUEPRINT.md §2/§3 step 1: the real
+// `stores` table, seeded with exactly one row for Flash's own current,
+// single real store. Columns match the blueprint's exact spec (id, name,
+// address, lat, lng, service_area_bounds, is_active, created_at) plus
+// updated_at (matching every other table in this schema) and three real
+// ownership-contact fields (owner_name/owner_email/owner_phone) -- not in
+// the blueprint's own minimal column list, added here as a reasoned,
+// explicitly-flagged extension: "independent from Flash's own identity"
+// (this stage's own instruction) needs *some* way to identify who the
+// store's real owner/contact is, distinct from Flash's own admin account,
+// without reaching into banking/settlement details yet (deliberately
+// deferred -- that's PCI-adjacent, sensitive data deserving its own later,
+// careful design, same reasoning payment_methods already gets).
+async function migrateV29(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS stores (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name VARCHAR(200) NOT NULL,
+        address TEXT,
+        lat DOUBLE PRECISION,
+        lng DOUBLE PRECISION,
+        service_area_bounds JSONB,
+        owner_name VARCHAR(200),
+        owner_email VARCHAR(255),
+        owner_phone VARCHAR(20),
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    // Seed exactly one row, for Flash's own real store -- real coordinates
+    // and address from geoBoundary.js's FLASH_STORE_LOCATION (12B Mkele
+    // Street, Kwazakhele, 6205), real service-area bounds from the same
+    // file's NMB_BOUNDS. Only seeded if the table is genuinely empty, so
+    // this migration stays safely re-runnable.
+    const existing = await client.query(`SELECT id FROM stores LIMIT 1`);
+    if (existing.rows.length === 0) {
+      await client.query(
+        `INSERT INTO stores (name, address, lat, lng, service_area_bounds, is_active)
+         VALUES ($1, $2, $3, $4, $5::jsonb, true)`,
+        [
+          'Flash Closet',
+          '12B Mkele Street, Kwazakhele, 6205',
+          -33.8842210,
+          25.5853185,
+          JSON.stringify({ minLat: -34.03, maxLat: -33.76, minLng: 25.55, maxLng: 25.68 }),
+        ],
+      );
+    }
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v29 completed: stores table created, seeded with Flash\'s own real store row');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v29 failed:', err.message);
+    throw err;
+  }
+}
+
+// docs/audits/MULTI_TENANT_ARCHITECTURE_BLUEPRINT.md §3 step 2: the
+// type-consistency fix, now that a real `stores` row exists to point at.
+// orders.store_id is already UUID (migration v27) but has no FK constraint
+// and every real row is NULL -- this stage's own explicit instruction is to
+// backfill every existing order to the one real seeded store, not leave
+// them orphaned, since every one of Flash's real historical orders was in
+// fact fulfilled by this one store. store_boosts/store_promotions/
+// brand_size_mappings.store_id are VARCHAR(100) NOT NULL -- confirmed live
+// before writing this that all three tables are genuinely empty (zero rows
+// each), so the type conversion has no real data to backfill; kept NOT
+// NULL through the conversion to preserve their existing constraint.
+// order_cancellation_store_shares.store_id is already UUID and nullable
+// (confirmed empty too) -- just needs the FK constraint added.
+async function migrateV30(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD CONSTRAINT orders_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+    await client.query(`UPDATE orders SET store_id = (SELECT id FROM stores LIMIT 1) WHERE store_id IS NULL`);
+
+    await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id DROP NOT NULL`);
+    await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
+    await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id SET NOT NULL`);
+    await client.query(`ALTER TABLE store_boosts ADD CONSTRAINT store_boosts_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+
+    await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id DROP NOT NULL`);
+    await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
+    await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id SET NOT NULL`);
+    await client.query(`ALTER TABLE store_promotions ADD CONSTRAINT store_promotions_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+
+    await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id DROP NOT NULL`);
+    await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
+    await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id SET NOT NULL`);
+    await client.query(`ALTER TABLE brand_size_mappings ADD CONSTRAINT brand_size_mappings_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+
+    await client.query(`ALTER TABLE order_cancellation_store_shares ADD CONSTRAINT order_cancellation_store_shares_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id)`);
+
+    // Real index for future query performance at scale, per the blueprint's
+    // own §7 performance section -- every store-scoped WHERE clause needs
+    // one, not an afterthought added when a slow query is first noticed.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_store_id ON orders(store_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v30 completed: store_id FK constraints added across orders/store_boosts/store_promotions/brand_size_mappings/order_cancellation_store_shares, orders backfilled to the real seeded store');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v30 failed:', err.message);
+    throw err;
+  }
+}
+
+// docs/audits/FINANCIAL_DOMAIN_SPECIFICATION.md §2.2: the real
+// commission_rates table, with the founder's explicit three-tier
+// precedence (promotional > store-specific > global default) enforced by
+// real constraints, not left as an application-layer-only convention.
+// Schema only, per this stage's own explicit instruction -- not wired into
+// any actual pricing/order calculation yet.
+async function migrateV31(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS commission_rates (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        scope_type VARCHAR(20) NOT NULL CHECK (scope_type IN ('global', 'store', 'promotional')),
+        store_id UUID REFERENCES stores(id),
+        rate DECIMAL(5,4) NOT NULL CHECK (rate >= 0 AND rate <= 1),
+        starts_at TIMESTAMPTZ,
+        ends_at TIMESTAMPTZ,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_by UUID REFERENCES admins(id),
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        -- A global rate has no store; a store/promotional rate always has one --
+        -- real, enforced, not just documented convention.
+        CONSTRAINT commission_rates_scope_store_check CHECK (
+          (scope_type = 'global' AND store_id IS NULL) OR
+          (scope_type IN ('store', 'promotional') AND store_id IS NOT NULL)
+        ),
+        -- A promotional rate's entire reason for existing is a bounded active
+        -- window -- both bounds are required, and the window must be real.
+        CONSTRAINT commission_rates_promotional_window_check CHECK (
+          scope_type != 'promotional' OR (starts_at IS NOT NULL AND ends_at IS NOT NULL AND ends_at > starts_at)
+        )
+      )
+    `);
+
+    // "Exactly one active global row at all times" (§2.2) -- a partial
+    // unique index enforces "at most one" at the database layer (the
+    // stronger half of the invariant); the application layer is still
+    // responsible for never deactivating the last active global row
+    // without inserting its replacement first, same as this migration's
+    // own seed-before-anything-else ordering guarantees on day one.
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_commission_rates_one_active_global
+      ON commission_rates (scope_type)
+      WHERE scope_type = 'global' AND is_active = true
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_commission_rates_store_id ON commission_rates(store_id) WHERE store_id IS NOT NULL`);
+
+    // Seed the real 10% launch default, as a data row -- never a code
+    // constant. Only seeded if no active global row exists yet, so this
+    // migration stays safely re-runnable without violating the one-active-
+    // global-row unique index above.
+    const existingGlobal = await client.query(
+      `SELECT id FROM commission_rates WHERE scope_type = 'global' AND is_active = true LIMIT 1`,
+    );
+    if (existingGlobal.rows.length === 0) {
+      await client.query(
+        `INSERT INTO commission_rates (scope_type, store_id, rate, is_active, reason)
+         VALUES ('global', NULL, 0.10, true, 'Launch commission rate (founder-confirmed, temporary) -- seeded by migration v31')`,
+      );
+    }
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v31 completed: commission_rates table created with real precedence constraints, seeded with the 10% global launch rate');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v31 failed:', err.message);
+    throw err;
+  }
+}
+
+// docs/audits/FINANCIAL_DOMAIN_SPECIFICATION.md §3.1/§3.3: the real
+// settlement_config (configurable cycle, same global-default/store-override
+// shape as commission_rates) and the store_settlements/
+// store_settlement_line_items lifecycle tables. Schema only -- no actual
+// settlement calculation or Paystack transfer logic yet, per this stage's
+// own explicit instruction; no rows are seeded into the settlement/
+// line-item tables since no order has ever had a real store_commission
+// computed yet (that wiring is a later stage).
+async function migrateV32(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS settlement_config (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        scope_type VARCHAR(20) NOT NULL CHECK (scope_type IN ('global', 'store')),
+        store_id UUID REFERENCES stores(id),
+        cycle_days INTEGER NOT NULL CHECK (cycle_days > 0),
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT settlement_config_scope_store_check CHECK (
+          (scope_type = 'global' AND store_id IS NULL) OR
+          (scope_type = 'store' AND store_id IS NOT NULL)
+        )
+      )
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_config_one_active_global
+      ON settlement_config (scope_type)
+      WHERE scope_type = 'global' AND is_active = true
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_settlement_config_store_id ON settlement_config(store_id) WHERE store_id IS NOT NULL`);
+
+    const existingGlobalCycle = await client.query(
+      `SELECT id FROM settlement_config WHERE scope_type = 'global' AND is_active = true LIMIT 1`,
+    );
+    if (existingGlobalCycle.rows.length === 0) {
+      await client.query(
+        `INSERT INTO settlement_config (scope_type, store_id, cycle_days, is_active)
+         VALUES ('global', NULL, 7, true)`,
+      );
+    }
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_settlements (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id UUID NOT NULL REFERENCES stores(id),
+        status VARCHAR(20) NOT NULL CHECK (status IN ('accruing', 'under_review', 'finalized', 'paid', 'adjusted')),
+        cycle_start TIMESTAMPTZ NOT NULL,
+        cycle_end TIMESTAMPTZ NOT NULL,
+        total_amount DECIMAL(12,2),
+        paid_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT store_settlements_cycle_check CHECK (cycle_end > cycle_start)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_settlements_store_id ON store_settlements(store_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_settlements_status ON store_settlements(status)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_settlement_line_items (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_settlement_id UUID NOT NULL REFERENCES store_settlements(id) ON DELETE CASCADE,
+        order_id UUID NOT NULL REFERENCES orders(id),
+        item_value DECIMAL(10,2) NOT NULL,
+        store_commission DECIMAL(10,2) NOT NULL,
+        store_earnings DECIMAL(10,2) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT store_settlement_line_items_earnings_check CHECK (store_earnings = item_value - store_commission)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_settlement_line_items_settlement_id ON store_settlement_line_items(store_settlement_id)`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_store_settlement_line_items_order_id ON store_settlement_line_items(order_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v32 completed: settlement_config (7-day global default), store_settlements, store_settlement_line_items created');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v32 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32 };
