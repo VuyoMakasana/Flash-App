@@ -116,43 +116,57 @@ applies to this Expo Go path.
 2. Look for "Enter URL manually" (usually under a "..." or "+" option on the
    home screen) — this is the reliable way in, guaranteed to work regardless
    of how your phone handles the link below.
-3. Paste one of these links (these are the real manifest links Expo Go reads
-   directly — confirmed publicly reachable at the network level; actually
-   opening them in Expo Go additionally requires the Viewer access above):
+3. Paste one of these links **exactly as written, `https://` and nothing
+   else** (these are the real manifest links Expo Go reads directly —
+   confirmed publicly reachable at the network level; actually opening
+   them in Expo Go additionally requires the Viewer access above):
 
-   - **Flash (user app), Android**: `https://u.expo.dev/update/019fa949-59e1-70b3-a3d0-fcac1a49fae2`
-   - **Flash (user app), iOS**: `https://u.expo.dev/update/019fa950-f8e1-7e77-8cbb-22749c5d3a75`
-   - **Flash Driver, Android**: `https://u.expo.dev/update/019fa953-e1ff-7b8a-b19c-601f79eaa1fc`
-   - **Flash Driver, iOS**: `https://u.expo.dev/update/019fa959-f760-7fa3-9ca8-667a375aad68`
+   **Always use `https://u.expo.dev/update/<id>` for a published update —
+   never `exp://u.expo.dev/update/<id>`.** Confirmed live (2026-08-01):
+   the exact same update ID opened correctly as `https://...` and
+   blank-screened as `exp://...`. `exp://` is the scheme Expo Go uses for
+   a direct dev-server/tunnel connection (a developer-only tool, not part
+   of this guide's own testing links) — it is not a valid way to reach a
+   *published* update, so prefixing a `u.expo.dev/update/...` path with it produces
+   undefined behavior, not a real app bug. If you're ever unsure which
+   scheme a shared link uses, check the start of the string before
+   pasting it into "Enter URL manually".
 
-   (Updated 2026-07-28 — synced `main`'s full critical-flow/edge-case
-   production audit into `expo-go-testing` and republished from commit
-   `f3caa218` (8 real fixes: stuck-delivery detection, driver-connection-
-   lost detection, the driver_arrived_store cancellation fix + real
-   cancellation-confirmation UI, checkout driver-availability warning,
-   admin payments/refunds resources, Trusted Driver scorecard, plus the
-   payout-recredit and logout/rate-limiter fixes), plus everything already
-   ahead of the last sync (cash-OTP fetch-on-demand, trusted-driver push
-   notifications, driver pickup/dropoff photos). All four links verified
-   for real, not just HTTP 200: fetched each manifest with the actual
-   headers Expo Go sends (`Accept: multipart/mixed`, `expo-platform`,
-   `expo-protocol-version: 1`) and confirmed the response's
-   `expo-update-id` header exactly matches the ID just published, with
-   `expo-manifest-filters: branchname="expo-go-testing"` confirming
-   correct branch scoping — not a login wall, not a stale cached page.
-   Additionally confirmed, by inspecting the actual exported bundle
-   locally before upload: the driver app's iOS bundle is plain
-   JavaScript (`entry-<hash>.js`, starting with the real Metro bundle
-   preamble `var __BUNDLE_START_TIME__=...`), not Hermes bytecode — the
-   `jsEngine: 'jsc'` diagnostic in `app.config.js` genuinely is taking
-   effect (confirmed by contrast: the user app's iOS bundle, which has no
-   such override, exports as `AppEntry-<hash>.hbc`, real Hermes bytecode,
-   as expected). This confirms the *mechanism* of the diagnostic is
-   working as designed — whether it actually resolves the on-device
-   blank-screen symptom still requires a real iPhone test, which remains
-   unconfirmed. If a link above ever 404s or hangs, it means a newer
-   publish superseded it; check with the project owner for the current
-   one rather than assuming it's broken.)
+   - **Flash Driver, iOS**: `https://u.expo.dev/update/019fb891-1b82-777b-82d9-6856be492ae0` — **confirmed working on real hardware, by the project owner directly** (open → login → go online, no blank screen, no crash)
+   - **Flash Driver, Android**: `https://u.expo.dev/update/019fb89a-a1d8-7d67-8470-e0ff0259717f` — confirmed correct only at the server/build level (manifest resolves, bundle builds clean); **never opened on a real Android device** — the project owner doesn't own one, a standing gap, not a failure
+   - **Flash (user app), iOS**: `https://u.expo.dev/update/019fb8b0-a22b-79ab-9fb8-00c0f4eafa4b` — **confirmed working on real hardware, by the project owner directly**
+   - **Flash (user app), Android**: `https://u.expo.dev/update/019fb8a5-2807-75cd-855d-751fa7675e06` — same as driver Android: server-confirmed only, never device-tested
+
+   **True as of 2026-07-31, commit `d4c7f4d7a91b8c15eaefd20dfdf7514aff7d0a3b`
+   on `expo-go-testing`.** This publish fixed a real, two-part driver-app
+   bug: (1) `startBackgroundLocation()` crashed Expo Go outright on tapping
+   "Go Online" (fixed the day before, commit `2dbbcee`, but that fix had
+   only ever landed on `expo-go-testing`, never merged into `main`); (2) a
+   second, previously-unguarded call — `DriverContext.js`'s hydration
+   effect calling `Location.hasStartedLocationUpdatesAsync()` on every cold
+   start whenever a driver session was already persisted — was the real
+   cause of the driver app blank-screening on open (not (1), and not the
+   `jsEngine: 'jsc'` Hermes-vs-JSC question raised in earlier updates to
+   this file, which was independently confirmed still correctly in effect
+   and was never the actual cause here). Both call sites now share one
+   `isExpoGoRuntime()` guard (`tasks/backgroundLocationTask.js`) so they
+   can't drift out of sync again. All four links verified for real:
+   fetched each manifest with the real headers Expo Go sends and confirmed
+   `expo-update-id` matches exactly, with `expo-manifest-filters:
+   branchname="expo-go-testing"` confirming correct branch scoping.
+
+   **If these ever go stale** (a link 404s, or you need a newer fix
+   published): sync `main` into `expo-go-testing`
+   (`git checkout expo-go-testing && git merge main`), then republish
+   per-platform from each app's own directory
+   (`npx eas-cli update --branch expo-go-testing --platform <ios|android>
+   --message "..."`) — never `--platform all`, the user app's web export
+   fails on `react-native-maps`. Verify with a real manifest fetch
+   afterward (`curl` with `expo-platform`/`expo-runtime-version`/`accept:
+   multipart/mixed` headers against `https://u.expo.dev/update/<id>`,
+   confirm the `expo-update-id` response header matches) — never trust a
+   plain HTTP 200 alone, and never mark a platform "confirmed" without an
+   actual person opening it on that real device.
 
 You don't need Expo Go at any particular version — install whatever the App
 Store/Play Store currently gives you. Its current public release is SDK 54,

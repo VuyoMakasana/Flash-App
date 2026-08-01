@@ -1,4 +1,6 @@
+const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const db = require("../config/database");
 const { saveUserPushToken } = require("../services/notificationService");
 
 class UserController {
@@ -88,6 +90,30 @@ class UserController {
   static async deleteAccount(req, res) {
     try {
       await User.deleteAccount(req.userId);
+
+      // CRITICAL FIX: deleteAccount only revoked the refresh token
+      // (User.deleteAccount's own UPDATE refresh_tokens) -- the current
+      // access token stayed cryptographically valid for up to its
+      // remaining 15-minute lifetime, confirmed live: GET /api/users/me
+      // still returned 200 immediately after "deletion". Same real,
+      // proven jti + revoked_tokens mechanism already used by
+      // AuthController.logout()/AdminController.logout() -- revokes the
+      // exact token that made this request, immediately.
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith("Bearer ")) {
+        try {
+          const token = authHeader.replace("Bearer ", "");
+          const decoded = jwt.decode(token);
+          if (decoded?.jti) {
+            const expiresAt = new Date(decoded.exp * 1000);
+            await db.query(
+              `INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+              [decoded.jti, expiresAt],
+            );
+          }
+        } catch (_) {}
+      }
+
       res.json({ success: true });
     } catch (err) {
       if (err.message === "ACTIVE_ORDER") {

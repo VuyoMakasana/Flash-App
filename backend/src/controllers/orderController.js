@@ -24,9 +24,19 @@ const s3Service = require('../services/s3Service');
 const { isWithinNelsonMandelaBay, OUTSIDE_SERVICE_AREA_MESSAGE, FLASH_STORE_LOCATION } = require('../utils/geoBoundary');
 
 // Errors thrown by validateExternalItemPrice() and inventory stock checks
-// start with one of these prefixes. Treat them as client errors (400) rather
+// contain one of these fragments. Treat them as client errors (400) rather
 // than server errors (500).
-const CLIENT_ERROR_PREFIXES = [
+//
+// BUG FIX: the out-of-stock message is `${itemName} size ${size} is out of
+// stock` (Order.js) — the item name comes BEFORE "is out of stock", so this
+// message never actually starts with it. With .startsWith(), every real
+// out-of-stock order create returned a generic 500 instead of a clean 400,
+// confirmed live. The other four entries are either true prefixes or exact
+// messages with no dynamic content before them, so switching the whole
+// check to .includes() fixes this one case without changing behavior for
+// the rest (a substring match and a startsWith match are identical for a
+// string with nothing dynamic in front of it).
+const CLIENT_ERROR_FRAGMENTS = [
   'Invalid price for',
   'Invalid quantity for',
   'is out of stock',
@@ -36,7 +46,7 @@ const CLIENT_ERROR_PREFIXES = [
 
 function isClientError(message) {
   if (!message) return false;
-  return CLIENT_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix));
+  return CLIENT_ERROR_FRAGMENTS.some((fragment) => message.includes(fragment));
 }
 
 // Pre-pickup, post-assignment cancellation split — confirmed with the
