@@ -37,6 +37,9 @@ export const storeApi = {
   updateStock: (productId, stockBySize) =>
     request(`/api/store-inventory/${productId}/stock`, { method: 'PATCH', body: JSON.stringify({ stock_by_size: stockBySize }) }),
   deactivateProduct: (productId) => request(`/api/store-inventory/${productId}/deactivate`, { method: 'PATCH' }),
+  getStaff: () => request('/api/store-staff'),
+  createStaff: (data) => request('/api/store-staff', { method: 'POST', body: JSON.stringify(data) }),
+  deactivateStaff: (staffId) => request(`/api/store-staff/${staffId}/deactivate`, { method: 'PATCH' }),
 };
 
 export { getToken };

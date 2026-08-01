@@ -15,6 +15,7 @@ export default function PortalLayout({ children }) {
         <nav className="portal-nav">
           <NavLink to="/orders" className={navClass}>Orders</NavLink>
           <NavLink to="/inventory" className={navClass}>Inventory</NavLink>
+          <NavLink to="/settings" className={navClass}>Settings</NavLink>
         </nav>
         <div className="portal-header-right">
           <span>{storeUser?.name} ({storeUser?.role})</span>

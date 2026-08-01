@@ -4,6 +4,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
 import OrdersPage from './pages/OrdersPage';
 import InventoryPage from './pages/InventoryPage';
+import SettingsPage from './pages/SettingsPage';
 
 export default function App() {
   return (
@@ -24,6 +25,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <InventoryPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <ProtectedRoute>
+                <SettingsPage />
               </ProtectedRoute>
             }
           />
