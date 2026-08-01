@@ -134,4 +134,88 @@ const requireApprovedDriver = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { authenticate, requireRole, requireApprovedDriver };
+// ─── AUTHENTICATE STORE (multi-tenant Stage 2) ──────────────────────────────
+// A wholly separate function from authenticate() above, not a third branch
+// added to it — verifies only against STORE_JWT_SECRET, with no fallback to
+// JWT_SECRET or ADMIN_JWT_SECRET in either direction (docs/audits/
+// FLASH_STORE_ADMIN_DESIGN.md §3.2). Because this never shares a verification
+// attempt with the other two secrets, there's no "which secret actually
+// proved this token" ambiguity to cross-check the way authenticate() must
+// for admin tokens (see the comment above it) — a token that verifies here
+// was, by construction, minted by this backend's own store-login endpoint.
+const authenticateStore = async (req, res, next) => {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer "))
+    return res.status(401).json({ error: "No token provided" });
+
+  const token = header.replace("Bearer ", "");
+
+  let decoded;
+  try {
+    const storeJwtSecret = getRequired("STORE_JWT_SECRET", "store-auth");
+    decoded = jwt.verify(token, storeJwtSecret);
+  } catch (err) {
+    if (err.name === "TokenExpiredError")
+      return res.status(401).json({ error: "TOKEN_EXPIRED" });
+    return res.status(401).json({ error: "Invalid token" });
+  }
+
+  try {
+    const [revokedResult, storeUserResult] = await Promise.all([
+      decoded.jti
+        ? pool.query("SELECT 1 FROM revoked_tokens WHERE jti = $1", [decoded.jti])
+        : Promise.resolve({ rows: [] }),
+      pool.query("SELECT is_active FROM store_users WHERE id = $1", [decoded.id]),
+    ]);
+    if (revokedResult.rows.length)
+      return res.status(401).json({ error: "Token revoked" });
+    // Live is_active check, not just trusting the token's own claims — a
+    // deactivated store account (§2 of DOMAIN_OWNERSHIP_AUTHORITY_SPECIFICATION.md,
+    // Flash's own incident-response override) must be rejected immediately,
+    // not just once its token naturally expires.
+    if (!storeUserResult.rows.length || !storeUserResult.rows[0].is_active)
+      return res.status(401).json({ error: "Account deactivated" });
+  } catch (err) {
+    return next(err);
+  }
+
+  req.storeUserId = decoded.id;
+  req.storeId = decoded.storeId;
+  req.storeRole = decoded.role;
+  next();
+};
+
+// ─── STORE ROLE GUARD ────────────────────────────────────────────────────────
+const requireStoreRole = (...roles) => (req, res, next) => {
+  if (!req.storeRole) return res.status(401).json({ error: "Not authenticated" });
+  if (!roles.includes(req.storeRole))
+    return res.status(403).json({ error: "Access forbidden. Required role: " + roles.join(" or ") });
+  next();
+};
+
+// ─── TENANT ISOLATION GUARD ──────────────────────────────────────────────────
+// The single most important piece of new middleware for this whole feature
+// (FLASH_STORE_ADMIN_DESIGN.md §3.2/§5.1): rejects any request that names a
+// store_id/storeId in its path, query, or body that doesn't match req.storeId
+// from the verified token. req.storeId itself is never client-suppliable —
+// it was cryptographically bound into the token after this backend verified
+// the store user's password, so this check can never be satisfied by a
+// forged request even if the client knows another store's real UUID.
+const requireOwnStore = (req, res, next) => {
+  if (!req.storeId) return res.status(401).json({ error: "Not authenticated" });
+  const requestedStoreId =
+    req.params?.storeId || req.body?.storeId || req.query?.storeId;
+  if (requestedStoreId && String(requestedStoreId) !== String(req.storeId)) {
+    return res.status(403).json({ error: "Access forbidden: store mismatch" });
+  }
+  next();
+};
+
+module.exports = {
+  authenticate,
+  requireRole,
+  requireApprovedDriver,
+  authenticateStore,
+  requireStoreRole,
+  requireOwnStore,
+};

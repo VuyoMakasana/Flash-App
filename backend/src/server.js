@@ -89,6 +89,7 @@ const inventoryRoutes = require("./routes/inventoryRoutes");
 const messagesRoutes = require("./routes/messageRoutes");
 const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
 const sosRoutes = require("./routes/sosRoutes");
+const storeAuthRoutes = require("./routes/storeAuthRoutes");
 
 function createApp() {
   const app = express();
@@ -186,6 +187,7 @@ function createApp() {
   app.use("/api/payments", paymentRoutes);
   app.use("/api/tracking", trackingRoutes);
   app.use("/api/admin", adminRoutes);
+  app.use("/api/store-auth", storeAuthRoutes);
   app.use("/api/subscriptions", subscriptionRoutes);
   app.use("/api/sizing", sizingRoutes);
   app.use("/api/feed", feedRoutes);

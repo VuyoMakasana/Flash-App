@@ -71,6 +71,22 @@ const adminLimiter = rateLimit({
   ...storeOption,
 });
 
+// Store-account login (multi-tenant Stage 2) — 5 per 15 minutes, mirroring
+// adminLimiter's own brute-force protection for a privileged endpoint. A
+// dedicated instance, not shared with authLimiter/adminLimiter — a
+// credential-stuffing attempt against one store's login shouldn't be able to
+// exhaust the rate-limit budget for a different store's, or the internal
+// admin panel's, legitimate login attempts (FLASH_STORE_ADMIN_DESIGN.md §5.5).
+const storeAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many store login attempts, please try again later.' },
+  skipSuccessfulRequests: false,
+  ...storeOption,
+});
+
 // Create order — 5 per minute
 const orderLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -128,6 +144,7 @@ module.exports = {
   limiter,
   authLimiter,
   adminLimiter,
+  storeAuthLimiter,
   orderLimiter,
   locationLimiter,
   otpLimiter,
