@@ -116,9 +116,21 @@ applies to this Expo Go path.
 2. Look for "Enter URL manually" (usually under a "..." or "+" option on the
    home screen) — this is the reliable way in, guaranteed to work regardless
    of how your phone handles the link below.
-3. Paste one of these links (these are the real manifest links Expo Go reads
-   directly — confirmed publicly reachable at the network level; actually
-   opening them in Expo Go additionally requires the Viewer access above):
+3. Paste one of these links **exactly as written, `https://` and nothing
+   else** (these are the real manifest links Expo Go reads directly —
+   confirmed publicly reachable at the network level; actually opening
+   them in Expo Go additionally requires the Viewer access above):
+
+   **Always use `https://u.expo.dev/update/<id>` for a published update —
+   never `exp://u.expo.dev/update/<id>`.** Confirmed live (2026-08-01):
+   the exact same update ID opened correctly as `https://...` and
+   blank-screened as `exp://...`. `exp://` is the scheme Expo Go uses for
+   a direct dev-server/tunnel connection (a developer-only tool, not part
+   of this guide's own testing links) — it is not a valid way to reach a
+   *published* update, so prefixing a `u.expo.dev/update/...` path with it produces
+   undefined behavior, not a real app bug. If you're ever unsure which
+   scheme a shared link uses, check the start of the string before
+   pasting it into "Enter URL manually".
 
    - **Flash Driver, iOS**: `https://u.expo.dev/update/019fb891-1b82-777b-82d9-6856be492ae0` — **confirmed working on real hardware, by the project owner directly** (open → login → go online, no blank screen, no crash)
    - **Flash Driver, Android**: `https://u.expo.dev/update/019fb89a-a1d8-7d67-8470-e0ff0259717f` — confirmed correct only at the server/build level (manifest resolves, bundle builds clean); **never opened on a real Android device** — the project owner doesn't own one, a standing gap, not a failure
