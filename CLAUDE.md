@@ -115,6 +115,22 @@ Never sacrifice long-term quality for short-term convenience.
 
 ---
 
+# Architecture Decision Framework
+
+Every future significant architectural decision on this project — not just the multi-tenant/Store Admin initiative it originated from — must be run explicitly through these seven questions before being adopted. This is a standing convention, not a one-time exercise.
+
+1. What business problem does this actually solve?
+2. Why is this better than extending the current design?
+3. What trade-offs does it introduce?
+4. How does it behave at two stores?
+5. How does it scale to thousands?
+6. How hard would it be to migrate away from later?
+7. Does it make the system easier or harder for future developers?
+
+Answer these explicitly, in writing, before implementing — not silently in your own reasoning. If a decision is genuinely a business call rather than a technical one, present it to the founder rather than deciding it yourself, the same discipline already applied throughout this engagement (the cancellation split, the premium subscription perk, the boost/promotions fate, the store commission rate).
+
+---
+
 # How You Should Work
 
 Before modifying any code:
