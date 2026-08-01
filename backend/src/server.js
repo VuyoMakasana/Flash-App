@@ -92,6 +92,7 @@ const sosRoutes = require("./routes/sosRoutes");
 const storeAuthRoutes = require("./routes/storeAuthRoutes");
 const storeOrderRoutes = require("./routes/storeOrderRoutes");
 const storeInventoryRoutes = require("./routes/storeInventoryRoutes");
+const storeStaffRoutes = require("./routes/storeStaffRoutes");
 
 function createApp() {
   const app = express();
@@ -192,6 +193,7 @@ function createApp() {
   app.use("/api/store-auth", storeAuthRoutes);
   app.use("/api/store-orders", storeOrderRoutes);
   app.use("/api/store-inventory", storeInventoryRoutes);
+  app.use("/api/store-staff", storeStaffRoutes);
   app.use("/api/subscriptions", subscriptionRoutes);
   app.use("/api/sizing", sizingRoutes);
   app.use("/api/feed", feedRoutes);
