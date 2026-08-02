@@ -1,6 +1,8 @@
 const db = require("../config/database");
 const StoreAction = require("../models/StoreAction");
 const { clearCache } = require("../middleware/cache");
+const s3Service = require("../services/s3Service");
+const { detectRealMimeType } = require("../utils/fileSignature");
 
 // Multi-tenant Stage 4 (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §5.3/§6.2) —
 // the Store Admin Portal's real Inventory screen backend, mirroring
@@ -58,18 +60,49 @@ class StoreInventoryController {
     }
   }
 
+  // sizes/stock_by_size arrive as JSON-encoded strings when this request is
+  // multipart/form-data (the image-upload path, storeInventoryRoutes.js's
+  // uploadProductImage middleware) but as real objects if a caller ever
+  // posts plain JSON instead -- accepting both means addProduct doesn't
+  // silently double-encode or crash depending on which content-type a
+  // given request used.
+  static _parseJsonField(value, fallback) {
+    if (value === undefined || value === null) return fallback;
+    if (typeof value === "string") {
+      try { return JSON.parse(value); } catch (_) { return fallback; }
+    }
+    return value;
+  }
+
   static async addProduct(req, res) {
-    const { product_name, category, brand, price, cost_price, sizes, stock_by_size, image_url, description } = req.body;
+    const { product_name, category, brand, price, cost_price, description } = req.body;
+    const sizes = StoreInventoryController._parseJsonField(req.body.sizes, []);
+    const stock_by_size = StoreInventoryController._parseJsonField(req.body.stock_by_size, {});
     if (!product_name || price === undefined || price === null) {
       return res.status(400).json({ error: "product_name and price are required" });
     }
+
     try {
+      // Image is optional at creation time (multer's .single() leaves
+      // req.file undefined when none was attached) -- real magic-byte
+      // verification, not just multer's client-declared mimetype, same
+      // discipline as driver documents/order photos.
+      let imageUrl = null;
+      if (req.file) {
+        const realType = detectRealMimeType(req.file.buffer);
+        if (!["image/jpeg", "image/png"].includes(realType)) {
+          return res.status(400).json({ error: "File content does not match an allowed image type (JPG or PNG)." });
+        }
+        const uploadResult = await s3Service.uploadPublicFile(req.file, "flash-product-images");
+        imageUrl = uploadResult.url;
+      }
+
       const result = await db.query(
         `INSERT INTO flash_inventory (store_id, product_name, category, brand, price, cost_price, sizes, stock_by_size, image_url, description)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [
           req.storeId, product_name, category || null, brand || null, price, cost_price || null,
-          JSON.stringify(sizes || []), JSON.stringify(stock_by_size || {}), image_url || null, description || null,
+          JSON.stringify(sizes), JSON.stringify(stock_by_size), imageUrl, description || null,
         ],
       );
       const product = result.rows[0];
@@ -83,6 +116,37 @@ class StoreInventoryController {
     } catch (err) {
       console.error("[StoreInventory] addProduct error:", err.message);
       res.status(500).json({ error: "Failed to add product" });
+    }
+  }
+
+  // The separate "update-image" action for an existing product -- the
+  // internal admin panel's own flash_inventory resource still only takes a
+  // plain-text image_url paste; this is the first real upload path for
+  // this column anywhere in the codebase.
+  static async updateImage(req, res) {
+    const { productId } = req.params;
+    if (!req.file) {
+      return res.status(400).json({ error: "An image file is required" });
+    }
+    const realType = detectRealMimeType(req.file.buffer);
+    if (!["image/jpeg", "image/png"].includes(realType)) {
+      return res.status(400).json({ error: "File content does not match an allowed image type (JPG or PNG)." });
+    }
+    try {
+      const uploadResult = await s3Service.uploadPublicFile(req.file, "flash-product-images");
+      const result = await db.query(
+        `UPDATE flash_inventory SET image_url = $1, updated_at = NOW()
+         WHERE id = $2 AND store_id = $3 RETURNING *`,
+        [uploadResult.url, productId, req.storeId],
+      );
+      if (!result.rows.length) return res.status(404).json({ error: "Product not found" });
+
+      await clearCache("cache:*/inventory*");
+      StoreAction.log(req.storeUserId, req.storeId, "product_update_image", "flash_inventory", productId);
+      res.json({ product: result.rows[0] });
+    } catch (err) {
+      console.error("[StoreInventory] updateImage error:", err.message);
+      res.status(500).json({ error: "Failed to update image" });
     }
   }
 

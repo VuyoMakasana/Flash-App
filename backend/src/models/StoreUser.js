@@ -1,4 +1,6 @@
 const BaseModel = require("./BaseModel");
+const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 
 // Multi-tenant Stage 2 (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §3.2) —
 // store-scoped staff accounts. Deliberately its own table, never a join
@@ -50,6 +52,29 @@ class StoreUser extends BaseModel {
        WHERE id = $1 AND store_id = $2
        RETURNING id, store_id, name, email, role, is_active`,
       [id, storeId],
+    );
+    return result.rows[0] || null;
+  }
+
+  // Multi-tenant Stage 6 — real self-account deletion for non-Owner roles.
+  // Anonymize, never hard-delete, same standing rule and the exact real
+  // pattern already proven for users/drivers (User.deleteAccount): a
+  // guaranteed-unique anonymized email (satisfies the real UNIQUE
+  // constraint), a real but permanently unusable password hash (random
+  // bytes, never known to anyone, so the account can never authenticate
+  // again), is_active=false. store_users has no phone/address/push-token-
+  // shaped PII to null out beyond name/email — a smaller surface than
+  // users/drivers, not a shortcut. The row itself stays, so store_actions'
+  // audit trail (store_user_id, no cascade concern) stays intact.
+  static async anonymize(id, storeId) {
+    const anonymizedEmail = `deleted-${id}@flash.invalid`;
+    const passwordHash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
+    const result = await this.query(
+      `UPDATE store_users
+       SET name = 'Deleted Staff', email = $2, password_hash = $3, is_active = false, updated_at = NOW()
+       WHERE id = $1 AND store_id = $4
+       RETURNING id`,
+      [id, anonymizedEmail, passwordHash, storeId],
     );
     return result.rows[0] || null;
   }

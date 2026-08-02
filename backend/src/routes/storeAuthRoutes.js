@@ -12,4 +12,10 @@ router.post('/login', storeAuthLimiter, StoreAuthController.login);
 
 router.post('/logout', authenticateStore, StoreAuthController.logout);
 
+// No requireStoreRole restriction here -- every authenticated role must be
+// able to reach this route (that's the whole point of self-service
+// deletion); the Owner-specific rejection is a business rule the
+// controller itself decides, not a route-level access gate.
+router.delete('/account', authenticateStore, StoreAuthController.deleteAccount);
+
 module.exports = router;

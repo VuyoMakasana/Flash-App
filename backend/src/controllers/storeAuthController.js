@@ -31,6 +31,18 @@ class StoreAuthController {
         return res.status(401).json({ error: "Invalid credentials" });
       }
 
+      // Multi-tenant Stage 6, founder decision — Marketing accounts can be
+      // created (Stage 5's createStaff already allows the role) but don't
+      // get login access yet, since no real screen exists for them.
+      // Checked only after the password is confirmed correct, not before —
+      // rejecting on role alone before credentials are verified would leak
+      // "this email belongs to a marketing account" to anyone who merely
+      // guesses the email, the same anti-enumeration discipline already
+      // applied everywhere else in this codebase.
+      if (storeUser.role === "marketing") {
+        return res.status(403).json({ error: "Marketing access isn't available yet. Contact your store Owner." });
+      }
+
       const storeJwtSecret = getRequired("STORE_JWT_SECRET", "store-auth");
       if (!storeJwtSecret) {
         return res.status(500).json({
@@ -82,6 +94,48 @@ class StoreAuthController {
       } catch (_) {}
     }
     return res.json({ success: true });
+  }
+
+  // Multi-tenant Stage 6, founder decision — any non-Owner role can delete
+  // their own account via real self-service; Owner is deliberately excluded
+  // (closing a store's relationship with Flash is a Flash Admin action, not
+  // a self-service button) -- same spirit as Stage 5's self-lockout guard,
+  // just phrased as an outright rejection instead of a scoping check, since
+  // there's no "own account" ambiguity here to scope against.
+  static async deleteAccount(req, res) {
+    if (req.storeRole === "owner") {
+      return res.status(403).json({
+        error: "Owner accounts can't be deleted through self-service. Contact Flash support to close your store's account.",
+      });
+    }
+
+    try {
+      await StoreUser.anonymize(req.storeUserId, req.storeId);
+
+      // Same real jti + revoked_tokens mechanism as User.deleteAccount/
+      // Driver.deleteAccount's own access-token-revocation fix -- the
+      // current token must die immediately, not just once it naturally
+      // expires up to 8h later.
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith("Bearer ")) {
+        try {
+          const token = authHeader.replace("Bearer ", "");
+          const decoded = jwt.decode(token);
+          if (decoded?.jti) {
+            const expiresAt = new Date(decoded.exp * 1000);
+            await pool.query(
+              `INSERT INTO revoked_tokens (jti, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+              [decoded.jti, expiresAt],
+            );
+          }
+        } catch (_) {}
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("[Store Auth] deleteAccount error:", err.message);
+      res.status(500).json({ error: "Failed to delete account" });
+    }
   }
 }
 
