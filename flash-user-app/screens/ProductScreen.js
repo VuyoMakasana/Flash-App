@@ -51,6 +51,11 @@ export default function ProductScreen() {
           <Text style={styles.name}>{product.name}</Text>
           <Text style={styles.category}>{product.category}</Text>
           <Text style={styles.price}>R{product.price}</Text>
+          {product.storeId && product.storeName && (
+            <Pressable onPress={() => navigation.navigate('Store', { storeId: product.storeId })}>
+              <Text style={styles.soldBy}>Sold by <Text style={styles.soldByName}>{product.storeName}</Text></Text>
+            </Pressable>
+          )}
           <Text style={styles.desc}>{product.description}</Text>
 
           {/* Sizes */}
@@ -108,6 +113,8 @@ const styles = StyleSheet.create({
   name: { fontSize: 24, fontWeight: '900', color: '#0a0a0a' },
   category: { color: '#9ca3af', fontWeight: '600' },
   price: { fontSize: 22, fontWeight: '900', color: '#0a0a0a' },
+  soldBy: { color: '#6b7280', fontSize: 13 },
+  soldByName: { color: '#0a0a0a', fontWeight: '700', textDecorationLine: 'underline' },
   desc: { color: '#4b5563', lineHeight: 22 },
   label: { fontWeight: '800', color: '#111827', fontSize: 16, marginTop: 8 },
   sizes: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

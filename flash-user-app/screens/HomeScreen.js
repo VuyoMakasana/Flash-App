@@ -80,6 +80,17 @@ export default function HomeScreen() {
         )}
       </View>
 
+      {/* Multi-tenant Stage 7 — real, always-visible entry point to the store
+          directory. Deliberately not gated behind distinctStoreIds.length,
+          unlike the filter row below: the directory itself is useful and
+          testable even at exactly one real store, which is the whole point
+          of building it now rather than waiting for a second store. */}
+      <Pressable style={styles.browseStoresRow} onPress={() => navigation.navigate('StoreDirectory')}>
+        <Ionicons name="storefront-outline" size={16} color="#374151" />
+        <Text style={styles.browseStoresText}>Browse Stores</Text>
+        <Ionicons name="chevron-forward" size={14} color="#9ca3af" />
+      </Pressable>
+
       {/* Store filter — only shows when there are multiple shops */}
       {distinctStoreIds.length > 1 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cats} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
@@ -154,6 +165,8 @@ const styles = StyleSheet.create({
   badgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
   searchRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', marginHorizontal: 16, marginVertical: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, gap: 8, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, elevation: 1 },
   searchInput: { flex: 1, color: '#111827', fontSize: 15 },
+  browseStoresRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginHorizontal: 16, marginBottom: 8 },
+  browseStoresText: { color: '#374151', fontWeight: '700', fontSize: 13 },
   cats: { marginBottom: 8 },
   cat: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#e5e7eb' },
   catActive: { backgroundColor: '#0a0a0a' },

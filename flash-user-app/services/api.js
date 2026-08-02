@@ -208,6 +208,13 @@ const products = {
   getById: (id)          => request(`/inventory/${id}`),
 };
 
+// Multi-tenant Stage 7 — the customer-facing storefront's real, public
+// stores endpoints. Mounted as /api/stores on the backend.
+const stores = {
+  getAll:  (params = '') => request(`/stores${params}`),
+  getById: (id)          => request(`/stores/${id}`),
+};
+
 // ── Orders ────────────────────────────────────────────────────────────────
 const orders = {
   create:      (body)         => request('/orders', { method: 'POST', body: JSON.stringify(body) }),
@@ -332,6 +339,7 @@ export { BASE_URL, getToken, saveTokens, clearTokens };
 export default {
   auth,
   products,
+  stores,
   orders,
   payments,
   drivers,

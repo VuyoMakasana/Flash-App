@@ -61,6 +61,8 @@ if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
 import HomeScreen               from './screens/HomeScreen';
 import ProfileScreen            from './screens/ProfileScreen';
 import ProductScreen            from './screens/ProductScreen';
+import StoreDirectoryScreen     from './screens/StoreDirectoryScreen';
+import StoreScreen              from './screens/StoreScreen';
 import CartScreen               from './screens/CartScreen';
 import CheckoutScreen           from './screens/CheckoutScreen';
 import PaymentScreen            from './screens/PaymentScreen';
@@ -104,6 +106,8 @@ function ShopStack() {
     <Stack.Navigator screenOptions={headerStyles}>
       <Stack.Screen name="Home"        component={HomeScreen}        options={{ title: 'FLASH' }} />
       <Stack.Screen name="Product"     component={ProductScreen}     options={{ title: 'Product' }} />
+      <Stack.Screen name="StoreDirectory" component={StoreDirectoryScreen} options={{ title: 'Stores' }} />
+      <Stack.Screen name="Store"       component={StoreScreen}       options={{ title: 'Store' }} />
       <Stack.Screen name="Cart"        component={CartScreen}        options={{ title: 'Cart' }} />
       <Stack.Screen name="Checkout"    component={CheckoutScreen}    options={{ title: 'Checkout' }} />
       <Stack.Screen name="Payment"     component={PaymentScreen}     options={{ title: 'Payment' }} />
