@@ -105,14 +105,15 @@ export const FlashProvider = ({ children }) => {
             image:       p.image_url   || 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=800',
             badge:       p.brand       || null,
             description: p.description || '',
-            // No default here: flash_inventory has no store_id column today (it's a
-            // single-store table), so the backend never actually returns one. A
-            // 'flash_closet' fallback previously masqueraded as a real per-product
-            // store id, which defeated HomeScreen's own `stores.length > 1` check
-            // meant to hide the shop-filter row until real multi-store data exists
-            // — it always evaluated to a fake 2-store list ['all', 'flash_closet']
-            // and rendered a redundant filter pill showing the raw slug.
+            // store_id/store_name are real now (Multi-tenant Stage 6, decision 4 —
+            // Inventory.getProducts() joins stores and returns both). Still only
+            // one seeded store exists today, so HomeScreen's `stores.length > 1`
+            // check still hides the shop-filter row — this just makes the wiring
+            // correct for whenever a real second store is onboarded, replacing the
+            // old 'flash_closet' fallback that masqueraded as a real per-product
+            // store id and rendered a redundant filter pill showing a raw slug.
             storeId:     p.store_id    || null,
+            storeName:   p.store_name  || null,
           }));
           setProducts(normalised);
         }

@@ -15,15 +15,25 @@ export default function HomeScreen() {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
   // Store filter for future multi-shop support — the row below only renders once
-  // `stores` (below) has more than one real entry. flash_inventory has no store_id
-  // column today, so every product's storeId is null and this stays hidden until
-  // the backend actually supports multiple stores.
+  // 2+ DISTINCT real stores exist (checked against distinctStoreIds.length below,
+  // not stores.length: `stores` always has the 'all' sentinel prepended, so with
+  // exactly one real store stores.length is already 2 — checking that directly
+  // would show this row today, a new customer-facing UX change decision 4
+  // explicitly said not to make). Only one store is seeded today, so this stays
+  // hidden until a real second store is onboarded.
   const [activeStore, setActiveStore] = useState('all');
 
   const cartCount = cart.reduce((sum, i) => sum + i.quantity, 0);
 
-  // Build unique store list from products — 'all' is always first
-  const stores = ['all', ...Array.from(new Set(products.map(p => p.storeId).filter(Boolean)))];
+  // Build unique store list from products — 'all' is always first. Keyed by
+  // storeId (stable, used for filtering) with storeName (real, human-readable)
+  // as the display label, falling back to the id if a product is ever missing
+  // a joined name.
+  const storeNameById = Object.fromEntries(
+    products.filter(p => p.storeId).map(p => [p.storeId, p.storeName || p.storeId]),
+  );
+  const distinctStoreIds = Object.keys(storeNameById);
+  const stores = ['all', ...distinctStoreIds];
 
   const filtered = products.filter(p => {
     const matchCat = activeCategory === 'All' || p.category === activeCategory;
@@ -71,7 +81,7 @@ export default function HomeScreen() {
       </View>
 
       {/* Store filter — only shows when there are multiple shops */}
-      {stores.length > 1 && (
+      {distinctStoreIds.length > 1 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cats} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
           {stores.map(store => (
             <Pressable
@@ -80,7 +90,7 @@ export default function HomeScreen() {
               onPress={() => setActiveStore(store)}
             >
               <Text style={[styles.catText, activeStore === store && styles.catTextActive]}>
-                {store === 'all' ? 'All Shops' : store}
+                {store === 'all' ? 'All Shops' : storeNameById[store]}
               </Text>
             </Pressable>
           ))}

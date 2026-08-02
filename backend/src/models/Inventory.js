@@ -5,8 +5,15 @@ const BaseModel = require("./BaseModel");
 // endpoint should expose to an unauthenticated caller. Admin-only writes
 // (addProduct/updateStock) still return it via RETURNING * since that's an
 // admin action that legitimately needs to see what it just set.
-const PUBLIC_COLUMNS = `id, product_name, category, brand, price, sizes,
-  stock_by_size, image_url, description, is_active, created_at, updated_at`;
+// Table-qualified so getProducts (below) can safely add a JOIN to stores —
+// both tables have their own id/is_active/created_at columns, and an
+// unqualified list would become ambiguous the moment a second table is in
+// scope. getProduct further down has no join, so qualification is a no-op
+// there — same result set either way.
+const PUBLIC_COLUMNS = `flash_inventory.id, flash_inventory.product_name, flash_inventory.category,
+  flash_inventory.brand, flash_inventory.price, flash_inventory.sizes, flash_inventory.stock_by_size,
+  flash_inventory.image_url, flash_inventory.description, flash_inventory.is_active,
+  flash_inventory.created_at, flash_inventory.updated_at`;
 
 class Inventory extends BaseModel {
   static async getProducts(category, page = 1, limit = 20) {
@@ -20,9 +27,16 @@ class Inventory extends BaseModel {
       SELECT 1 FROM store_boosts sb
       WHERE sb.product_id = flash_inventory.id AND sb.status = 'active' AND sb.expires_at > NOW()
     ) DESC`;
+    // Multi-tenant Stage 6, decision 4 — thread store_id + a joined store
+    // name into the one public listing query flash-user-app actually reads.
+    // flash_inventory.store_id has been NOT NULL with a real FK to stores
+    // since migration v34, so this is a plain JOIN (not LEFT JOIN) — every
+    // row is guaranteed to have a matching store. Customer-facing UX beyond
+    // exposing these two fields is explicitly out of scope for this pass.
+    const columns = `${PUBLIC_COLUMNS}, flash_inventory.store_id, stores.name AS store_name`;
     const query = category
-      ? `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true AND category=$3 ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`
-      : `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`;
+      ? `SELECT ${columns} FROM flash_inventory JOIN stores ON stores.id = flash_inventory.store_id WHERE flash_inventory.is_active=true AND flash_inventory.category=$3 ORDER BY ${boostedFirst}, flash_inventory.created_at DESC LIMIT $1 OFFSET $2`
+      : `SELECT ${columns} FROM flash_inventory JOIN stores ON stores.id = flash_inventory.store_id WHERE flash_inventory.is_active=true ORDER BY ${boostedFirst}, flash_inventory.created_at DESC LIMIT $1 OFFSET $2`;
     const params = category ? [limit, offset, category] : [limit, offset];
     const result = await this.query(query, params);
     return result.rows;
