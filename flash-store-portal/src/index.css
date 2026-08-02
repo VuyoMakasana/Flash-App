@@ -6,6 +6,17 @@ body {
   color: #1a1a1a;
 }
 
+/* Multi-tenant Stage 6 — mobile zoom-on-focus fix, the exact same real bug
+ * class already found and fixed on the internal Flash Admin Panel
+ * (backend/src/adminAssets/admin-branding.css): iOS Safari (and most
+ * Android mobile browsers) auto-zooms the page when a focused text input's
+ * rendered font-size is under 16px. Confirmed live here too (both login
+ * inputs measured at a real computed 14px). !important so it wins over any
+ * more specific rule below, same reasoning as the internal panel's own fix. */
+input, textarea, select {
+  font-size: 16px !important;
+}
+
 .login-page {
   display: flex;
   align-items: center;
@@ -24,10 +35,16 @@ body {
 }
 .login-card h1 { font-size: 20px; margin: 0 0 8px; }
 .login-card label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #555; }
-.login-card input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+.login-card input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; }
+/* Amber (#f59e0b) — the same one real accent already proven on the internal
+ * Flash Admin Panel (adminPanel.js's branding.theme.colors.primary100),
+ * itself pulled from the mobile apps' own real highlight color. One accent
+ * override for primary actions, same restraint as that panel — status
+ * colors (accept/reject/mark-ready, order status dots) are left alone on
+ * purpose, since those carry meaning, not brand identity. */
 .login-card button {
-  background: #111; color: #fff; border: none; padding: 10px; border-radius: 4px;
-  font-size: 14px; cursor: pointer; margin-top: 8px;
+  background: #f59e0b; color: #1a1a1a; border: none; padding: 10px; border-radius: 4px;
+  font-weight: 600; cursor: pointer; margin-top: 8px;
 }
 .login-card button:disabled { opacity: 0.6; cursor: not-allowed; }
 .form-error { color: #c0392b; font-size: 13px; margin: 0; }
@@ -35,21 +52,40 @@ body {
 .portal-shell { max-width: 900px; margin: 0 auto; }
 .portal-header {
   display: flex; justify-content: space-between; align-items: center;
-  padding: 16px 24px; border-bottom: 1px solid #e0e2e6; background: #fff;
+  padding: 12px 24px; border-bottom: 1px solid #e0e2e6; background: #fff;
+  flex-wrap: wrap; gap: 8px;
 }
+.portal-brand { display: flex; align-items: center; gap: 20px; }
+.portal-logo { height: 28px; width: auto; }
 .portal-nav { display: flex; gap: 16px; }
 .nav-link { color: #7f8c8d; text-decoration: none; font-size: 14px; font-weight: 600; padding: 4px 0; }
-.nav-link-active { color: #111; border-bottom: 2px solid #111; }
+.nav-link-active { color: #b45309; border-bottom: 2px solid #f59e0b; }
 .portal-header-right { display: flex; align-items: center; gap: 12px; font-size: 13px; }
-.portal-header-right button { padding: 6px 12px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; }
+.portal-header-right button { padding: 6px 12px; border: 1px solid #ccc; background: #fff; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.btn-text-danger {
+  background: none !important; border: none !important; color: #c0392b !important;
+  text-decoration: underline; padding: 0 !important; font-size: 13px;
+}
+/* The real, live-screenshotted bug: "Mobile Check Owner (owner)" wrapped
+ * into four lines at 375px, crowding out Sign Out entirely. Truncate
+ * instead, mirroring the internal panel's own real precedent for its
+ * near-identical CurrentUserNav overflow
+ * (admin-branding.css's [data-css="logged-in"] rule). */
+.portal-user-info {
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .portal-main { padding: 24px; }
 
 .inventory-header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.inventory-header-row button { padding: 8px 16px; border: none; background: #111; color: #fff; border-radius: 4px; cursor: pointer; }
+.inventory-header-row button { padding: 8px 16px; border: none; background: #f59e0b; color: #1a1a1a; font-weight: 600; border-radius: 4px; cursor: pointer; }
 
+/* The real, live-screenshotted bug: 3 fixed columns genuinely overflowed a
+ * 375px viewport (Price/Size fields cut off at the right edge). auto-fit
+ * collapses to fewer columns as space shrinks instead of forcing a fixed
+ * count, the same fix shape as the internal panel's own narrow-width rule. */
 .add-product-form {
   background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 24px;
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; align-items: end;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; align-items: end;
 }
 .add-product-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #555; }
 .add-product-form input, .add-product-form select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; }
@@ -59,13 +95,23 @@ body {
   display: flex; align-items: center; gap: 16px;
   background: #fff; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  flex-wrap: wrap;
+}
+.product-thumb {
+  width: 48px; height: 48px; border-radius: 6px; object-fit: cover; flex-shrink: 0;
+}
+.product-thumb-empty {
+  display: flex; align-items: center; justify-content: center;
+  background: #f0f1f3; color: #9aa0a6; font-size: 10px; text-align: center;
 }
 .product-row-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 160px; }
 .product-row-stock { display: flex; gap: 12px; flex-wrap: wrap; }
+.product-row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .stock-field { display: flex; flex-direction: column; align-items: center; font-size: 11px; color: #7f8c8d; gap: 2px; }
 .stock-field input { width: 56px; padding: 4px; border: 1px solid #ccc; border-radius: 4px; text-align: center; }
 .stock-empty { color: #95a5a6; font-size: 13px; }
 .btn-deactivate { background: #7f8c8d; color: #fff; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
+.btn-secondary { background: #fff; color: #1a1a1a; border: 1px solid #ccc; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
 
 .new-orders-section { background: #fff8f0; border: 1px solid #f0c36d; border-radius: 8px; padding: 16px; margin-bottom: 24px; }
 .new-orders-section h2 { margin-top: 0; color: #b8860b; }

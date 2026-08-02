@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStoreAuth } from '../context/StoreAuthContext';
+import { getDefaultRouteForRole } from '../utils/roleNav';
 
 export default function LoginPage() {
   const { login } = useStoreAuth();
@@ -15,8 +16,11 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      await login(email, password);
-      navigate('/orders');
+      const user = await login(email, password);
+      // Real, role-driven landing page (Stage 6) — replaces the previous
+      // hardcoded navigate('/orders'), which sent every role to a screen
+      // some of them can't use at all.
+      navigate(getDefaultRouteForRole(user.role));
     } catch (err) {
       // err.status is only ever set once a real HTTP response comes back
       // (see services/api.js) — a network-level failure (server down, a
@@ -26,6 +30,10 @@ export default function LoginPage() {
       // deployment mistake, not a credentials problem.
       if (err.status === 429) setError('Too many attempts — please wait before trying again.');
       else if (err.status === 401) setError('Invalid email or password.');
+      // 403 with correct credentials is the real, specific Marketing-role
+      // block (storeAuthController.login) — the backend's own message is
+      // already precise; show it directly instead of a generic one.
+      else if (err.status === 403) setError(err.message);
       else setError('Could not reach the server. Please check your connection and try again.');
     } finally {
       setLoading(false);
