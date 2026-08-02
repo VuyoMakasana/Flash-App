@@ -86,6 +86,7 @@ const trendsRoutes = require("./routes/trendsRoutes");
 const returnsRoutes = require("./routes/returnRoutes");
 const fleetRoutes = require("./routes/fleetRoutes");
 const inventoryRoutes = require("./routes/inventoryRoutes");
+const storefrontRoutes = require("./routes/storefrontRoutes");
 const messagesRoutes = require("./routes/messageRoutes");
 const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
 const sosRoutes = require("./routes/sosRoutes");
@@ -202,6 +203,7 @@ function createApp() {
   app.use("/api/returns", returnsRoutes);
   app.use("/api/fleet", fleetRoutes);
   app.use("/api/inventory", inventoryRoutes);
+  app.use("/api/stores", storefrontRoutes);
   app.use("/api/messages", messagesRoutes);
   app.use("/api/trusted-drivers", trustedDriverRoutes);
   app.use("/api/sos", sosRoutes);

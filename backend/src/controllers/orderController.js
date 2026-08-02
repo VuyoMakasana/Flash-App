@@ -43,6 +43,7 @@ const CLIENT_ERROR_FRAGMENTS = [
   'is out of stock',
   'Order must have items',
   'Order total must be positive',
+  'more than one store',
 ];
 
 function isClientError(message) {

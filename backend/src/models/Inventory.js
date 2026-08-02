@@ -16,7 +16,7 @@ const PUBLIC_COLUMNS = `flash_inventory.id, flash_inventory.product_name, flash_
   flash_inventory.created_at, flash_inventory.updated_at`;
 
 class Inventory extends BaseModel {
-  static async getProducts(category, page = 1, limit = 20) {
+  static async getProducts(category, page = 1, limit = 20, storeId = null) {
     const offset = (page - 1) * limit;
     // Final admin-panel completion pass, §4 — a real, active boost
     // (Boost.activateBoost, product_id-targeted) now actually ranks its
@@ -31,13 +31,26 @@ class Inventory extends BaseModel {
     // name into the one public listing query flash-user-app actually reads.
     // flash_inventory.store_id has been NOT NULL with a real FK to stores
     // since migration v34, so this is a plain JOIN (not LEFT JOIN) — every
-    // row is guaranteed to have a matching store. Customer-facing UX beyond
-    // exposing these two fields is explicitly out of scope for this pass.
+    // row is guaranteed to have a matching store.
     const columns = `${PUBLIC_COLUMNS}, flash_inventory.store_id, stores.name AS store_name`;
-    const query = category
-      ? `SELECT ${columns} FROM flash_inventory JOIN stores ON stores.id = flash_inventory.store_id WHERE flash_inventory.is_active=true AND flash_inventory.category=$3 ORDER BY ${boostedFirst}, flash_inventory.created_at DESC LIMIT $1 OFFSET $2`
-      : `SELECT ${columns} FROM flash_inventory JOIN stores ON stores.id = flash_inventory.store_id WHERE flash_inventory.is_active=true ORDER BY ${boostedFirst}, flash_inventory.created_at DESC LIMIT $1 OFFSET $2`;
-    const params = category ? [limit, offset, category] : [limit, offset];
+
+    // Multi-tenant Stage 7 — optional storeId filter for the storefront's
+    // individual store page. Built as a param list rather than a fixed
+    // ternary so category and storeId can combine or each be omitted
+    // independently; omitting both reproduces the exact prior query.
+    const conditions = ['flash_inventory.is_active=true'];
+    const params = [limit, offset];
+    if (category) {
+      params.push(category);
+      conditions.push(`flash_inventory.category=$${params.length}`);
+    }
+    if (storeId) {
+      params.push(storeId);
+      conditions.push(`flash_inventory.store_id=$${params.length}`);
+    }
+
+    const query = `SELECT ${columns} FROM flash_inventory JOIN stores ON stores.id = flash_inventory.store_id
+      WHERE ${conditions.join(' AND ')} ORDER BY ${boostedFirst}, flash_inventory.created_at DESC LIMIT $1 OFFSET $2`;
     const result = await this.query(query, params);
     return result.rows;
   }

@@ -138,6 +138,16 @@ class Order extends BaseModel {
 
       let computedSubtotal = 0;
       const validatedItems  = [];
+      // Multi-tenant Stage 7 — the checkout safety guard. flash_inventory
+      // items are the only ones with a real, trustworthy store_id (external/
+      // partner items have no matching row and are excluded here, same as
+      // they're already excluded from server-price trust above). Today,
+      // with one real seeded store, this set can only ever have 0 or 1
+      // members — this only starts doing real work the moment a second
+      // store exists, at which point it fails a mixed-store cart loudly
+      // instead of Store.getDefaultStoreId() silently misattributing the
+      // whole order to whichever store happens to be "default."
+      const distinctStoreIds = new Set();
 
       for (const item of items) {
         const rawQty = Number(item.quantity);
@@ -151,7 +161,7 @@ class Order extends BaseModel {
 
         if (item.productId) {
           const invRow = await client.query(
-            `SELECT id, price, product_name, stock_by_size
+            `SELECT id, price, product_name, stock_by_size, store_id
              FROM flash_inventory
              WHERE id = $1 AND is_active = true
              FOR UPDATE`,
@@ -160,6 +170,7 @@ class Order extends BaseModel {
 
           if (invRow.rows.length) {
             // ── FLASH INVENTORY PATH: use server price, ignore client price ──
+            if (invRow.rows[0].store_id) distinctStoreIds.add(invRow.rows[0].store_id);
             serverPrice = parseFloat(invRow.rows[0].price);
             if (activeDiscountPercent > 0) {
               serverPrice = Math.round(serverPrice * (1 - activeDiscountPercent / 100) * 100) / 100;
@@ -212,6 +223,21 @@ class Order extends BaseModel {
       }
       // ── END PRICE VALIDATION ───────────────────────────────────────────────
 
+      // Multi-tenant Stage 7 — reject a cart spanning more than one real
+      // store, and derive the order's real store_id from the cart itself
+      // (strictly more correct than the caller-supplied default even at one
+      // store today) rather than the blind Store.getDefaultStoreId() pick.
+      // A cart with zero Flash-inventory items (all external/partner) keeps
+      // today's exact behavior: whatever store_id the caller passed in.
+      if (distinctStoreIds.size > 1) {
+        throw new Error(
+          'Your cart contains items from more than one store — please check out separately for now.'
+        );
+      }
+      const resolvedStoreId = distinctStoreIds.size === 1
+        ? [...distinctStoreIds][0]
+        : store_id;
+
       // Flash Premium (R99/mo) perk, approved 25% off the delivery fee,
       // uncapped: delivery_fee/driver_payout/flashCommission below are all
       // still derived from computedDeliveryFee (the full, undiscounted tier
@@ -258,7 +284,7 @@ class Order extends BaseModel {
           finalTotal,
           driverPayout,
           premiumDiscountApplied,
-          store_id            || null,
+          resolvedStoreId     || null,
           preferred_driver_id || null,
           preferredDriverExpiresAt,
           pickup_address,

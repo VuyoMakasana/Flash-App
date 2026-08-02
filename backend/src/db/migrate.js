@@ -1056,6 +1056,17 @@ async function migrate() {
     throw err;
   } finally {
     client34.release();
+  }
+
+  // ── v35 ────────────────────────────────────────────────────────────────────
+  const client35 = await pool.connect();
+  try {
+    await migrateV35(client35);
+  } catch (err) {
+    console.error('Migration v35 failed:', err.message);
+    throw err;
+  } finally {
+    client35.release();
     await pool.end();
   }
 
@@ -2222,4 +2233,29 @@ async function migrateV34(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34 };
+// ─── v35: customer-facing storefront — stores.logo_url/banner_url/description ─
+// Multi-tenant Stage 7 — the real `stores` table (v29) had no visual/marketing
+// fields at all. Purely additive and nullable: no existing row or column is
+// touched, and every current reader of `stores` (Store.getDefaultStoreId,
+// Store.findById, the Store Admin Portal) keeps working unchanged. Actual
+// image upload (Flash Closet's real logo, via s3Service.uploadPublicFile --
+// the same real Cloudinary mechanism product images already use) is a
+// separate, verifiable data-seeding step, not part of this schema migration,
+// so a migration re-run never depends on an external network call succeeding.
+async function migrateV35(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS logo_url TEXT`);
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS banner_url TEXT`);
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS description TEXT`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v35 completed: stores.logo_url/banner_url/description added (nullable, additive)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v35 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35 };

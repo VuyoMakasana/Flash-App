@@ -5,9 +5,9 @@ const FLASH_STORE_ID = "flash_closet";
 
 class InventoryController {
   static async getProducts(req, res) {
-    const { category, page = 1, limit = 20 } = req.query;
+    const { category, page = 1, limit = 20, storeId } = req.query;
     try {
-      const products = await Inventory.getProducts(category, page, limit);
+      const products = await Inventory.getProducts(category, page, limit, storeId || null);
       res.json({ products, storeId: FLASH_STORE_ID });
     } catch (err) {
       console.error("[Inventory] getProducts error:", err.message);
