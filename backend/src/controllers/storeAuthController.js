@@ -31,6 +31,18 @@ class StoreAuthController {
         return res.status(401).json({ error: "Invalid credentials" });
       }
 
+      // Multi-tenant Stage 6, founder decision — Marketing accounts can be
+      // created (Stage 5's createStaff already allows the role) but don't
+      // get login access yet, since no real screen exists for them.
+      // Checked only after the password is confirmed correct, not before —
+      // rejecting on role alone before credentials are verified would leak
+      // "this email belongs to a marketing account" to anyone who merely
+      // guesses the email, the same anti-enumeration discipline already
+      // applied everywhere else in this codebase.
+      if (storeUser.role === "marketing") {
+        return res.status(403).json({ error: "Marketing access isn't available yet. Contact your store Owner." });
+      }
+
       const storeJwtSecret = getRequired("STORE_JWT_SECRET", "store-auth");
       if (!storeJwtSecret) {
         return res.status(500).json({
