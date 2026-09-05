@@ -11,7 +11,7 @@ import React, { useEffect } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, Linking } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 
-const PRIVACY_URL = 'https://flash-website.netlify.app/privacy';
+const PRIVACY_URL = 'https://flashdelivery.co.za/privacy';
 
 export default function PrivacyPolicyScreen() {
   const navigation = useNavigation();

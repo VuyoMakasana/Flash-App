@@ -10,7 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useDriver } from '../../context/DriverContext';
 
-const TERMS_URL = 'https://flash-website.netlify.app/terms';
+const TERMS_URL = 'https://flashdelivery.co.za/terms';
 
 export default function DriverTermsScreen() {
   const router = useRouter();

@@ -1328,6 +1328,58 @@ function buildResources(db) {
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.flash_inventory),
       },
+      {
+        // Early-access signups from the public marketing site (migrate.js v29).
+        resource: db.table('marketing_waitlist'),
+        options: withChronologicalDefaults({
+          listProperties: ['email', 'role', 'created_at'],
+          properties: {
+            email: { isTitle: true },
+          },
+          actions: {
+            list: {},
+            show: {},
+            // Only ever created by a real public signup — no legitimate
+            // reason for an admin to hand-add a fake one.
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.marketing_waitlist),
+      },
+      {
+        // Contact page submissions from the public marketing site.
+        resource: db.table('marketing_contact_messages'),
+        options: withChronologicalDefaults({
+          listProperties: ['name', 'email', 'subject', 'created_at'],
+          properties: {
+            name: { isTitle: true },
+            message: { type: 'textarea' },
+          },
+          actions: {
+            list: {},
+            show: {},
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.marketing_contact_messages),
+      },
+      {
+        // Driver/seller application form submissions from the public marketing site.
+        resource: db.table('marketing_applications'),
+        options: withChronologicalDefaults({
+          listProperties: ['applicant_type', 'name', 'email', 'city', 'created_at'],
+          properties: {
+            name: { isTitle: true },
+            message: { type: 'textarea' },
+          },
+          actions: {
+            list: {},
+            show: {},
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.marketing_applications),
+      },
   ];
 }
 

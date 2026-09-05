@@ -86,6 +86,11 @@ module.exports = {
     store_boosts:         'Phase 4 — founder\'s decision (final completion pass, §4): build the real effect. purchaseBoost now requires a real product_id, charges through Paystack (paystackService.initializeGenericCharge, activated by webhookController.handleBoostCharge on charge.success — no row exists until payment is confirmed), and an active boost genuinely ranks its product first in Inventory.getProducts(). Product-scoped rather than store-scoped because this codebase has no stores table (store_id is a free-text tag, always "flash_closet") — a store-level boost has nothing to rank above and could never produce an observable effect.',
     store_promotions:     'Phase 4 — founder\'s decision (final completion pass, §4): build the real effect. createPromotion never had a price/plan to charge for (a free discount config, not a purchase) — its discount_percent now actually reduces the price of flash_inventory items in Order.create() while a promotion is active.',
     browsing_events:      'Phase 4 — backs the Flash Fleet demand-cluster view (fleetIntelligenceService.js), zero new backend needed.',
+
+    // ── Marketing site leads (migrate.js v29) ────────────────────────────
+    marketing_waitlist:           'Real AdminJS resource — early-access signups from the public marketing site, also triggers an admin email on each new signup.',
+    marketing_contact_messages:   'Real AdminJS resource — Contact page submissions from the public marketing site, also triggers an admin email.',
+    marketing_applications:      'Real AdminJS resource — driver/seller application form submissions from the public marketing site, also triggers an admin email.',
   },
 
   intentionallyExcluded: {
