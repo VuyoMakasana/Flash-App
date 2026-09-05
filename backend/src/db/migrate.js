@@ -990,6 +990,17 @@ async function migrate() {
     throw err;
   } finally {
     client28.release();
+  }
+
+  // ── v29 ────────────────────────────────────────────────────────────────────
+  const client29 = await pool.connect();
+  try {
+    await migrateV29(client29);
+  } catch (err) {
+    console.error('Migration v29 failed:', err.message);
+    throw err;
+  } finally {
+    client29.release();
     await pool.end();
   }
 
@@ -1724,4 +1735,58 @@ async function migrateV28(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28 };
+// ─── v29: Marketing website leads (waitlist, contact, driver/seller applications) ─
+// The public marketing site (flash-website-rebuild) has its own waitlist,
+// contact, and driver/seller application forms. These previously called a
+// separate, undeployed Node service (flash-server) that wrote to a local
+// JSON file — no notification path, no admin view, and (separately) never
+// actually deployed anywhere, so every real submission has been silently
+// lost. Moved into this backend's real Postgres database instead: one place
+// to see everything (the AdminJS panel already in daily use), and a real
+// email notification via the existing admin-email path (emailService's
+// getAdminEmails), rather than running and maintaining a second backend
+// service for three small public forms.
+async function migrateV29(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE TABLE IF NOT EXISTS marketing_waitlist (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      email VARCHAR(255) NOT NULL UNIQUE,
+      role VARCHAR(20) NOT NULL DEFAULT 'customer' CHECK (role IN ('customer','seller','driver')),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS marketing_contact_messages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      subject VARCHAR(100) NOT NULL,
+      message TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS marketing_applications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      applicant_type VARCHAR(10) NOT NULL CHECK (applicant_type IN ('driver','seller')),
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      city VARCHAR(100),
+      message TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_waitlist_created ON marketing_waitlist(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_contact_created ON marketing_contact_messages(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_applications_created ON marketing_applications(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_applications_type ON marketing_applications(applicant_type, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v29 completed: marketing_waitlist, marketing_contact_messages, marketing_applications');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v29 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29 };

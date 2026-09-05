@@ -89,6 +89,7 @@ const inventoryRoutes = require("./routes/inventoryRoutes");
 const messagesRoutes = require("./routes/messageRoutes");
 const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
 const sosRoutes = require("./routes/sosRoutes");
+const marketingRoutes = require("./routes/marketingRoutes");
 
 function createApp() {
   const app = express();
@@ -197,6 +198,11 @@ function createApp() {
   app.use("/api/messages", messagesRoutes);
   app.use("/api/trusted-drivers", trustedDriverRoutes);
   app.use("/api/sos", sosRoutes);
+// Public marketing-site forms (waitlist, contact, driver/seller applications)
+// — no auth, same as flash-website-rebuild's original standalone backend;
+// mounted at /api directly since the frontend already calls /api/waitlist,
+// /api/contact, /api/applications/driver, /api/applications/seller.
+  app.use("/api", marketingRoutes);
 
 // Health check — previously always returned status: "ok" unconditionally,
 // with no actual check of either dependency. That made it useless for real

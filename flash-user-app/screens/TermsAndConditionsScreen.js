@@ -3,7 +3,7 @@ import { View, Text, ScrollView, Pressable, StyleSheet, ActivityIndicator, Linki
 import { Ionicons } from '@expo/vector-icons';
 import { useFlash } from '../context/FlashContext';
 
-const TERMS_URL = 'https://flash-website.netlify.app/terms';
+const TERMS_URL = 'https://flashdelivery.co.za/terms';
 
 export default function TermsAndConditionsScreen() {
   const { acceptTermsAndAuthenticate, logout } = useFlash();

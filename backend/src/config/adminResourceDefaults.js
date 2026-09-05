@@ -45,6 +45,9 @@ const RESOURCE_TIMESTAMP_COLUMNS = {
   // reasoning as driver_wallets.updated_at above.
   flagged_accounts: 'synced_at',
   flash_inventory: 'created_at',
+  marketing_waitlist: 'created_at',
+  marketing_contact_messages: 'created_at',
+  marketing_applications: 'created_at',
 };
 
 // Applied via the same options object every resource already builds, not a
