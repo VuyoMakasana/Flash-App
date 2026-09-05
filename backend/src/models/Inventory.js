@@ -66,12 +66,38 @@ class Inventory extends BaseModel {
     return result.rows[0];
   }
 
+  // F-05 remediation — was a bare, non-transactional UPDATE with no lock,
+  // unlike Order.create()'s decrement of this same table. Wrapping it in a
+  // real transaction with SELECT...FOR UPDATE first makes this write
+  // correctly serialize against a concurrent customer checkout on the same
+  // product (matching the exact locking primitive already proven correct
+  // there) rather than racing it with no ordering guarantee at all.
+  //
+  // Residual limitation, not fixed by this change: this endpoint accepts a
+  // full replacement of stock_by_size, not a per-size delta. Locking
+  // guarantees the write is atomic and correctly ordered relative to a
+  // concurrent checkout, but if an admin's request was built from a stock
+  // count read before that checkout's decrement landed, applying their
+  // full (now-stale) object can still overwrite the decrement once this
+  // lock is acquired — the values themselves are stale, not the timing.
+  // Fully closing that needs either per-size delta semantics or optimistic
+  // concurrency (reject the write if the row changed since it was read),
+  // both real API/UI changes beyond this fix's scope — flagged, not solved
+  // silently, in the audit report this fix responds to.
   static async updateStock(productId, stockBySize) {
-    const result = await this.query(
-      `UPDATE flash_inventory SET stock_by_size=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
-      [JSON.stringify(stockBySize), productId],
-    );
-    return result.rows[0];
+    return await this.transaction(async (client) => {
+      const existing = await client.query(
+        `SELECT id FROM flash_inventory WHERE id = $1 FOR UPDATE`,
+        [productId],
+      );
+      if (!existing.rows.length) return null;
+
+      const result = await client.query(
+        `UPDATE flash_inventory SET stock_by_size=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+        [JSON.stringify(stockBySize), productId],
+      );
+      return result.rows[0];
+    });
   }
 
   static async deleteProduct(productId) {

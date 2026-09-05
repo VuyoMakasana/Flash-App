@@ -292,6 +292,46 @@ class Order extends BaseModel {
     });
   }
 
+  // Reverses exactly what create()'s FOR UPDATE-locked decrement removed
+  // for this order's flash_inventory items — called whenever an order is
+  // genuinely no longer going to be fulfilled (cancelled via the state
+  // machine, or a payment that never succeeded in the first place). Must
+  // run inside the caller's own transaction/client so the restock and the
+  // status/payment change that triggers it commit or roll back together.
+  //
+  // Mirrors create()'s own decrement condition exactly: only order_items
+  // with a real product_id AND a size were ever decremented (external/
+  // partner items and sizeless flash_inventory items were not touched at
+  // create() time either), so restocking anything else would restore
+  // stock that was never actually taken. A flash_inventory row that no
+  // longer exists (product deleted since the order was placed) has
+  // nothing real to restock into — logged, not silently swallowed, so a
+  // genuine "where did this stock go" question has a trail.
+  static async restockItems(orderId, client) {
+    const itemsResult = await client.query(
+      `SELECT product_id, size, quantity FROM order_items WHERE order_id = $1 AND product_id IS NOT NULL AND size IS NOT NULL`,
+      [orderId],
+    );
+
+    for (const item of itemsResult.rows) {
+      const invResult = await client.query(
+        `SELECT stock_by_size FROM flash_inventory WHERE id = $1 FOR UPDATE`,
+        [item.product_id],
+      );
+      if (!invResult.rows.length) {
+        console.warn(`[Order] restockItems: product ${item.product_id} no longer exists, skipping restock for order ${orderId}`);
+        continue;
+      }
+      const stock    = invResult.rows[0].stock_by_size || {};
+      const current  = parseInt(stock[item.size] || 0, 10);
+      const restored = { ...stock, [item.size]: current + item.quantity };
+      await client.query(
+        `UPDATE flash_inventory SET stock_by_size = $1, updated_at = NOW() WHERE id = $2`,
+        [JSON.stringify(restored), item.product_id],
+      );
+    }
+  }
+
   static async updateStatus(orderId, status, driverId = null) {
     const updates = { status, updated_at: new Date() };
     if (driverId) updates.driver_id = driverId;
