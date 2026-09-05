@@ -12,6 +12,7 @@
 
 const pool        = require('../config/database');
 const DriverWallet = require('../models/DriverWallet');
+const Order        = require('../models/Order');
 
 // pending_store_acceptance / preparing: the store-facing accept/reject/
 // preparing gate (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0). A paid order
@@ -194,6 +195,20 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
       if (targetState === 'cancelled' && getStateRank(currentState) >= getStateRank('picked_up')) {
         throw new Error('Cannot cancel after pickup without admin override');
       }
+    }
+
+    // F-04 remediation — the single, authoritative place every real
+    // cancellation path passes through (orderController.cancelOrder,
+    // rejectPendingAcceptance, the no-driver-timeout cron), so this covers
+    // all of them at once rather than needing a restock call duplicated at
+    // every call site. Runs inside this same transaction/client (whether
+    // owned here or joined via externalClient) so the restock and the
+    // status change it depends on commit or roll back together. Correctly
+    // covers cash orders too, unlike gating restock behind an async card
+    // refund's confirmation — cash never reaches that path at all, and
+    // the items are equally undeliverable either way.
+    if (targetState === 'cancelled') {
+      await Order.restockItems(orderId, client);
     }
 
     const updates = { status: targetState };
