@@ -1,5 +1,5 @@
 const { Pool } = require("pg");
-const { getRequired, validateDatabaseURL } = require("./env");
+const { getRequired, validateDatabaseURL, isKnownProductionDatabaseUrl } = require("./env");
 
 // Validate DATABASE_URL configuration
 const dbUrl = process.env.DATABASE_URL;
@@ -8,6 +8,44 @@ const isValid = validateDatabaseURL(dbUrl, "database");
 if (!isValid && process.env.NODE_ENV === "production") {
   throw new Error(
     "[Database] CRITICAL: database connection misconfigured. Set DATABASE_URL environment variable.",
+  );
+}
+
+// Phase 0.5 remediation -- refuses to even open a pool against the real
+// production database from anything that isn't genuinely running on
+// Render's own infrastructure. This is exactly the gap found live during
+// the pre-implementation audit: local development (and this session's own
+// testing) was connecting straight to production with zero separation and
+// zero warning.
+//
+// Deliberately keyed on process.env.RENDER, not NODE_ENV -- confirmed live
+// (see the failed first attempt at this exact guard) that backend/.env has
+// NODE_ENV=production sitting in it for local development too, which would
+// have silently defeated a NODE_ENV-based check for the one environment
+// this most needed to catch. RENDER=true is set automatically by Render on
+// every single deployed service (https://render.com/docs/environment-
+// variables) -- nobody sets it by hand, nothing to accidentally copy into
+// a local .env, so it's a genuine "am I really on Render" signal rather
+// than a self-reported flag that already proved unreliable here.
+//
+// The override exists for real, deliberate exceptions (a one-off admin/
+// migration script meant to run against production from off-Render) --
+// named to require someone to type out what they're doing, not a terse
+// flag a script could set by habit.
+if (isKnownProductionDatabaseUrl(dbUrl) && process.env.RENDER !== "true") {
+  if (process.env.I_UNDERSTAND_THIS_CONNECTS_TO_PRODUCTION !== "true") {
+    throw new Error(
+      "[Database] REFUSING TO START: DATABASE_URL points at the real production database, " +
+      "but this process is not running on Render (RENDER env var not set). This is almost " +
+      "always an accident -- e.g. a local .env still pointed at production with nothing to " +
+      "distinguish it from a dev/staging instance. If this is genuinely intentional (a " +
+      "one-off script meant to run against production from outside Render), set " +
+      "I_UNDERSTAND_THIS_CONNECTS_TO_PRODUCTION=true and run it again.",
+    );
+  }
+  console.warn(
+    "[Database] WARNING: connected to the real production database from off-Render " +
+    "(I_UNDERSTAND_THIS_CONNECTS_TO_PRODUCTION=true was set). Proceed with care.",
   );
 }
 
