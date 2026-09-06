@@ -27,12 +27,15 @@
     },
     "production": {
       "autoIncrement": true,
+      // TEMP: unblocks build until SENTRY_AUTH_TOKEN is set -- remove this
+      // line once a real token is configured (see follow-up task).
       "android": {
         "buildType": "app-bundle"
       },
       "env": {
         "EXPO_PUBLIC_API_BASE_URL": "https://flash-app-hplc.onrender.com",
-        "PAYSTACK_PUBLIC_KEY": "pk_test_9db77a6ebc076fa07d4b3b434bb403ad0851aea9"
+        "PAYSTACK_PUBLIC_KEY": "pk_test_9db77a6ebc076fa07d4b3b434bb403ad0851aea9",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     }
   },
