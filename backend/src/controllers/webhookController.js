@@ -13,6 +13,7 @@ const crypto  = require('crypto');
 const pool    = require('../config/database');
 const { getOptional, isProd } = require('../config/env');
 const Payment = require('../models/Payment');
+const Order = require('../models/Order');
 const Subscription = require('../models/Subscription');
 const Boost = require('../models/Boost');
 const RefundService = require('../services/refundService');
@@ -423,12 +424,32 @@ class WebhookController {
       }
 
       if (currentStatus !== 'paid') {
-        await client.query(
+        // F-04 remediation — the WHERE clause now also excludes an
+        // already-'failed' order so a second failure event for the same
+        // order (a genuinely different Paystack event id — e.g.
+        // charge.failed followed by charge.abandoned — passes the
+        // webhook_events idempotency check above on its own) can't match
+        // this UPDATE a second time. RETURNING id is the real transition
+        // signal: a duplicate/stale event affects zero rows and restocks
+        // nothing, exactly the same idempotency shape already proven
+        // correct for handleChargeSuccess's payment_status='paid' guard.
+        const failResult = await client.query(
           `UPDATE orders
            SET payment_status = 'failed', updated_at = NOW()
-           WHERE id = $1 AND payment_status <> 'paid' AND paystack_reference = $2`,
+           WHERE id = $1 AND payment_status <> 'paid' AND payment_status <> 'failed' AND paystack_reference = $2
+           RETURNING id`,
           [orderId, eventRef],
         );
+
+        // This order never became 'paid' and its status never transitions
+        // to 'cancelled' here (nobody cancelled it — the charge simply
+        // didn't go through), so orderStateMachineService.updateOrderStatus's
+        // own restock hook (F-04) never fires for this path. The stock
+        // this order reserved at create() time must still be released here,
+        // directly, inside this same transaction.
+        if (failResult.rows.length) {
+          await Order.restockItems(orderId, client);
+        }
       }
 
       await client.query('COMMIT');
