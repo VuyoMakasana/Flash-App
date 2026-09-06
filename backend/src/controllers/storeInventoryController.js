@@ -150,26 +150,56 @@ class StoreInventoryController {
     }
   }
 
+  // F-05 remediation (Phase 0.5 pre-implementation audit) — was a bare,
+  // non-transactional UPDATE with no lock, exactly like the platform-wide
+  // Inventory.updateStock() this controller deliberately doesn't reuse (see
+  // the class comment above). Same fix applied in parallel there: wrap in a
+  // real transaction with SELECT...FOR UPDATE first, so this write
+  // correctly serializes against a concurrent customer checkout on the
+  // same product instead of racing it with no ordering guarantee.
+  //
+  // Same residual limitation as Inventory.updateStock(), not fixed by this
+  // change either: this still takes a full stock_by_size replacement, not
+  // a per-size delta, so a stale Store Portal submission can still
+  // overwrite a concurrent decrement once the lock is acquired. Locking
+  // fixes ordering/atomicity, not staleness — flagged, not silently
+  // solved, same as the platform-wide version.
   static async updateStock(req, res) {
     const { productId } = req.params;
     const { stock_by_size } = req.body;
     if (!stock_by_size || typeof stock_by_size !== "object") {
       return res.status(400).json({ error: "stock_by_size object is required" });
     }
+    const client = await db.connect();
     try {
-      const result = await db.query(
+      await client.query("BEGIN");
+
+      const existing = await client.query(
+        `SELECT id FROM flash_inventory WHERE id = $1 AND store_id = $2 FOR UPDATE`,
+        [productId, req.storeId],
+      );
+      if (!existing.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Product not found" });
+      }
+
+      const result = await client.query(
         `UPDATE flash_inventory SET stock_by_size = $1, updated_at = NOW()
          WHERE id = $2 AND store_id = $3 RETURNING *`,
         [JSON.stringify(stock_by_size), productId, req.storeId],
       );
-      if (!result.rows.length) return res.status(404).json({ error: "Product not found" });
+
+      await client.query("COMMIT");
 
       await clearCache("cache:*/inventory*");
       StoreAction.log(req.storeUserId, req.storeId, "product_update_stock", "flash_inventory", productId);
       res.json({ product: result.rows[0] });
     } catch (err) {
+      await client.query("ROLLBACK");
       console.error("[StoreInventory] updateStock error:", err.message);
       res.status(500).json({ error: "Failed to update stock" });
+    } finally {
+      client.release();
     }
   }
 
