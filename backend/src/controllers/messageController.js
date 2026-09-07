@@ -4,12 +4,12 @@ class MessageController {
   static async getMessages(req, res) {
     const { orderId } = req.params;
     try {
-      const messages = await Message.getMessages(
+      const result = await Message.getMessages(
         orderId,
         req.userId,
         req.userRole,
       );
-      res.json({ messages });
+      res.json(result);
     } catch (err) {
       if (err.message === "Order not found") {
         return res.status(404).json({ error: "Order not found" });
@@ -51,6 +51,11 @@ class MessageController {
       }
       if (err.message === "Access denied") {
         return res.status(403).json({ error: "Access denied" });
+      }
+      if (err.message === "CONVERSATION_CLOSED") {
+        return res.status(409).json({
+          error: "This conversation has closed for this order. Contact support@flashdelivery.co.za if you still need help.",
+        });
       }
       console.error("[Message] sendMessage error:", err.message);
       res.status(500).json({ error: "Failed to send message" });

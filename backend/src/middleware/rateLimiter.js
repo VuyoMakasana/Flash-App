@@ -130,6 +130,21 @@ const otpLimiter = rateLimit({
   ...storeOption,
 });
 
+// Order chat — 20 per minute. Previously covered only by the blanket
+// 100/15min `/api/` limiter, shared with every other endpoint a user calls
+// -- a chat flood could burn a user's entire API budget for the whole app,
+// while still being a fairly loose ceiling for spam specifically. 20/min
+// is generous for real back-and-forth conversation (one every 3s sustained)
+// but stops a scripted flood.
+const messageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many messages sent. Please slow down.' },
+  ...storeOption,
+});
+
 // Trusted driver requests — 3 per hour (HIGH-2)
 const trustRequestLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -150,4 +165,5 @@ module.exports = {
   otpLimiter,
   trustRequestLimiter,
   paymentLimiter,
+  messageLimiter,
 };
