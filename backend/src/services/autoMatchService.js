@@ -23,7 +23,7 @@ const { assignDriver } = require("./orderStateMachineService");
 
 async function autoAssignNearestDriver(orderId, io) {
   const orderResult = await pool.query(
-    `SELECT id, delivery_mode, status, preferred_driver_id, pickup_lat, pickup_lng
+    `SELECT id, user_id, delivery_mode, status, preferred_driver_id, pickup_lat, pickup_lng
      FROM orders WHERE id = $1`,
     [orderId],
   );
@@ -50,9 +50,17 @@ async function autoAssignNearestDriver(orderId, io) {
          WHERE o.driver_id = d.id
            AND o.status IN ('driver_assigned', 'driver_arrived_store', 'picked_up', 'in_transit')
        )
+       -- §2.7 audit: exclude a driver either direction of a chat block
+       -- pairs this customer with -- a block only prevents *future*
+       -- pairing, so this doesn't touch orders already in progress.
+       AND NOT EXISTS (
+         SELECT 1 FROM user_blocks ub
+         WHERE (ub.blocker_id = $3 AND ub.blocker_role = 'user' AND ub.blocked_id = d.id AND ub.blocked_role = 'driver')
+            OR (ub.blocked_id = $3 AND ub.blocked_role = 'user' AND ub.blocker_id = d.id AND ub.blocker_role = 'driver')
+       )
      ORDER BY distance_km ASC
      LIMIT 1`,
-    [order.pickup_lat, order.pickup_lng],
+    [order.pickup_lat, order.pickup_lng, order.user_id],
   );
 
   if (!nearby.rows.length) return null;

@@ -48,6 +48,8 @@ const RESOURCE_TIMESTAMP_COLUMNS = {
   marketing_waitlist: 'created_at',
   marketing_contact_messages: 'created_at',
   marketing_applications: 'created_at',
+  chat_reports: 'created_at',
+  user_blocks: 'created_at',
 };
 
 // Applied via the same options object every resource already builds, not a

@@ -77,6 +77,8 @@ module.exports = {
     sos_alerts:       'Phase 3 — real AdminJS resource + SosAlert.getAll/acknowledge + an immediate SOS email (Addendum 2 §4) now built and verified live.',
     driver_ratings:   'Phase 3 — real AdminJS resource + a driver-rating-trend dashboard chart, now built and verified live.',
     flagged_accounts: 'Phase 3 — new table (migrate.js v20), a periodically-synced snapshot of users.flagged_for_cash_abuse/cash_refusal_count kept current by a real cron job (server.js) since users itself can\'t be a resource — real AdminJS resource now built and verified live.',
+    chat_reports: 'Production-readiness audit §2.7 (migrate.js v30 (reconciled numbering; v37 on the original production-readiness-audit line)) — real AdminJS resource with a resolve action (reviewed/actioned/dismissed + notes), same "human confirms before any consequence" pattern as sos_alerts\' acknowledge.',
+    user_blocks:  'Production-readiness audit §2.7 (migrate.js v30 (reconciled numbering; v37 on the original production-readiness-audit line)) — real AdminJS resource, read-only (a block is a fact, not something an admin edits); relevant to reconstructing why a driver/customer stopped being matched together.',
 
     // ── Phase 4 — rounding out ───────────────────────────────────────────
     app_ratings:          'Phase 4 (Addendum 3 §1 — was orphaned, now placed alongside content moderation).',

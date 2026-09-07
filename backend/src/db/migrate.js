@@ -1001,6 +1001,25 @@ async function migrate() {
     throw err;
   } finally {
     client29.release();
+  }
+
+  // ── v30 ─────────────────────────────────────────────────────────────────────────────────
+  // Note (security-fixes reconciliation, 2026-09-15): numbered v37 on the
+  // unmerged production-readiness-audit line, where v30-v36 were multi-tenant
+  // Store Admin schema migrations (stores, store_users, store-scoped
+  // inventory/staff/images) that are deliberately NOT part of this
+  // reconciliation -- see docs/audits/SECURITY_REMEDIATION_LOG.md, Phase 0.
+  // Renumbered to the next free slot on this line (v30) since the tables
+  // this migration creates (user_blocks, chat_reports) have no dependency
+  // on any multi-tenant schema.
+  const client30 = await pool.connect();
+  try {
+    await migrateV30(client30);
+  } catch (err) {
+    console.error('Migration v30 failed:', err.message);
+    throw err;
+  } finally {
+    client30.release();
     await pool.end();
   }
 
@@ -1789,4 +1808,66 @@ async function migrateV29(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29 };
+// ─── v30: chat block/report — §2.7 production-readiness audit ────────────────
+// Section 2.2 deferred "blocking/reporting" as a real design decision rather
+// than a chat-only bolt-on; §2.7 is where that design was approved and built.
+// Two small, purpose-built tables rather than overloading trusted_drivers
+// (which already means the opposite thing -- a customer requesting a
+// preferred driver again; a 'blocked' status there would conflate two
+// opposite concepts under one UNIQUE(user_id, driver_id) constraint).
+//
+// user_blocks: one-directional "don't pair us again" record. Symmetric --
+// either party can block the other. Enforced going forward only (you can't
+// retroactively un-pair an in-progress order) in autoMatchService.js
+// (fleet auto-assignment) and Driver.getNearby() (pick-a-driver mode).
+//
+// chat_reports: a real, admin-reviewed queue -- reporting never
+// auto-suspends anyone (same "a human confirms before any consequence"
+// principle as the driver-fraud work in §2.4), just creates a real,
+// investigatable record. message_id is nullable and ON DELETE SET NULL
+// (not CASCADE) so a report survives even if the underlying message is
+// ever removed -- the report itself is the durable record, not the message.
+async function migrateV30(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE TABLE IF NOT EXISTS user_blocks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      blocker_id UUID NOT NULL,
+      blocker_role VARCHAR(10) NOT NULL CHECK (blocker_role IN ('user','driver')),
+      blocked_id UUID NOT NULL,
+      blocked_role VARCHAR(10) NOT NULL CHECK (blocked_role IN ('user','driver')),
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(blocker_id, blocked_id)
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON user_blocks(blocker_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_id)`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS chat_reports (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      reporter_id UUID NOT NULL,
+      reporter_role VARCHAR(10) NOT NULL CHECK (reporter_role IN ('user','driver')),
+      reported_id UUID NOT NULL,
+      reported_role VARCHAR(10) NOT NULL CHECK (reported_role IN ('user','driver')),
+      message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+      reason TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','reviewed','actioned','dismissed')),
+      admin_notes TEXT,
+      reviewed_by UUID REFERENCES admins(id),
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_order ON chat_reports(order_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_status ON chat_reports(status, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_reported ON chat_reports(reported_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v30 completed: user_blocks + chat_reports tables (chat block/report, §2.7)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v30 failed:', err.message);
+    throw err;
+  }
+}
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30 };

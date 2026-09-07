@@ -530,7 +530,7 @@ class DriverController {
   static async getNearbyDrivers(req, res) {
     const { lat, lng } = req.query;
     try {
-      const drivers = await Driver.getNearby(lat, lng);
+      const drivers = await Driver.getNearby(lat, lng, 10, req.userId);
       res.json({ drivers });
     } catch (err) {
       console.error('[Driver] getNearbyDrivers error:', err.message);
