@@ -69,6 +69,7 @@ module.exports = {
     payout_transactions:     'Phase 2 — real AdminJS resource, real Paystack transfer trail, now built and verified live.',
     driver_subscriptions:    'Phase 2 — subscription status/history (added in Addendum 3 §1, fixing the inconsistency where the revenue was counted without the record).',
     premium_subscriptions:   'Phase 2 — same fix as driver_subscriptions, Addendum 3 §1.',
+    premium_subscription_payments: 'Phase 2 — real append-only payment log (migrate.js v25) already queried directly by Admin.getStats() (cumulative Premium revenue) and the admin revenue-trend chart; premium_subscriptions itself can\'t be summed for revenue since renewals upsert the same row. Found missing from this registry during the production-readiness audit (§2.1/§2.14) despite already being real, live admin-visible data.',
     driver_documents:        'Phase 2/1 — document review via signed URLs; Admin.getDriverById already does this correctly, no UI yet.',
     messages:                'Phase 2 — order chat now shown inline on the order-detail screen alongside pickup/dropoff photos, now built and verified live.',
 
