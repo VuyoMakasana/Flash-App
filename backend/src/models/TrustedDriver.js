@@ -140,13 +140,14 @@ class TrustedDriver extends BaseModel {
         // undefined, so every call here threw and was silently swallowed
         // below. notificationService.js is the correctly-wired service used
         // everywhere else in the codebase.
-        const { sendPushNotification } = require('../services/notificationService');
-        await sendPushNotification({
+        const { sendPushNotification, reportPushFailure } = require('../services/notificationService');
+        const pushResult = await sendPushNotification({
           tokens: driverRecord.push_token,
           title: 'New Trust Request',
           body: 'A customer wants to add you as a trusted driver',
           data: { type: 'trust_request', requestId: row.id },
         });
+        reportPushFailure(pushResult, { requestId: row.id, driverId, userId, notificationType: 'trust_request' });
       } catch (pushErr) {
         console.warn('[TrustedDriver] Push notification failed:', pushErr.message);
       }
@@ -212,13 +213,14 @@ class TrustedDriver extends BaseModel {
       );
       const pushToken = userResult.rows[0]?.push_token;
       if (pushToken) {
-        const { sendPushNotification } = require('../services/notificationService');
-        await sendPushNotification({
+        const { sendPushNotification, reportPushFailure } = require('../services/notificationService');
+        const pushResult = await sendPushNotification({
           tokens: pushToken,
           title: action === 'accept' ? 'Trust Request Accepted' : 'Trust Request Declined',
           body: message,
           data: { type: 'trust_response', driverId, status: newStatus },
         });
+        reportPushFailure(pushResult, { requestId, driverId, userId: row.user_id, notificationType: 'trust_response' });
       }
     } catch (pushErr) {
       console.warn('[TrustedDriver] Push notification failed:', pushErr.message);
