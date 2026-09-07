@@ -332,73 +332,90 @@ class Driver extends BaseModel {
     }
 
     if (io && orderId) {
+      const orderRow = await this.query(
+        "SELECT user_id, dropoff_lat, dropoff_lng, is_cash_delivery, status FROM orders WHERE id=$1",
+        [orderId],
+      );
+      const order = orderRow.rows[0] || null;
+
+      // §2.3 audit — previously the customer only ever learned an ETA via
+      // the one-time milestone toasts below (15/10/5/2 min, "arrived"),
+      // never a persistent figure they could check anytime. Same
+      // status gate as those toasts (only meaningful once the driver has
+      // something to travel toward), computed on every ping rather than
+      // only at milestone crossings, so the tracking screen can show a
+      // continuously-updated "ETA: 8 min" instead of relying solely on
+      // a transient banner at four fixed thresholds.
+      let eta = null;
+      if (order && ["in_transit", "driver_arrived_store"].includes(order.status)) {
+        const distKm = this.calculateDistance(lat, lng, order.dropoff_lat, order.dropoff_lng);
+        if (distKm !== null) {
+          eta = { distanceKm: Number(distKm.toFixed(2)), estimatedMins: this.estimateMinutes(distKm) };
+        }
+      }
+
       io.to(`order:${orderId}`).emit("driver_location", {
         driverId,
         orderId,
         lat,
         lng,
         timestamp: new Date().toISOString(),
+        eta,
       });
 
-      await this.sendArrivalNotifications(driverId, orderId, lat, lng, io);
+      if (order) {
+        await this.sendArrivalNotifications(order, orderId, lat, lng, io);
+      }
     }
   }
 
-  static async sendArrivalNotifications(driverId, orderId, lat, lng, io) {
-    const orderRow = await this.query(
-      "SELECT user_id, dropoff_lat, dropoff_lng, is_cash_delivery, status FROM orders WHERE id=$1",
-      [orderId],
+  static async sendArrivalNotifications(order, orderId, lat, lng, io) {
+    const distKm = this.calculateDistance(
+      lat,
+      lng,
+      order.dropoff_lat,
+      order.dropoff_lng,
     );
+    const mins = this.estimateMinutes(distKm);
 
-    if (orderRow.rows.length) {
-      const order = orderRow.rows[0];
-      const distKm = this.calculateDistance(
-        lat,
-        lng,
-        order.dropoff_lat,
-        order.dropoff_lng,
-      );
-      const mins = this.estimateMinutes(distKm);
+    if (distKm !== null && ["in_transit", "driver_arrived_store"].includes(order.status)) {
+      let milestone = null;
+      if (distKm <= 0.15) {
+        milestone = {
+          key: "arrived",
+          message: "Your driver has arrived!",
+        };
+      } else if (mins <= 2) {
+        milestone = { key: "2min", message: "Driver is 2 minutes away!" };
+      } else if (mins <= 5) {
+        milestone = { key: "5min", message: "Driver is 5 minutes away" };
+      } else if (mins <= 10) {
+        milestone = {
+          key: "10min",
+          message: "Driver is about 10 minutes away",
+        };
+      } else if (mins <= 15) {
+        milestone = {
+          key: "15min",
+          message: "Driver is about 15 minutes away",
+        };
+      }
 
-      if (distKm !== null && ["in_transit", "driver_arrived_store"].includes(order.status)) {
-        let milestone = null;
-        if (distKm <= 0.15) {
-          milestone = {
-            key: "arrived",
-            message: "Your driver has arrived!",
-          };
-        } else if (mins <= 2) {
-          milestone = { key: "2min", message: "Driver is 2 minutes away!" };
-        } else if (mins <= 5) {
-          milestone = { key: "5min", message: "Driver is 5 minutes away" };
-        } else if (mins <= 10) {
-          milestone = {
-            key: "10min",
-            message: "Driver is about 10 minutes away",
-          };
-        } else if (mins <= 15) {
-          milestone = {
-            key: "15min",
-            message: "Driver is about 15 minutes away",
-          };
-        }
+      if (milestone) {
+        io.to(`user:${order.user_id}`).emit("arrival_update", {
+          orderId,
+          milestone: milestone.key,
+          message: milestone.message,
+          distanceKm: distKm.toFixed(2),
+          estimatedMins: mins,
+        });
 
-        if (milestone) {
-          io.to(`user:${order.user_id}`).emit("arrival_update", {
+        if (order.is_cash_delivery && milestone.key === "5min") {
+          io.to(`user:${order.user_id}`).emit("cash_reminder", {
             orderId,
-            milestone: milestone.key,
-            message: milestone.message,
-            distanceKm: distKm.toFixed(2),
-            estimatedMins: mins,
+            message:
+              "Please have your cash ready — driver is almost there!",
           });
-
-          if (order.is_cash_delivery && milestone.key === "5min") {
-            io.to(`user:${order.user_id}`).emit("cash_reminder", {
-              orderId,
-              message:
-                "Please have your cash ready — driver is almost there!",
-            });
-          }
         }
       }
     }
