@@ -307,6 +307,8 @@ const sos = {
 const messages = {
   getMessages: (orderId)          => request(`/messages/${orderId}`),
   sendMessage: (orderId, content) => request(`/messages/${orderId}`, { method: 'POST', body: JSON.stringify({ content }) }),
+  reportUser: (orderId, reason, messageId) => request(`/messages/${orderId}/report`, { method: 'POST', body: JSON.stringify({ reason, messageId }) }),
+  blockUser:  (orderId)            => request(`/messages/${orderId}/block`, { method: 'POST' }),
 };
 
 const driverApi = {

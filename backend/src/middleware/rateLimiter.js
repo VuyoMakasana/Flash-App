@@ -129,6 +129,19 @@ const messageLimiter = rateLimit({
   ...storeOption,
 });
 
+// Chat report/block — 5 per hour. §2.7 audit: these should be rare, real
+// events, not something a legitimate user needs to do repeatedly in a short
+// window -- also raises the cost of using the report queue itself as a
+// harassment tool against a specific driver/customer.
+const reportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many reports/blocks submitted. Please wait before trying again.' },
+  ...storeOption,
+});
+
 // Trusted driver requests — 3 per hour (HIGH-2)
 const trustRequestLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -149,4 +162,5 @@ module.exports = {
   trustRequestLimiter,
   paymentLimiter,
   messageLimiter,
+  reportLimiter,
 };
