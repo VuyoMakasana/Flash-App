@@ -580,7 +580,7 @@ class AuthController {
           rejected:            'Application not approved. Contact support.',
           // Previously missing — fell through to the generic "Account not
           // approved" message, indistinguishable from a brand-new applicant.
-          suspended:           'Account suspended. Contact makasanaivyson@gmail.com.',
+          suspended:           'Account suspended. Contact support@flashdelivery.co.za.',
         };
         return res.status(403).json({ error: msgs[driver.status] || 'Account not approved', status: driver.status });
       }
