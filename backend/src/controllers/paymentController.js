@@ -360,6 +360,7 @@ class PaymentController {
         return res.status(409).json({ error: 'Delivery can only be confirmed after the order is marked delivered' });
       }
 
+      let commissionAmount;
       if (isCash) {
         await client.query(
           `UPDATE orders
@@ -367,7 +368,7 @@ class PaymentController {
            WHERE id = $1`,
           [orderId],
         );
-        await recordCashCommission(client, order.driver_id, orderId);
+        commissionAmount = await recordCashCommission(client, order.driver_id, orderId);
       }
 
       await client.query('COMMIT');
@@ -397,7 +398,7 @@ class PaymentController {
         status:         'completed',
         commission: {
           recorded: true,
-          amount:   20.00,
+          amount:   commissionAmount,
           blocked:  commissionStatus.blocked,
         },
       });

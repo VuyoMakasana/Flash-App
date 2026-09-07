@@ -2,8 +2,10 @@
 /**
  * driverCommissionService.js
  *
- * Handles the R20 cash commission system:
- *   - Records commission debt after each cash delivery
+ * Handles the cash commission debt system:
+ *   - Records commission debt after each cash delivery, computed per-order
+ *     via the same flashCommission formula used for card orders (see
+ *     Order.create / computeCommission), not a flat amount
  *   - Auto-deducts from wallet when balance allows
  *   - Blocks driver when thresholds exceeded (R200 debt OR 10 unpaid deliveries)
  *   - Deducts outstanding debt before every payout
@@ -13,10 +15,10 @@
  */
 
 const pool = require('../config/database');
+const { computeCommission } = require('../utils/helpers');
 
-const COMMISSION_AMOUNT = 20.00;   // R per cash delivery
-const DEBT_THRESHOLD    = 200.00;  // Block driver if debt >= R200
-const COUNT_THRESHOLD   = 10;      // Block driver if unpaid deliveries >= 10
+const DEBT_THRESHOLD  = 200.00;  // Block driver if debt >= R200
+const COUNT_THRESHOLD = 10;      // Block driver if unpaid deliveries >= 10
 
 // ─────────────────────────────────────────────────────────────────────────────
 // recordCashCommission
@@ -29,6 +31,21 @@ const COUNT_THRESHOLD   = 10;      // Block driver if unpaid deliveries >= 10
 // @param {string}        orderId
 // ─────────────────────────────────────────────────────────────────────────────
 async function recordCashCommission(client, driverId, orderId) {
+  // Compute what Flash actually earns on this specific delivery, using the
+  // exact same formula applied to card orders at creation time (Order.js's
+  // flashCommission = max(10, 25% of delivery_fee), via the shared
+  // computeCommission helper) rather than a flat placeholder. A cash driver
+  // owes Flash exactly what Flash would have kept had this been a card
+  // order, not a fixed amount regardless of order size.
+  const orderRes = await client.query(
+    `SELECT delivery_fee FROM orders WHERE id = $1`,
+    [orderId],
+  );
+  if (!orderRes.rows.length) {
+    throw new Error(`[Commission] Order ${orderId} not found`);
+  }
+  const { flashCommission: commissionAmount } = computeCommission(orderRes.rows[0].delivery_fee);
+
   // 1. Insert commission debt row (idempotent via ON CONFLICT DO NOTHING)
   const insertResult = await client.query(
     `INSERT INTO driver_commission_debts
@@ -36,12 +53,12 @@ async function recordCashCommission(client, driverId, orderId) {
      VALUES ($1, $2, $3, 'outstanding')
      ON CONFLICT (order_id) DO NOTHING
      RETURNING id`,
-    [driverId, orderId, COMMISSION_AMOUNT],
+    [driverId, orderId, commissionAmount],
   );
 
   // If nothing was inserted it means this order already had a debt row — skip.
   if (!insertResult.rows.length) {
-    return;
+    return commissionAmount;
   }
 
   // 2. Increment debt counters on driver_wallets
@@ -53,7 +70,7 @@ async function recordCashCommission(client, driverId, orderId) {
        SET cash_commission_debt      = driver_wallets.cash_commission_debt + $2,
            unpaid_cash_deliveries    = driver_wallets.unpaid_cash_deliveries + 1,
            updated_at                = NOW()`,
-    [driverId, COMMISSION_AMOUNT],
+    [driverId, commissionAmount],
   );
 
   // 3. Check if wallet balance covers the commission → auto-deduct
@@ -72,7 +89,7 @@ async function recordCashCommission(client, driverId, orderId) {
   const currentDebt     = parseFloat(wallet.cash_commission_debt);
   const unpaidCount     = parseInt(wallet.unpaid_cash_deliveries, 10);
 
-  if (walletBalance >= COMMISSION_AMOUNT) {
+  if (walletBalance >= commissionAmount) {
     // Auto-deduct from wallet
     await client.query(
       `UPDATE driver_wallets
@@ -81,7 +98,7 @@ async function recordCashCommission(client, driverId, orderId) {
            unpaid_cash_deliveries = GREATEST(0, unpaid_cash_deliveries - 1),
            updated_at             = NOW()
        WHERE driver_id = $2`,
-      [COMMISSION_AMOUNT, driverId],
+      [commissionAmount, driverId],
     );
 
     await client.query(
@@ -115,6 +132,8 @@ async function recordCashCommission(client, driverId, orderId) {
       await _blockDriver(client, driverId);
     }
   }
+
+  return commissionAmount;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,7 +335,6 @@ module.exports = {
   checkCommissionBlock,
   deductDebtBeforePayout,
   getWalletWithDebt,
-  COMMISSION_AMOUNT,
   DEBT_THRESHOLD,
   COUNT_THRESHOLD,
 };
