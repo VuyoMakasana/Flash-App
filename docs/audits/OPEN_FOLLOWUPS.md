@@ -388,3 +388,30 @@ before evaluating a dedicated flags service separately.)
    feature-flag support is sufficient before adopting a separate tool.
 2. Start with the highest-risk category first (payment/order-state-
    machine changes) rather than trying to flag everything at once.
+
+---
+
+## 11. No explicit failure handling on the tracking screen's MapView
+
+**Status:** Open — logged for awareness, not a fix candidate right now.
+**Added:** 2026-09-07 (production-readiness audit §2.6, live-usage
+failure scenarios).
+
+**What's true today:** `flash-user-app/screens/TrackingScreen.js`'s
+`MapView` (`react-native-maps`, `PROVIDER_GOOGLE`) has no `onError`
+handler. If the Google Maps API key were ever invalid, rate-limited, or
+the service unreachable, there's no explicit in-app handling for that
+case.
+
+**Why not fixed now:** `react-native-maps` degrades to a blank map
+canvas rather than crashing when tiles fail to load, and nothing else on
+the screen (order status, the persistent ETA added in §2.3, the driver
+card, chat/call buttons) depends on the map rendering successfully — so
+in practice this is a soft, low-severity gap. No evidence it's actually
+degrading the real experience; not worth building a fallback UI for
+speculatively.
+
+**To close this out, if it ever becomes a real problem:** add an
+`onError` handler that shows a small "map unavailable" banner in place
+of the blank canvas, so the gap is at least visibly explained rather than
+looking like a rendering bug.
