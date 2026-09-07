@@ -492,6 +492,31 @@ cron.schedule('30 1 * * *', async () => {
               [order.driver_id]
             );
             console.warn(`[Cron] Driver ${order.driver_id} auto-suspended after 5 cancellations`);
+
+            // §2.4 audit — previously only a console.warn, leaving no
+            // admin-visible record of why/when a system auto-suspension
+            // happened. An admin looking at a suspended driver's own detail
+            // page (which already sums driver_penalties for that driver,
+            // adminPanel.js) had no way to see this without digging through
+            // server logs — real friction for dispute resolution ("why was
+            // I suspended?"). amount=0 since this isn't a financial penalty,
+            // just a real, dated, reasoned row. Best-effort and isolated in
+            // its own catch — this is a record of an action that already
+            // happened; a failure to write it must never block the customer
+            // notification/reassignment steps still to come below.
+            try {
+              await pool.query(
+                `INSERT INTO driver_penalties (driver_id, order_id, amount, reason, status)
+                 VALUES ($1, $2, 0, $3, 'applied')`,
+                [
+                  order.driver_id,
+                  order.id,
+                  `Auto-suspended by system: cancel_count reached ${driverCheck.rows[0].cancel_count} after order ${order.id} was stuck in ${order.status} for over 45 minutes.`,
+                ],
+              );
+            } catch (penaltyErr) {
+              console.warn(`[Cron] Failed to record auto-suspension penalty row for driver ${order.driver_id}:`, penaltyErr.message);
+            }
           }
 
           // Notify user with a friendlier message than the generic order_update.

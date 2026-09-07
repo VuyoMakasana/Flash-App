@@ -208,3 +208,57 @@ improvement.
 3. Confirm the milestone thresholds (15/10/5/2 min, "arrived" at 150m)
    still make sense against real drive-time estimates rather than the
    straight-line ones they were tuned against.
+
+---
+
+## 6. GPS/location spoofing has no server-side plausibility check
+
+**Status:** Open — tracked future enhancement, not a pre-launch gate.
+**Added:** 2026-09-07 (production-readiness audit §2.4, driver
+fraud/theft/order-security lifecycle). **Not a new discovery** — already
+flagged as a HIGH finding in `docs/audits/PRODUCTION_READINESS_AUDIT.md`
+§8.1 (2026-07-15); recorded here too so it sits alongside this audit's
+other deferred cost/complexity decisions in one place, not to claim it as
+newly found.
+
+**What's true today:** `Driver.updateLocation()`
+(`backend/src/models/Driver.js`) does a bare `UPDATE` of whatever
+`lat`/`lng` the driver's app reports — no speed-over-time plausibility
+check (e.g., rejecting/flagging a ping that implies >150-200 km/h travel
+since the last one), and the Nelson Mandela Bay service-area geofence
+(`geoBoundary.js`) is only checked at order-dropoff creation and when a
+driver flips online, never re-validated on subsequent pings. A driver
+using a location-mocking tool (or calling the location endpoint directly
+with fabricated coordinates) can report a position adjacent to any
+pickup point to win order-matching priority (`autoMatchService.js`
+computes nearest-driver directly off this same unvalidated,
+self-reported location) regardless of true physical location, and the
+persistent ETA / arrival-milestone system added in this audit's §2.3
+work would show equally confident (and equally wrong) numbers for a
+spoofed position, since neither knows the difference between a real and
+a faked ping.
+
+**Why deferred:** a real fix (device attestation via Play Integrity API /
+Apple DeviceCheck to detect a rooted/mocked-location device, or even the
+simpler speed-plausibility check `PRODUCTION_READINESS_AUDIT.md` §8.1
+recommends) is a genuine scope/complexity decision, not a quick patch —
+same treatment as masked calling (§2.2) and real road-routing ETA (§5
+above): a real engineering investment, not something to build
+speculatively without the founder weighing the cost against how much
+this matters at current driver volume.
+
+**To close this out:**
+1. Start with the cheap version `PRODUCTION_READINESS_AUDIT.md` §8.1
+   already recommends: a speed-plausibility check between consecutive
+   pings in `Driver.updateLocation()` (flag, don't necessarily block —
+   a false positive blocking a real driver's legitimate ping is worse
+   than a missed detection), plus re-running the geofence check
+   periodically instead of only at the online-toggle moment.
+2. If spoofing is ever observed as a real, material problem (not just a
+   theoretical gap), consider device-attestation APIs (Play
+   Integrity/DeviceCheck) — a bigger mobile-side change, only worth it
+   once there's evidence of actual abuse rather than built ahead of need.
+3. Whatever's built should feed the same admin-visibility principle as
+   the rest of §2.4 — a flagged/suspicious ping should be reconstructable
+   by an admin later (who, when, what the implausible jump was), not just
+   silently rejected or silently logged to console.
