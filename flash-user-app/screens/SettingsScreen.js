@@ -29,7 +29,7 @@ export default function SettingsScreen() {
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Account',
-      'This will permanently delete your account, order history, and all personal data. This cannot be undone.',
+      'This will permanently delete your personal details, saved addresses, and saved cards. This cannot be undone. Your past order history is kept for accounting purposes but is no longer linked to your name or contact details.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -42,7 +42,7 @@ export default function SettingsScreen() {
               await logout();
             } catch (e) {
               if (e.message === 'SESSION_EXPIRED') return;
-              Alert.alert('Error', e.message || 'Could not delete account. Contact makasanaivyson@gmail.com');
+              Alert.alert('Error', e.message || 'Could not delete account. Contact support@flashdelivery.co.za');
             } finally {
               setDeleting(false);
             }
