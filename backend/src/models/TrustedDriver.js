@@ -1,6 +1,7 @@
 'use strict';
 
 const BaseModel = require('./BaseModel');
+const { checkCommissionBlock } = require('../services/driverCommissionService');
 
 /**
  * TrustedDriver model
@@ -177,6 +178,22 @@ class TrustedDriver extends BaseModel {
   }
 
   static async respondToRequest(requestId, driverId, action, io) {
+    // Production-readiness audit §2.8 — a commission-debt-blocked driver
+    // was already correctly unable to accept new *orders* (driverController.
+    // acceptOrder's own checkCommissionBlock gate), but nothing stopped
+    // them accepting a new *trust* relationship while blocked — leaving a
+    // customer under the impression they have a "trusted" driver who
+    // currently cannot fulfill anything for them at all. Declining is
+    // always allowed regardless of debt (there's no reason to force that).
+    if (action === 'accept') {
+      const block = await checkCommissionBlock(driverId);
+      if (block.blocked) {
+        throw new Error(
+          `Outstanding commission debt of R${block.debtAmount.toFixed(2)} — pay this before accepting new trusted-driver requests.`,
+        );
+      }
+    }
+
     const newStatus = action === 'accept' ? 'accepted' : 'declined';
     const result = await this.query(
       `UPDATE trusted_drivers SET status=$1, updated_at=NOW()
