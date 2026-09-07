@@ -131,7 +131,7 @@ module.exports = () => ({
       ],
     ],
     extra: {
-      privacyPolicyUrl: 'https://flash-website.netlify.app/privacy',
+      privacyPolicyUrl: 'https://flashdelivery.co.za/privacy',
       eas: {
         projectId: '461d43ca-086d-4104-9a07-81897f2d7962',
       },

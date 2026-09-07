@@ -170,6 +170,32 @@ class Driver extends BaseModel {
       throw err;
     }
 
+    // Production-readiness audit, §2.1 — found live-untouched: real
+    // government ID, driver's license, police clearance, and vehicle
+    // registration scans, the single most sensitive category of personal
+    // data anywhere in this system, sitting in Cloudinary and in
+    // driver_documents indefinitely after "deletion." Unlike orders/
+    // payouts (a real accounting reason to keep them), a KYC document
+    // serves no purpose once this driver is gone — deleted from Cloudinary
+    // itself, not just the DB row, using the real deleteFile() already
+    // built for exactly this (previously unused anywhere in the codebase).
+    // Done before anonymizing the driver row, while driverId still points
+    // at a real, currently-suspendable account; a best-effort per-file
+    // catch means one bad Cloudinary response can't block the rest of
+    // account deletion, which the driver is relying on completing.
+    const documents = await this.query(
+      `SELECT public_id, resource_type FROM driver_documents WHERE driver_id = $1 AND public_id IS NOT NULL`,
+      [driverId],
+    );
+    for (const doc of documents.rows) {
+      try {
+        await s3Service.deleteFile(doc.public_id, doc.resource_type || "image");
+      } catch (err) {
+        console.error(`[Driver] deleteAccount: failed to delete Cloudinary file ${doc.public_id}:`, err.message);
+      }
+    }
+    await this.query(`DELETE FROM driver_documents WHERE driver_id = $1`, [driverId]);
+
     const anonymizedEmail = `deleted-${driverId}@flash.invalid`;
     const password_hash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
 

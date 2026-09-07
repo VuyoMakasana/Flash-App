@@ -1067,6 +1067,25 @@ async function migrate() {
     throw err;
   } finally {
     client35.release();
+  }
+
+  // ── v36 ────────────────────────────────────────────────────────────────────
+  // Merge note (production-readiness-audit, 2026-09-07): this was v29 on
+  // main's own lineage (marketing waitlist/contact/application tables),
+  // developed in parallel with this branch's real v29 (stores table) with
+  // no shared history to catch the collision. Renumbered here to the next
+  // free slot rather than fixed in place — v29 the stores migration is
+  // already real and already applied on every branch that has it, so
+  // renumbering an already-applied migration would be far riskier than
+  // renumbering one that isn't deployed anywhere yet.
+  const client36 = await pool.connect();
+  try {
+    await migrateV36(client36);
+  } catch (err) {
+    console.error('Migration v36 failed:', err.message);
+    throw err;
+  } finally {
+    client36.release();
     await pool.end();
   }
 
@@ -1864,6 +1883,66 @@ async function migrateV29(client) {
   }
 }
 
+// ─── v36: Marketing website leads (waitlist, contact, driver/seller applications) ─
+// Merge note (production-readiness-audit, 2026-09-07): this was v29 on
+// main's own lineage, developed in parallel with this branch's real v29
+// (stores table, above) with no shared history to catch the collision.
+// Renumbered to v36 -- see the call-site merge note near the top of
+// runMigrations() for why the renumbering went here rather than onto the
+// stores migration.
+// The public marketing site (flash-website-rebuild) has its own waitlist,
+// contact, and driver/seller application forms. These previously called a
+// separate, undeployed Node service (flash-server) that wrote to a local
+// JSON file — no notification path, no admin view, and (separately) never
+// actually deployed anywhere, so every real submission has been silently
+// lost. Moved into this backend's real Postgres database instead: one place
+// to see everything (the AdminJS panel already in daily use), and a real
+// email notification via the existing admin-email path (emailService's
+// getAdminEmails), rather than running and maintaining a second backend
+// service for three small public forms.
+async function migrateV36(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE TABLE IF NOT EXISTS marketing_waitlist (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      email VARCHAR(255) NOT NULL UNIQUE,
+      role VARCHAR(20) NOT NULL DEFAULT 'customer' CHECK (role IN ('customer','seller','driver')),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS marketing_contact_messages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      subject VARCHAR(100) NOT NULL,
+      message TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS marketing_applications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      applicant_type VARCHAR(10) NOT NULL CHECK (applicant_type IN ('driver','seller')),
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      city VARCHAR(100),
+      message TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_waitlist_created ON marketing_waitlist(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_contact_created ON marketing_contact_messages(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_applications_created ON marketing_applications(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_applications_type ON marketing_applications(applicant_type, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v36 completed: marketing_waitlist, marketing_contact_messages, marketing_applications');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v36 failed:', err.message);
+    throw err;
+  }
+}
+
 // docs/audits/MULTI_TENANT_ARCHITECTURE_BLUEPRINT.md §3 step 2: the
 // type-consistency fix, now that a real `stores` row exists to point at.
 // orders.store_id is already UUID (migration v27) but has no FK constraint
@@ -2258,4 +2337,4 @@ async function migrateV35(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35 };
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36 };

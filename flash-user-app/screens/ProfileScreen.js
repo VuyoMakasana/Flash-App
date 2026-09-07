@@ -109,12 +109,12 @@ export default function ProfileScreen() {
             // ADDED: Privacy Policy link — POPIA legally requires this to be accessible in-app
           // Opens the real, live Privacy Policy directly rather than the
           // stale hardcoded text PrivacyPolicyScreen.js used to show.
-          { icon: 'shield-checkmark-outline', label: 'Privacy Policy',  onPress: () => Linking.openURL('https://flash-website.netlify.app/privacy') },
+          { icon: 'shield-checkmark-outline', label: 'Privacy Policy',  onPress: () => Linking.openURL('https://flashdelivery.co.za/privacy') },
           // H8 FIX: "Settings" was previously unreachable from anywhere in the
           // app — it's the only screen with a "Delete Account" entry point.
           { icon: 'settings-outline',         label: 'Settings',        onPress: () => navigation.navigate('Settings') },
           // Previously a real no-op (onPress: () => {}) — tapping did nothing at all.
-          { icon: 'help-circle-outline',      label: 'Help & Support',  onPress: () => Linking.openURL('mailto:makasanaivyson@gmail.com') },
+          { icon: 'help-circle-outline',      label: 'Help & Support',  onPress: () => Linking.openURL('mailto:support@flashdelivery.co.za') },
         ].map(item => (
           <Pressable key={item.label} style={styles.menuRow} onPress={item.onPress}>
             <Ionicons name={item.icon} size={20} color="#374151" />

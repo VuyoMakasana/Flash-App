@@ -93,6 +93,11 @@ module.exports = {
     settlement_config:               'Multi-tenant Stage 1 — schema + seed only (7-day global cycle default). Settlement-cycle configuration UI is a later stage, not yet approved.',
     store_settlements:               'Multi-tenant Stage 1 — schema only, zero rows yet (no settlement calculation logic wired in this stage). Settlement review/payout UI is a later stage.',
     store_settlement_line_items:     'Multi-tenant Stage 1 — schema only, zero rows yet, same as store_settlements above.',
+
+    // ── Marketing site leads (migrate.js v36) ────────────────────────────
+    marketing_waitlist:           'Real AdminJS resource — early-access signups from the public marketing site, also triggers an admin email on each new signup.',
+    marketing_contact_messages:   'Real AdminJS resource — Contact page submissions from the public marketing site, also triggers an admin email.',
+    marketing_applications:      'Real AdminJS resource — driver/seller application form submissions from the public marketing site, also triggers an admin email.',
   },
 
   intentionallyExcluded: {

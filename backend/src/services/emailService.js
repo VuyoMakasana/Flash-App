@@ -250,7 +250,71 @@ async function sendSosAlertEmail({ alertId, orderId, orderNumber, triggeredByRol
   });
 }
 
+// ─── Marketing site leads (waitlist / contact / driver+seller applications) ─
+// Same notification shape as sendReturnAwaitingReviewEmail / sendSosAlertEmail
+// above — email to every real admin, since there is no other real-time
+// channel for these (no admin currently has the panel open watching for a
+// new public-site submission the way an order/return is watched).
+async function sendMarketingLeadEmail({ kind, email, role, name, subject, message, applicantType, city }) {
+  const adminEmails = await getAdminEmails();
+  if (!adminEmails.length) {
+    console.warn('[Email] No admin accounts found — skipping marketing lead notification');
+    return null;
+  }
+
+  let subjectLine, textBody, htmlBody;
+
+  if (kind === 'waitlist') {
+    subjectLine = `New early-access signup — ${email}`;
+    textBody = `${email} joined the FLASH early-access list as a ${role}.`;
+    htmlBody = `<p><strong>${escapeHtmlLite(email)}</strong> joined the FLASH early-access list as a <strong>${escapeHtmlLite(role)}</strong>.</p>`;
+  } else if (kind === 'contact') {
+    subjectLine = `New contact message — ${subject} (${name})`;
+    textBody = `From: ${name} <${email}>\nSubject: ${subject}\n\n${message}`;
+    htmlBody = `<p><strong>${escapeHtmlLite(name)}</strong> (${escapeHtmlLite(email)}) — subject: <strong>${escapeHtmlLite(subject)}</strong></p><p>${escapeHtmlLite(message).replace(/\n/g, '<br>')}</p>`;
+  } else if (kind === 'application') {
+    subjectLine = `New ${applicantType} application — ${name}`;
+    textBody = `${name} <${email}> applied to be a ${applicantType}${city ? ` (${city})` : ''}.\n\n${message}`;
+    htmlBody = `<p><strong>${escapeHtmlLite(name)}</strong> (${escapeHtmlLite(email)}) applied to be a <strong>${escapeHtmlLite(applicantType)}</strong>${city ? ` in ${escapeHtmlLite(city)}` : ''}.</p><p>${escapeHtmlLite(message).replace(/\n/g, '<br>')}</p>`;
+  } else {
+    return null;
+  }
+
+  return sendEmail({
+    to:      adminEmails,
+    subject: subjectLine,
+    text:    textBody,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="display:inline-block;background:#0a0a0a;border-radius:16px;padding:16px">
+        <span style="color:#fff;font-size:28px;font-weight:900;letter-spacing:4px">FLASH</span>
+      </div>
+    </div>
+    <h2 style="color:#111827;margin-top:0">${escapeHtmlLite(subjectLine)}</h2>
+    <div style="color:#374151">${htmlBody}</div>
+    <p style="color:#9ca3af;font-size:12px;border-top:1px solid #f3f4f6;padding-top:16px;margin-bottom:0">
+      From the flashdelivery.co.za marketing site — visible in the admin panel.
+    </p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
+// Minimal escaping — same purpose as adminPanel.js's own escapeHtml, kept
+// local here since these two files don't otherwise share helpers.
+function escapeHtmlLite(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 module.exports = {
   sendPasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
-  sendSosAlertEmail,
+  sendSosAlertEmail, sendMarketingLeadEmail,
 };

@@ -137,6 +137,21 @@ class User extends BaseModel {
       throw new Error("User not found");
     }
 
+    // Production-readiness audit, §2.1 — found live-untouched by this
+    // function despite being real personal data, distinct in kind from the
+    // orders/payments/messages the comment above deliberately preserves.
+    // Those are historical transaction records Flash has a real accounting/
+    // dispute/tax reason to keep; a saved card and a saved delivery address
+    // are live, reusable credentials/PII that served only this user's own
+    // convenience — nothing downstream depends on either still existing
+    // (payment_methods.authorization_code is Paystack's own reference, not
+    // FK'd from payments/orders; addresses already has ON DELETE CASCADE
+    // from users, confirming the schema itself never expected these rows to
+    // outlive the account). Hard-deleted, not anonymized — there is no
+    // reason to keep a dead card or a stale gate code around.
+    await this.query(`DELETE FROM payment_methods WHERE user_id = $1`, [userId]);
+    await this.query(`DELETE FROM addresses WHERE user_id = $1`, [userId]);
+
     await this.query(
       `UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`,
       [userId],
