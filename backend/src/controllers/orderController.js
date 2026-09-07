@@ -318,6 +318,25 @@ class OrderController {
         });
       }
 
+      // Production-readiness audit, §2.4 — the exact same class of bug as
+      // the 'completed'/OTP bypass above, undiscovered until now: both
+      // driver_arrived_store->picked_up and in_transit->delivered are real,
+      // ALLOWED_TRANSITIONS-valid targets this generic endpoint had no
+      // awareness are supposed to require a real photo first
+      // (submitPickupPhoto/submitDropoffPhoto, driverRoutes.js) — confirmed
+      // by reading the code, this endpoint let a driver reach either state
+      // directly with zero photo evidence, fully defeating the
+      // package-protection mechanism those two endpoints exist for. No
+      // return-order exception here (unlike 'completed' above) — a return
+      // order has no OTP participant on the receiving end, but still needs
+      // real proof it was picked up from the customer and dropped at
+      // Flash's own store.
+      if (['picked_up', 'delivered'].includes(normalizeState(status))) {
+        return res.status(409).json({
+          error: 'Use the pickup/drop-off photo capture to advance this order.',
+        });
+      }
+
       const updated = await updateOrderStatus(req.params.orderId, status, {
         actorId: req.userId,
         actorRole: 'driver',
