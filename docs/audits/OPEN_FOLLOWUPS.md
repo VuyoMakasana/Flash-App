@@ -262,3 +262,129 @@ this matters at current driver volume.
    the rest of §2.4 — a flagged/suspicious ping should be reconstructable
    by an admin later (who, when, what the implausible jump was), not just
    silently rejected or silently logged to console.
+
+---
+
+## 7. Backend runs as a single instance on Render's free tier
+
+**Status:** Open — deferred cost decision, not a pre-launch gate.
+**Added:** 2026-09-07 (production-readiness audit §2.5, deployment
+safety).
+
+**What's true today:** the `Flash-App` Render service is confirmed
+(via Render's own API) running `numInstances: 1` on `plan: free`. Two
+distinct real implications: zero redundancy (any crash, hung process, or
+bad deploy takes the entire backend down with no failover), and Render's
+free tier spins a service down after ~15 minutes of inactivity, cold-
+starting (real added latency, plausibly tens of seconds) on the next
+request — a realistic pattern for a closed pilot with sporadic usage.
+
+**Why deferred:** upgrading to a paid plan and/or running multiple
+instances is a real, recurring cost decision — appropriate to make
+deliberately as usage grows, not a code fix.
+
+**To close this out:**
+1. Decide the trigger point (real user complaints about cold-start
+   latency, or simply "before public launch") for upgrading off the free
+   tier.
+2. If moving to multiple instances, note that `Driver.updateLocation()`'s
+   `_pingCounters` (the "persist every 5th ping" counter,
+   `backend/src/models/Driver.js`) is in-memory and per-process — it
+   would need to move to something shared (Redis, or a DB-tracked
+   counter) to keep working correctly across instances; today, with 1
+   instance, this isn't an issue.
+3. Apply the build-command/health-check fixes in
+   `docs/audits/DEPLOYMENT_SAFETY_RECOMMENDATIONS.md` first regardless —
+   they're correct at any instance count and cost nothing.
+
+---
+
+## 8. No staging environment; Render service config isn't version-controlled
+
+**Status:** Open — deferred, not a pre-launch gate.
+**Added:** 2026-09-07 (production-readiness audit §2.5).
+
+**What's true today:** every change goes straight from local Docker-
+sandbox testing to production — there's no shared staging deployment.
+Separately, the Render service's own configuration (build/start commands,
+health check, plan, region) exists only in Render's dashboard, not as a
+version-controlled `render.yaml` Blueprint in this repo — so there's no
+reproducible, reviewable record of the production service's own
+configuration, and no easy way to spin up a second (staging) copy of it
+from the repo alone.
+
+**Why deferred:** a real staging environment is a recurring cost (a
+second Postgres instance, a second web service) and a real workflow
+change (a promote-to-production step); worth building deliberately once
+the team/change velocity justifies it, not speculatively now.
+
+**To close this out:**
+1. Consider a `render.yaml` Blueprint checked into the repo, even before
+   standing up a real staging service — it would at least make the
+   production config reviewable/versioned, and is the natural vehicle
+   for a future staging environment (a Blueprint can define both
+   services, pointed at different branches).
+2. When ready for staging, model its data from a sanitized copy of
+   production, not a live replica — this repo already has no export/seed
+   tooling for that, worth building alongside.
+
+---
+
+## 9. No mobile app-version / force-update gating
+
+**Status:** Open — deferred, not a pre-launch gate.
+**Added:** 2026-09-07 (production-readiness audit §2.5).
+
+**What's true today:** nothing in the backend checks the calling app's
+version, and neither app has a "please update" flow. If a backend API
+change is ever breaking for an older app version still in real use
+(plausible during an App Store/Play Store review delay, when both old
+and new versions can be live simultaneously against the same backend),
+there's no mechanism to detect or gate that — compatibility depends
+entirely on backward-compatibility discipline in how backend changes are
+made, not an enforced mechanism.
+
+**Why deferred:** low urgency at current scale/release cadence (a closed
+pilot with infrequent releases); building this is a real, if small,
+cross-cutting change (both apps need to report their version on every
+relevant request, and the backend needs a real minimum-version registry
+plus a real "update required" UI state in both apps).
+
+**To close this out:**
+1. Add an app-version header (or query param) sent on every API request
+   from both apps (already have `EXPO_PUBLIC_API_BASE_URL` as a precedent
+   for app-level config; the app's own version is available via
+   `expo-constants`).
+2. Backend: a simple minimum-supported-version config (env var or a
+   tiny DB table), checked in `middleware/auth.js` or a dedicated
+   middleware, returning a distinct error code an old app can recognize.
+3. Both apps: a real "please update" screen/blocking modal when that
+   error code is received, linking to the relevant app store.
+
+---
+
+## 10. No feature-flag / kill-switch system
+
+**Status:** Open — deferred, not a pre-launch gate.
+**Added:** 2026-09-07 (production-readiness audit §2.5).
+
+**What's true today:** every deploy is all-or-nothing — there's no way
+to gradually roll out a risky change to a subset of users, or to
+instantly disable a broken feature without a full redeploy (and, per
+item #1/#7 above, a redeploy currently also means re-running the manual
+migration step and briefly dropping every live socket connection).
+
+**Why deferred:** a real third-party service or in-house system
+(LaunchDarkly, GrowthBook, or even a simple DB-backed flags table) is a
+deliberate infrastructure investment, not a quick patch — worth adopting
+once there's a specific risky feature that would benefit from gradual
+rollout, rather than built speculatively now. (Note: PostHog, already
+planned for analytics per this audit's §3.4, includes basic feature
+flags in its free tier — worth checking whether it covers this need
+before evaluating a dedicated flags service separately.)
+
+**To close this out:**
+1. When PostHog is installed (§3.4), evaluate whether its built-in
+   feature-flag support is sufficient before adopting a separate tool.
+2. Start with the highest-risk category first (payment/order-state-
+   machine changes) rather than trying to flag everything at once.
