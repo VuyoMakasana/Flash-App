@@ -81,9 +81,10 @@ export default function CheckoutScreen() {
 
   // ── Fetch saved addresses so the delivery-address field can be picked
   // instead of retyped every time (Home/Work/Other, per AddressScreen.js).
-  // The typed/selected text is still just a label sent to the driver -
-  // dropoff_lat/dropoff_lng always come from the device's live GPS position
-  // below, unchanged, since this app has no address-to-coordinate geocoding.
+  // The typed/selected text is the label sent to the driver; the actual
+  // dropoff_lat/dropoff_lng resolution (selected address's own geocoded
+  // coordinates when available, live GPS as fallback) happens in
+  // handleProceedToPayment below.
   useEffect(() => {
     const loadSavedAddresses = async () => {
       try {

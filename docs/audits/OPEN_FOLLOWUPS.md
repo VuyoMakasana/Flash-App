@@ -128,3 +128,83 @@ masking a real commission-deduction bug instead of a stale test.
    green (this was the last remaining known failure once
    `premium_subscription_payments` was added to `adminCoverage.js`,
    §2.1/§2.14).
+
+---
+
+## 4. No wrong-direction / off-course detection for a driver mid-delivery
+
+**Status:** Open — tracked future enhancement, not a pre-launch gate.
+**Added:** 2026-09-07.
+
+**What's true today:** the production-readiness audit (§2.3, navigation
+and live tracking) confirmed real *time-based* stuck-delivery detection
+exists (the 45-min `driver_assigned`/`driver_arrived_store` reassignment
+cron in `server.js`, plus `orders.driver_connection_flagged_at` for a
+driver gone silent mid-delivery) but nothing *spatial* — no check
+anywhere for a driver whose live position is moving away from the
+destination rather than toward it, or who's stopped making progress
+without going fully silent.
+
+**Why deferred:** this is a real quality/fraud-adjacent improvement
+(overlaps with §2.4's driver-fraud lifecycle) but not a safety or
+compliance blocker for the closed pilot — the founder classified it as a
+quality improvement, not a pre-launch gate, distinct from items like
+`DRIVER_TEST_MODE` or Paystack going live.
+
+**To close this out:**
+1. Design a bearing/heading-based algorithm using the existing
+   `driver_locations` history (persisted every 5th ping) — e.g., comparing
+   the trend of `calculateDistance()` (`Driver.js`) to the dropoff over the
+   last N persisted points, not a single ping, to avoid false positives
+   from normal street-routing detours (a driver going "away" briefly to
+   take a real road is not the same as actually heading the wrong way).
+2. Decide the false-positive tolerance carefully before building anything
+   — a same-day courier in an unfamiliar area legitimately backtracks;
+   flagging that as suspicious too eagerly would create noise admins
+   learn to ignore, defeating the point.
+3. Surface it as an admin-visible flag/alert (§2.13), not an automatic
+   penalty against the driver — a human should confirm before any
+   consequence (matches the "admin must be able to reconstruct exactly
+   what happened" bar from §2.4).
+
+---
+
+## 5. ETA is straight-line distance ÷ assumed speed, not real road-routing time
+
+**Status:** Open — tracked future enhancement, not a pre-launch gate.
+**Added:** 2026-09-07.
+
+**What's true today:** `Driver.calculateDistance()`/`estimateMinutes()`
+(`backend/src/models/Driver.js`) compute a haversine (straight-line)
+distance between the driver's current ping and the order's dropoff, then
+divide by an assumed flat 25km/h to get minutes. This is now surfaced
+persistently on the customer's tracking screen (§2.3 fix, not just the
+four milestone toasts) as well as feeding those toasts and the cash
+reminder. It's a reasonable approximation for a compact same-day courier
+context, but will be visibly wrong on routes with real detours, one-way
+streets, or traffic — a driver 500m away by road can be much further by
+the assumed flat speed if the direct line crosses water/a blocked route,
+and vice versa.
+
+**Why deferred:** a real fix means integrating a routing API (Google
+Directions/Distance Matrix, or similar) that returns actual drive-time
+estimates along real roads — a genuine recurring third-party cost and a
+new external dependency, the same shape of decision as the masked-calling
+one deferred from §2.2. Not a safety/compliance blocker, a quality
+improvement.
+
+**To close this out:**
+1. Pick a routing provider and confirm its NMB-area (Nelson Mandela Bay)
+   coverage and pricing at expected ping volume — note `driver_locations`
+   only persists every 5th ping, but ETA is computed on *every* ping
+   today (`Driver.updateLocation`), so a naive per-ping routing-API call
+   would be far more expensive than the current in-process haversine
+   math; would need throttling (e.g., only re-query the routing API every
+   N seconds or M meters of movement) to be cost-viable.
+2. Replace `calculateDistance`/`estimateMinutes`'s straight-line math with
+   the routing API's real distance/duration for the same two call sites
+   (the persistent ETA and the milestone-toast thresholds) so both stay
+   consistent with each other.
+3. Confirm the milestone thresholds (15/10/5/2 min, "arrived" at 150m)
+   still make sense against real drive-time estimates rather than the
+   straight-line ones they were tuned against.

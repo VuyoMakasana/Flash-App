@@ -65,6 +65,11 @@ export default function TrackingScreen() {
   // driver's location, not just the marker position.
   const [lastLocationUpdate, setLastLocationUpdate] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
+  // §2.3 audit — a persistent, continuously-updated ETA, distinct from the
+  // one-time milestone toasts below (which only fire at four fixed
+  // thresholds and then disappear). Comes from the same driver_location
+  // event as the map marker position, so it updates on every ping.
+  const [eta, setEta] = useState(null);
   // Arrival notification banner
   const [arrivalBanner, setArrivalBanner]   = useState(null);
   const [shownMilestones, setShownMilestones] = useState(new Set());
@@ -192,6 +197,7 @@ export default function TrackingScreen() {
         if (data.driverId) {
           setDriverLocation({ lat: data.lat, lng: data.lng });
           if (data.timestamp) setLastLocationUpdate(new Date(data.timestamp));
+          setEta(data.eta || null);
           if (mapRef.current) {
             mapRef.current.animateToRegion({
               latitude:      parseFloat(data.lat),
@@ -420,6 +426,21 @@ export default function TrackingScreen() {
                   </View>
                 )}
               </View>
+              {/* §2.3 audit — a persistent ETA the customer can check any
+                  time, not just the one-off milestone toasts (which fire
+                  once at four fixed thresholds and then vanish). Hidden
+                  once the driver's connection looks lost — a stale ping's
+                  distance/ETA would otherwise be shown as if it were
+                  current, which is worse than showing nothing. */}
+              {eta && !driverConnectionLost && (
+                <View style={styles.etaRow}>
+                  <Ionicons name="time-outline" size={13} color="#0a0a0a" />
+                  <Text style={styles.etaText}>
+                    {eta.estimatedMins <= 1 ? 'Arriving now' : `${eta.estimatedMins} min away`}
+                    {'  •  '}{eta.distanceKm < 1 ? `${Math.round(eta.distanceKm * 1000)}m` : `${eta.distanceKm}km`}
+                  </Text>
+                </View>
+              )}
               <View style={styles.driverMetaRow}>
                 <Text style={styles.driverMeta}>
                   {driver.vehicle}{driver.plate ? ` (${driver.plate})` : ''}  •  {parseFloat(driver.rating || 5).toFixed(1)}
@@ -564,6 +585,8 @@ const styles = StyleSheet.create({
   driverName:    { fontWeight: '800', color: '#111827' },
   driverMeta:    { color: '#6b7280', fontSize: 12, marginTop: 2 },
   driverMetaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  etaRow:        { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+  etaText:       { color: '#0a0a0a', fontSize: 13, fontWeight: '700' },
   locationFreshness:      { color: '#9ca3af', fontSize: 11, marginTop: 3 },
   locationFreshnessStale: { color: '#dc2626', fontWeight: '700' },
   connectionLostBanner: {
