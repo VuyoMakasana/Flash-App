@@ -54,6 +54,9 @@ class MessageController {
       if (err.message === "Access denied") {
         return res.status(403).json({ error: "Access denied" });
       }
+      if (err.message === "BLOCKED") {
+        return res.status(403).json({ error: "You can't message this person." });
+      }
       if (err.message === "CONVERSATION_CLOSED") {
         return res.status(409).json({
           error: "This conversation has closed for this order. Contact support@flashdelivery.co.za if you still need help.",

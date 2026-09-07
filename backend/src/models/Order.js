@@ -11,6 +11,7 @@
 const BaseModel = require('./BaseModel');
 const { randomBytes } = require('crypto');
 const { calculateDistance } = require('../utils/helpers');
+const UserBlock = require('./UserBlock');
 
 // H-4 FIX: delivery fee used to be picked by the client (matching
 // pickup_mall_id/dropoff_mall_id, both client-supplied with no malls table
@@ -378,6 +379,16 @@ class Order extends BaseModel {
     const order = result.rows[0];
     if (userId   && order.user_id   !== userId)   return null;
     if (driverId && order.driver_id !== driverId) return null;
+
+    // §2.7 audit — a block cuts off calling on this order immediately too,
+    // not just chat. There's no masked-calling layer yet (deferred to the
+    // pre-launch checklist, §2.2), so this can't erase a number the other
+    // party may have already noted down before blocking -- but it stops
+    // the app itself from displaying/re-serving it going forward, and the
+    // mobile Call button hides itself once phone is missing.
+    if (order.driver_id && (await UserBlock.isBlockedPair(order.user_id, order.driver_id))) {
+      order.driver_phone = null;
+    }
     return order;
   }
 
@@ -402,6 +413,20 @@ class Order extends BaseModel {
       LIMIT $2 OFFSET $3
     `;
     const result = await this.query(sql, [userId, limit, offset]);
+
+    // §2.7 audit — same phone redaction as getByIdWithDetails, batched: one
+    // query for all of this customer's blocked driver ids (bounded by
+    // their own block count, not this page's size or the platform's total
+    // order/block volume), then a plain in-memory Set lookup per row --
+    // never a per-row query, regardless of how many distinct drivers
+    // appear across this page of orders.
+    const blockedDriverIds = new Set(await UserBlock.getBlockedDriverIdsForUser(userId));
+    if (blockedDriverIds.size) {
+      result.rows.forEach((row) => {
+        if (blockedDriverIds.has(row.driver_id)) row.driver_phone = null;
+      });
+    }
+
     return result.rows;
   }
 

@@ -22,6 +22,7 @@ export default function ChatScreen() {
   const [sending, setSending]     = useState(false);
   const [connected, setConnected] = useState(false);
   const [closed,    setClosed]    = useState(false);
+  const [blocked,   setBlocked]   = useState(false);
   const listRef                   = useRef(null);
   const socketRef                 = useRef(null);
 
@@ -35,6 +36,7 @@ export default function ChatScreen() {
         const data = await api.messages.getMessages(orderId);
         setMessages(data.messages || []);
         setClosed(!!data.closed);
+        setBlocked(!!data.blocked);
       } catch (e) {
         Alert.alert('Error', 'Could not load messages');
       } finally {
@@ -111,7 +113,9 @@ export default function ChatScreen() {
     } catch (e) {
       // Remove temp message on failure
       setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
-      if (e.message?.includes('conversation has closed')) {
+      if (e.message?.includes("can't message this")) {
+        setBlocked(true);
+      } else if (e.message?.includes('conversation has closed')) {
         setClosed(true);
         Alert.alert('Conversation Closed', e.message);
       } else {
@@ -156,7 +160,7 @@ export default function ChatScreen() {
   const handleBlock = () => {
     Alert.alert(
       'Block this driver?',
-      "You won't be paired with this driver again on future orders. This won't affect your current order.",
+      "Messaging and calling with this driver will stop immediately, and you won't be paired with them again on future orders. Your current delivery will still complete normally.",
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -165,7 +169,8 @@ export default function ChatScreen() {
           onPress: async () => {
             try {
               await api.messages.blockUser(orderId);
-              Alert.alert('Driver blocked', "You won't be matched with this driver again.");
+              setBlocked(true);
+              Alert.alert('Driver blocked', "Messaging with this driver has stopped, and you won't be matched with them again.");
             } catch (e) {
               Alert.alert('Could not block driver', e.message || 'Please try again.');
             }
@@ -251,7 +256,12 @@ export default function ChatScreen() {
       )}
 
       {/* Input bar */}
-      {closed ? (
+      {blocked ? (
+        <View style={s.closedBar}>
+          <Ionicons name="ban-outline" size={16} color="#9ca3af" />
+          <Text style={s.closedText}>You can't message this driver.</Text>
+        </View>
+      ) : closed ? (
         <View style={s.closedBar}>
           <Ionicons name="lock-closed-outline" size={16} color="#9ca3af" />
           <Text style={s.closedText}>This conversation has closed for this order.</Text>

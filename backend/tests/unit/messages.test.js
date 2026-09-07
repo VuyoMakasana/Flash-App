@@ -11,9 +11,18 @@
 
 jest.mock('../../src/config/database');
 jest.mock('../../src/services/notificationService');
+jest.mock('../../src/models/UserBlock');
 
 const pool = require('../../src/config/database');
+const UserBlock = require('../../src/models/UserBlock');
 const Message = require('../../src/models/Message');
+
+// Isolates the new §2.7 block-check from every existing test's carefully
+// sequenced pool.query mocks below -- UserBlock is mocked out entirely
+// (its own isBlockedPair.test.js-equivalent coverage lives in
+// chatBlockReport.test.js), defaulting to "not blocked" so none of the
+// pre-existing conversation-lifecycle tests need to change.
+beforeEach(() => UserBlock.isBlockedPair.mockResolvedValue(false));
 
 const ORDER_ID  = 'order-1';
 const USER_ID   = 'user-1';
@@ -101,6 +110,32 @@ describe('Message.sendMessage', () => {
     const msg = await Message.sendMessage(ORDER_ID, DRIVER_ID, 'driver', 'on my way', null);
     expect(msg.id).toBe('msg-3');
   });
+
+  // §2.7 audit — a block cuts off chat on an active order immediately,
+  // regardless of order status/lifecycle-grace window (unlike
+  // CONVERSATION_CLOSED, which only ever kicks in on a terminal order).
+  test('blocks sending immediately on an active order once either party has blocked the other', async () => {
+    UserBlock.isBlockedPair.mockResolvedValueOnce(true);
+    pool.query.mockResolvedValueOnce({ rows: [orderRow({ status: 'in_transit' })] });
+
+    await expect(
+      Message.sendMessage(ORDER_ID, USER_ID, 'user', 'hello?', null),
+    ).rejects.toThrow('BLOCKED');
+
+    expect(UserBlock.isBlockedPair).toHaveBeenCalledWith(USER_ID, DRIVER_ID);
+  });
+
+  test('BLOCKED takes priority over CONVERSATION_CLOSED when both are true', async () => {
+    UserBlock.isBlockedPair.mockResolvedValueOnce(true);
+    const twentyFiveHoursAgo = new Date(Date.now() - 25 * HOUR);
+    pool.query.mockResolvedValueOnce({
+      rows: [orderRow({ status: 'delivered', delivered_at: twentyFiveHoursAgo })],
+    });
+
+    await expect(
+      Message.sendMessage(ORDER_ID, USER_ID, 'user', 'hello?', null),
+    ).rejects.toThrow('BLOCKED');
+  });
 });
 
 describe('Message.getMessages', () => {
@@ -146,5 +181,31 @@ describe('Message.getMessages', () => {
     await expect(
       Message.getMessages(ORDER_ID, USER_ID, 'user'),
     ).rejects.toThrow('Access denied');
+  });
+
+  // §2.7 audit — history stays readable after a block too (same "read is
+  // never gated" principle as conversation closure above), but the
+  // returned flag lets the client show a clear "you can't message this
+  // person" state instead of a re-enabled input box.
+  test('returns blocked:true when either party has blocked the other, but history is still readable', async () => {
+    UserBlock.isBlockedPair.mockResolvedValueOnce(true);
+    pool.query
+      .mockResolvedValueOnce({ rows: [orderRow({ status: 'in_transit' })] })
+      .mockResolvedValueOnce({ rows: [{ id: 'msg-old', content: 'hi' }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await Message.getMessages(ORDER_ID, USER_ID, 'user');
+    expect(result.blocked).toBe(true);
+    expect(result.messages).toHaveLength(1);
+  });
+
+  test('returns blocked:false when there is no block', async () => {
+    pool.query
+      .mockResolvedValueOnce({ rows: [orderRow({ status: 'in_transit' })] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const result = await Message.getMessages(ORDER_ID, USER_ID, 'user');
+    expect(result.blocked).toBe(false);
   });
 });

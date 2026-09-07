@@ -20,6 +20,7 @@
 
 const pool = require("../config/database");
 const { assignDriver } = require("./orderStateMachineService");
+const UserBlock = require("../models/UserBlock");
 
 async function autoAssignNearestDriver(orderId, io) {
   const orderResult = await pool.query(
@@ -32,6 +33,16 @@ async function autoAssignNearestDriver(orderId, io) {
   const order = orderResult.rows[0];
   if (order.delivery_mode !== "fleet" || order.preferred_driver_id) return null;
   if (order.status !== "waiting_for_driver") return null;
+
+  // §2.7 audit: exclude any driver either direction of a chat block pairs
+  // this customer with -- a block only prevents *future* pairing, so this
+  // doesn't touch orders already in progress. Fetched once as a plain id
+  // array (a single indexed lookup against user_blocks, bounded by this
+  // one customer's own block count, never the whole table) rather than a
+  // per-candidate-driver correlated subquery in the query below -- keeps
+  // the driver-matching query's cost independent of how large user_blocks
+  // grows as the platform scales.
+  const blockedDriverIds = await UserBlock.getBlockedDriverIdsForUser(order.user_id);
 
   const nearby = await pool.query(
     `SELECT d.id,
@@ -50,17 +61,10 @@ async function autoAssignNearestDriver(orderId, io) {
          WHERE o.driver_id = d.id
            AND o.status IN ('driver_assigned', 'driver_arrived_store', 'picked_up', 'in_transit')
        )
-       -- §2.7 audit: exclude a driver either direction of a chat block
-       -- pairs this customer with -- a block only prevents *future*
-       -- pairing, so this doesn't touch orders already in progress.
-       AND NOT EXISTS (
-         SELECT 1 FROM user_blocks ub
-         WHERE (ub.blocker_id = $3 AND ub.blocker_role = 'user' AND ub.blocked_id = d.id AND ub.blocked_role = 'driver')
-            OR (ub.blocked_id = $3 AND ub.blocked_role = 'user' AND ub.blocker_id = d.id AND ub.blocker_role = 'driver')
-       )
+       AND NOT (d.id = ANY($3::uuid[]))
      ORDER BY distance_km ASC
      LIMIT 1`,
-    [order.pickup_lat, order.pickup_lng, order.user_id],
+    [order.pickup_lat, order.pickup_lng, blockedDriverIds],
   );
 
   if (!nearby.rows.length) return null;
