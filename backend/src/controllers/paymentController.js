@@ -17,7 +17,7 @@ const paystackService   = require('../services/paystackService');
 const db                = require('../config/database');
 const { updateOrderStatus, emitOrderUpdate, notifyOrderStatusChange } = require('../services/orderStateMachineService');
 const cashOtpService               = require('../services/cashOtpService');
-const { sendPushNotification } = require('../services/notificationService');
+const { sendPushNotification, reportPushFailure } = require('../services/notificationService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
 const { recordCashCommission, checkCommissionBlock } = require('../services/driverCommissionService');
 
@@ -463,12 +463,13 @@ class PaymentController {
         const userResult = await db.query('SELECT push_token FROM users WHERE id=$1', [order.user_id]);
         const pushToken = userResult.rows[0]?.push_token;
         if (pushToken) {
-          await sendPushNotification({
+          const pushResult = await sendPushNotification({
             tokens: pushToken,
             title:  'Cash Confirmation Code',
             body:   'Open Flash to view your code and give it to your driver.',
             data:   { type: 'cash_otp_requested', orderId },
           });
+          reportPushFailure(pushResult, { orderId, userId: order.user_id, notificationType: 'cash_otp_requested' });
         }
       } catch (pushErr) {
         console.warn('[Payment] Cash OTP push notification failed:', pushErr.message);
