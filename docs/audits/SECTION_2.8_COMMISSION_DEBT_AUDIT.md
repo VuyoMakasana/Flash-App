@@ -7,7 +7,12 @@ payment itself. Requested as a follow-up before closing Section 2.8, given
 this is real money owed to Flash by real drivers. Every claim below is read
 directly from the current source or proven live against the Docker sandbox
 (synthetic driver/user/order rows only, created and fully deleted by the
-verification script — no live production data touched).
+verification script). **Update, same day:** a real production-data
+reconciliation was later performed and is documented in full at the bottom
+of this file (§ "Production reconciliation") — everything above this note
+was sandbox-only at the time it was written; the production section is the
+one place in this document that touches live data, done deliberately and
+under explicit confirmation.
 
 ---
 
@@ -310,3 +315,124 @@ clients handle it identically regardless of which endpoint returned it.
 **Section 2.8 is now fully closed** — including the commission-amount
 correction Vuyo caught before sign-off, which was real and has been fixed,
 tested, and verified live at three different order sizes.
+
+---
+
+## Production reconciliation (2026-09-08, after the fix above)
+
+The fix above closes the bug going forward. Vuyo separately asked whether
+any *real* cash orders had already gone through the broken code — if so,
+those rows needed correcting, plus checking whether anything downstream
+(payout netting, block-threshold status) had already acted on the wrong
+number.
+
+**Method:** a direct, read-only investigation against the real production
+database (`flash-db`, Supabase project `ttupbbqbplrhhtuvaaar` — confirmed
+as the actual production project by cross-checking `env.js`'s
+`isKnownProductionDatabaseUrl` project-ref constant, not assumed). This is
+the one section of this document where the numbers come from live
+production data, not the Docker sandbox — done deliberately, and every
+write below was confirmed with Vuyo before executing.
+
+### What was found
+
+Exactly **two** real `driver_commission_debts` rows exist in all of
+production — confirmed via `SELECT COUNT(*)`, not inferred. Both belong to
+the same driver (`4f8c8b40-d6ed-4464-b225-40ccbeec8e32`, "Vuyo Makasana" —
+the founder's own driver-side test account, not a third-party driver). No
+other driver has ever recorded a cash-commission debt.
+
+| Order | Delivery fee | Stored (wrong, flat) | Correct (`max(10, 25%)`) | Status at time of check |
+|---|---|---|---|---|
+| `b020218f-e383-...` | R180.00 | R20.00 | **R45.00** | `outstanding` — never collected |
+| `a6fa4038-9fe6-...` | R90.00 | R20.00 | **R22.50** | `collected_wallet` — R20 already auto-deducted from the driver's wallet on 2026-08-02 |
+
+**Downstream checks, both clean:**
+- `driver_payout_requests` for this driver: **zero rows, ever**. The sole
+  code path that nets debt against a payout
+  (`DriverWallet.createPayoutRequest` → `deductDebtBeforePayout`) has never
+  run for this driver — no settlement was affected by the wrong numbers.
+- `drivers.commission_blocked = false`, `is_online = true` — correct both
+  before and after correction. Even the *corrected* total (R67.50 across 2
+  deliveries) is nowhere near the R200 debt / 10-delivery block thresholds,
+  so no block/unblock status was ever wrongly triggered by the bug.
+
+The only real consequence of the bug in production: this driver's true
+outstanding commission obligation was understated by **R27.50** total
+(R25.00 unbilled on the still-outstanding order, plus a R2.50 shortfall
+already collected-but-underpaid on the settled one) — small in absolute
+terms, but the same category of error the bug would have produced at any
+scale, and worth correcting exactly rather than writing off as
+immaterial.
+
+### The one judgment call: the already-collected R2.50 shortfall
+
+Order `a6fa4038`'s debt row was already marked `collected_wallet` — R20
+was actually deducted from the driver's wallet balance on 2026-08-02, for
+an order that really owed R22.50. Correcting the row's `commission_amount`
+to the true R22.50 for an accurate record doesn't by itself recover the
+R2.50 that was never actually taken. Two honest options existed: bill the
+driver for the shortfall via the normal outstanding-debt mechanism
+(eventually collected through auto-deduct or payout-netting, exactly like
+any other debt), or treat it as absorbed by Flash since the order was
+already presented to the driver as fully settled. **Presented to Vuyo
+directly rather than decided silently** — a real, if small, business call
+about retroactively billing a driver for a system error, matching this
+audit's standing rule to escalate decisions like this rather than assume
+an answer. **Decision: recover it** — added to the driver's live
+outstanding debt so it collects through the normal mechanism, no special-
+cased collection path.
+
+### Correction applied
+
+Three updates, run together, each with a `WHERE` clause pinned to the
+exact pre-correction values (so the statement is a no-op rather than a
+silent overwrite if the row had changed since the investigation query):
+
+```sql
+UPDATE driver_commission_debts
+SET commission_amount = 45.00
+WHERE id = 'c91a73d6-65f4-429e-a9ba-f6d73be489f1' AND commission_amount = 20.00;
+
+UPDATE driver_commission_debts
+SET commission_amount = 22.50
+WHERE id = 'db8ba9ad-5682-42c8-bc84-260ec5d620d6' AND commission_amount = 20.00;
+
+UPDATE driver_wallets
+SET cash_commission_debt = 47.50, unpaid_cash_deliveries = 2, updated_at = NOW()
+WHERE driver_id = '4f8c8b40-d6ed-4464-b225-40ccbeec8e32'
+  AND cash_commission_debt = 20.00 AND unpaid_cash_deliveries = 1;
+```
+
+The wallet aggregate (`cash_commission_debt`) went from R20.00 (matching
+only the first row's wrong amount) to **R47.50** — the sum of the
+still-outstanding R45.00 and the newly-recovered R2.50 shortfall.
+`unpaid_cash_deliveries` went from 1 to 2, since the settled order now also
+carries a small real remainder rather than being fully paid.
+`wallet_balance` (R12.45) was deliberately left untouched — this is an
+accounting correction of what's owed, not a re-collection event; the extra
+R2.50 will actually leave the driver's wallet the normal way, next time
+`recordCashCommission` or `deductDebtBeforePayout` runs for them.
+
+**Verified immediately after, by reading the rows back:**
+
+```
+driver_commission_debts: [
+  { order: b020218f, commission_amount: 45.00, status: outstanding },
+  { order: a6fa4038, commission_amount: 22.50, status: collected_wallet }
+]
+driver_wallets: { wallet_balance: 12.45, cash_commission_debt: 47.50, unpaid_cash_deliveries: 2 }
+```
+
+Matches the intended correction exactly. `commission_blocked`/`is_online`
+were not touched — already correct, and remain correct at the new totals
+(R47.50 / 2 deliveries, still far under R200 / 10).
+
+### Outcome
+
+Two real production rows existed with the flat-R20 bug; both are now
+corrected to their true percentage-based amounts, the R2.50 real shortfall
+is now properly tracked as recoverable debt, and no downstream
+block-threshold or payout-netting decision was ever made against the wrong
+number — confirmed, not assumed, by checking both directly. Nothing else
+in production needs reconciling.
