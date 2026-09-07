@@ -128,6 +128,70 @@ export default function DriverChat() {
     }
   }, [input, sending, orderId, driver]);
 
+  // §2.7 audit — report/block the customer for this order. Reporting never
+  // suspends anyone automatically (an admin reviews it); blocking only
+  // affects future pairing, not this order already in progress.
+  const REPORT_REASONS = [
+    'Inappropriate messages',
+    'Threatening or abusive behavior',
+    'Spam or unwanted contact',
+    'Other',
+  ];
+
+  const submitReport = async (reason) => {
+    try {
+      await driverApi.messages.reportUser(orderId, reason);
+      Alert.alert('Report submitted', 'Thanks for letting us know — our team will review this.');
+    } catch (e) {
+      Alert.alert('Could not submit report', e.message || 'Please try again.');
+    }
+  };
+
+  const handleReport = () => {
+    Alert.alert(
+      'Report customer',
+      'What happened?',
+      [
+        ...REPORT_REASONS.map((reason) => ({ text: reason, onPress: () => submitReport(reason) })),
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
+
+  const handleBlock = () => {
+    Alert.alert(
+      'Block this customer?',
+      "You won't be matched with this customer again on future orders. This won't affect your current order.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await driverApi.messages.blockUser(orderId);
+              Alert.alert('Customer blocked', "You won't be matched with this customer again.");
+            } catch (e) {
+              Alert.alert('Could not block customer', e.message || 'Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleMoreOptions = () => {
+    Alert.alert(
+      'More options',
+      null,
+      [
+        { text: 'Report customer', onPress: handleReport },
+        { text: 'Block customer', style: 'destructive', onPress: handleBlock },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
+
   const renderMessage = ({ item: msg }) => {
     const isMe = msg.sender_role === 'driver';
     return (
@@ -172,7 +236,9 @@ export default function DriverChat() {
             </Text>
           </View>
         </View>
-        <View style={{ width: 36 }} />
+        <TouchableOpacity onPress={handleMoreOptions} style={s.backBtn} hitSlop={10}>
+          <Ionicons name="ellipsis-horizontal" size={20} color="#fff" />
+        </TouchableOpacity>
       </View>
 
       {loading ? (

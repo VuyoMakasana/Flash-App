@@ -123,6 +123,70 @@ export default function ChatScreen() {
     }
   }, [input, sending, orderId, user]);
 
+  // §2.7 audit — report/block the driver for this order. Reporting never
+  // suspends anyone automatically (an admin reviews it); blocking only
+  // affects future pairing, not this order already in progress.
+  const REPORT_REASONS = [
+    'Inappropriate messages',
+    'Threatening or abusive behavior',
+    'Spam or unwanted contact',
+    'Other',
+  ];
+
+  const submitReport = async (reason) => {
+    try {
+      await api.messages.reportUser(orderId, reason);
+      Alert.alert('Report submitted', 'Thanks for letting us know — our team will review this.');
+    } catch (e) {
+      Alert.alert('Could not submit report', e.message || 'Please try again.');
+    }
+  };
+
+  const handleReport = () => {
+    Alert.alert(
+      'Report driver',
+      'What happened?',
+      [
+        ...REPORT_REASONS.map((reason) => ({ text: reason, onPress: () => submitReport(reason) })),
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
+
+  const handleBlock = () => {
+    Alert.alert(
+      'Block this driver?',
+      "You won't be paired with this driver again on future orders. This won't affect your current order.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.messages.blockUser(orderId);
+              Alert.alert('Driver blocked', "You won't be matched with this driver again.");
+            } catch (e) {
+              Alert.alert('Could not block driver', e.message || 'Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleMoreOptions = () => {
+    Alert.alert(
+      'More options',
+      null,
+      [
+        { text: 'Report driver', onPress: handleReport },
+        { text: 'Block driver', style: 'destructive', onPress: handleBlock },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
+
   const renderMessage = ({ item: msg }) => {
     const isMe = msg.sender_role === 'user';
     return (
@@ -163,6 +227,9 @@ export default function ChatScreen() {
         <Text style={s.headerText}>
           {connected ? 'Connected — messages are live' : 'Connecting...'}
         </Text>
+        <Pressable style={s.moreBtn} onPress={handleMoreOptions} hitSlop={10}>
+          <Ionicons name="ellipsis-horizontal" size={18} color="#6b7280" />
+        </Pressable>
       </View>
 
       {/* Messages list */}
@@ -223,7 +290,8 @@ const s = StyleSheet.create({
   center:    { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header:    { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, paddingHorizontal: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
   dot:       { width: 8, height: 8, borderRadius: 4 },
-  headerText:{ color: '#6b7280', fontSize: 12, fontWeight: '500' },
+  headerText:{ color: '#6b7280', fontSize: 12, fontWeight: '500', flex: 1 },
+  moreBtn:   { padding: 4 },
   list:      { padding: 16, gap: 8, paddingBottom: 8 },
   msgRow:    { flexDirection: 'row' },
   msgRowMe:  { justifyContent: 'flex-end' },

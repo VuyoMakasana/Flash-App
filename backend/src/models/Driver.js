@@ -552,7 +552,12 @@ class Driver extends BaseModel {
     return result.rows[0] || null;
   }
 
-  static async getNearby(lat, lng, limit = 10) {
+  // §2.7 audit — userId (optional, defaults to excluding nothing) lets a
+  // customer's own chat blocks (user_blocks) filter their pick-a-driver
+  // results in both directions -- a driver they blocked, or one who
+  // blocked them, never shows up here. Same reasoning as
+  // autoMatchService.js's equivalent exclusion for fleet mode.
+  static async getNearby(lat, lng, limit = 10, userId = null) {
     if (!lat || !lng) {
       const result = await this.query(
         `
@@ -566,9 +571,14 @@ class Driver extends BaseModel {
                ) as is_busy
         FROM drivers
         WHERE is_online = true AND status = 'approved'
+          AND NOT EXISTS (
+            SELECT 1 FROM user_blocks ub
+            WHERE (ub.blocker_id = $2 AND ub.blocker_role = 'user' AND ub.blocked_id = drivers.id AND ub.blocked_role = 'driver')
+               OR (ub.blocked_id = $2 AND ub.blocked_role = 'user' AND ub.blocker_id = drivers.id AND ub.blocker_role = 'driver')
+          )
         ORDER BY rating DESC LIMIT $1
       `,
-        [limit],
+        [limit, userId],
       );
       return result.rows.map((d) => ({ ...d, estimated_fee: 35 }));
     }
@@ -589,6 +599,11 @@ class Driver extends BaseModel {
       FROM drivers d
       WHERE d.is_online = true AND d.status = 'approved'
         AND d.current_lat IS NOT NULL AND d.current_lng IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM user_blocks ub
+          WHERE (ub.blocker_id = $4 AND ub.blocker_role = 'user' AND ub.blocked_id = d.id AND ub.blocked_role = 'driver')
+             OR (ub.blocked_id = $4 AND ub.blocked_role = 'user' AND ub.blocker_id = d.id AND ub.blocker_role = 'driver')
+        )
       ORDER BY distance_km ASC
       LIMIT $3
     `;
@@ -596,6 +611,7 @@ class Driver extends BaseModel {
       parseFloat(lat),
       parseFloat(lng),
       limit,
+      userId,
     ]);
     return result.rows.map((d) => ({
       ...d,

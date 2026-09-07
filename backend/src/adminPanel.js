@@ -28,6 +28,7 @@ const {
   markReadyForPickup,
 } = require('./services/orderStateMachineService');
 const SosAlert = require('./models/SosAlert');
+const ChatReport = require('./models/ChatReport');
 const Inventory = require('./models/Inventory');
 const Fleet = require('./models/Fleet');
 const s3Service = require('./services/s3Service');
@@ -602,6 +603,55 @@ async function attachAcknowledgedByName(response) {
   return response;
 }
 
+// §2.7 audit — chat_reports/user_blocks both have TWO polymorphic
+// role+id pairs per row (reporter/reported, or blocker/blocked), unlike
+// sos_alerts' one -- resolves both in a single pass, same
+// role-partitioned-batch-query shape as attachTriggeredByName above.
+function makeAttachPolymorphicNames(pairs) {
+  return async function attachNames(response) {
+    const records = response.records;
+    if (!Array.isArray(records) || records.length === 0) return response;
+
+    const userIds = new Set();
+    const driverIds = new Set();
+    pairs.forEach(({ idField, roleField }) => {
+      records.forEach((r) => {
+        const id = r.params?.[idField];
+        if (!id) return;
+        if (r.params?.[roleField] === 'user') userIds.add(id);
+        else if (r.params?.[roleField] === 'driver') driverIds.add(id);
+      });
+    });
+
+    const [userRows, driverRows] = await Promise.all([
+      userIds.size ? pgPool.query('SELECT id, name, phone FROM public.users WHERE id = ANY($1::uuid[])', [[...userIds]]) : { rows: [] },
+      driverIds.size ? pgPool.query('SELECT id, name, phone FROM drivers WHERE id = ANY($1::uuid[])', [[...driverIds]]) : { rows: [] },
+    ]);
+    const byId = new Map([...userRows.rows, ...driverRows.rows].map((p) => [p.id, p]));
+
+    records.forEach((r) => {
+      pairs.forEach(({ idField }) => {
+        const rawId = r.params?.[idField];
+        const person = rawId && byId.get(rawId);
+        if (person && r.params) {
+          r.params[idField] = person.phone ? `${person.name} — ${person.phone}` : person.name;
+        }
+      });
+    });
+    return response;
+  };
+}
+
+const attachChatReportNames = makeAttachPolymorphicNames([
+  { idField: 'reporter_id', roleField: 'reporter_role' },
+  { idField: 'reported_id', roleField: 'reported_role' },
+]);
+
+const attachUserBlockNames = makeAttachPolymorphicNames([
+  { idField: 'blocker_id', roleField: 'blocker_role' },
+  { idField: 'blocked_id', roleField: 'blocked_role' },
+]);
+
 // Virtual richtext field (same mechanism as the driver-documents screen --
 // AdminJS's own decorateVirtualProperties, no low-level property hacking).
 // Applied to both list and show -- unlike the customer/driver-name fields
@@ -1082,6 +1132,89 @@ function buildResources(db) {
             },
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.sos_alerts),
+      },
+      // Production-readiness audit §2.7 -- chat block/report. A report never
+      // auto-actions anyone (same "human confirms before any consequence"
+      // principle as sos_alerts' acknowledge and the driver-fraud work in
+      // §2.4); the one real custom action here (resolve) just records what
+      // an admin decided, it never suspends/penalizes automatically.
+      {
+        resource: db.table('chat_reports'),
+        options: withChronologicalDefaults({
+          listProperties: [
+            'order_id', 'reporter_role', 'reporter_id', 'reported_role', 'reported_id',
+            'reason', 'status', 'created_at',
+          ],
+          properties: {
+            order_id: { isTitle: true },
+            reporter_role: { availableValues: TRIGGERED_BY_ROLE_VALUES },
+            reported_role: { availableValues: TRIGGERED_BY_ROLE_VALUES },
+            status: {
+              availableValues: [
+                { value: 'pending', label: 'Pending review' },
+                { value: 'reviewed', label: 'Reviewed' },
+                { value: 'actioned', label: 'Actioned' },
+                { value: 'dismissed', label: 'Dismissed' },
+              ],
+            },
+          },
+          actions: {
+            list: { after: [attachChatReportNames, stripSensitive] },
+            show: { after: [attachChatReportNames, stripSensitive] },
+            // Read-only except for the one real action below -- same
+            // reasoning as sos_alerts: this is either an open report or a
+            // record of a resolved one, not something an admin free-edits.
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+            resolve: {
+              actionType: 'record',
+              component: false,
+              guard: 'Resolve this report? Choose the outcome on the next screen.',
+              isAccessible: ({ record }) => record.param('status') === 'pending',
+              after: [stripSensitive],
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                const { status, notes } = request.payload || {};
+                const validStatuses = ['reviewed', 'actioned', 'dismissed'];
+                if (!validStatuses.includes(status)) {
+                  return { record: record.toJSON(currentAdmin), notice: { message: 'Choose reviewed, actioned, or dismissed.', type: 'error' } };
+                }
+                const updated = await ChatReport.resolve(record.id(), currentAdmin.id, status, notes);
+                if (!updated) {
+                  return { record: record.toJSON(currentAdmin), notice: { message: 'Already resolved by someone else.', type: 'error' } };
+                }
+                AdminAction.log(currentAdmin.id, 'chat_report_resolve', 'chat_reports', record.id(), { status, notes });
+                record.set('status', updated.status);
+                record.set('admin_notes', updated.admin_notes);
+                record.set('reviewed_by', currentAdmin.id);
+                record.set('reviewed_at', updated.reviewed_at);
+                return { record: record.toJSON(currentAdmin), notice: { message: 'Report resolved.', type: 'success' } };
+              },
+            },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.chat_reports),
+      },
+      {
+        resource: db.table('user_blocks'),
+        options: withChronologicalDefaults({
+          listProperties: ['blocker_role', 'blocker_id', 'blocked_role', 'blocked_id', 'created_at'],
+          properties: {
+            blocker_role: { availableValues: TRIGGERED_BY_ROLE_VALUES },
+            blocked_role: { availableValues: TRIGGERED_BY_ROLE_VALUES },
+          },
+          actions: {
+            list: { after: [attachUserBlockNames, stripSensitive] },
+            show: { after: [attachUserBlockNames, stripSensitive] },
+            // A block is a fact a user/driver recorded about themselves --
+            // not something an admin creates or edits on their behalf.
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.user_blocks),
       },
       // Phase 2 (§3/§4.3) -- the four tables backing driver wallet/payout
       // visibility. Each is a live balance/ledger/transaction record of
@@ -1687,7 +1820,7 @@ async function mountAdminPanel(app) {
 
   adminPanelRouter.use(router);
 
-  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, payments, payment_refunds, driver_ratings, flagged_accounts, flash_inventory)`);
+  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, chat_reports, user_blocks, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, payments, payment_refunds, driver_ratings, flagged_accounts, flash_inventory)`);
 }
 
 module.exports = { mountAdminPanel, ADMIN_PANEL_PATH, buildResources };
