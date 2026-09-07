@@ -2357,9 +2357,12 @@ async function migrateV35(client) {
 // opposite concepts under one UNIQUE(user_id, driver_id) constraint).
 //
 // user_blocks: one-directional "don't pair us again" record. Symmetric --
-// either party can block the other. Enforced going forward only (you can't
-// retroactively un-pair an in-progress order) in autoMatchService.js
-// (fleet auto-assignment) and Driver.getNearby() (pick-a-driver mode).
+// either party can block the other. Enforced going forward (autoMatchService.js
+// fleet auto-assignment, Driver.getNearby() pick-a-driver mode) AND
+// immediately against any currently-active order between the two parties
+// (Message.sendMessage -- a block ends chat right away, not just future
+// matching; see UserBlock.isBlockedPair). Indexed for the exact three real
+// query shapes this table gets, not the columns alone -- see below.
 //
 // chat_reports: a real, admin-reviewed queue -- reporting never
 // auto-suspends anyone (same "a human confirms before any consequence"
@@ -2380,8 +2383,20 @@ async function migrateV37(client) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(blocker_id, blocked_id)
     )`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON user_blocks(blocker_id)`);
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_id)`);
+    // The UNIQUE(blocker_id, blocked_id) constraint above already gives a
+    // composite index covering UserBlock.isBlockedPair's exact-pair lookup
+    // in both directions (each OR-branch is a direct hit on this same
+    // index, just with swapped literal params) -- no separate index needed
+    // for that query. These two are for the *other* real query shape,
+    // UserBlock.getBlockedDriverIdsForUser: "all of this person's blocks in
+    // one specific direction" -- composite on (id, opposite_role) rather
+    // than a single-column index, so the role filter is answered by the
+    // same index lookup instead of a separate heap recheck. Every block is
+    // always user<->driver (never user-user or driver-driver, enforced by
+    // UserBlock.blockOtherPartyInOrder always setting opposite roles), so
+    // these two indexes are exactly the two directions ever queried.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON user_blocks(blocker_id, blocked_role)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_id, blocker_role)`);
 
     await client.query(`CREATE TABLE IF NOT EXISTS chat_reports (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2398,9 +2413,16 @@ async function migrateV37(client) {
       reviewed_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+    // Covers the three real admin-side lookups: the pending queue (status +
+    // recency, one composite index answers both the filter and the sort),
+    // "every report against this person" (reported_id), and "every report
+    // this person has filed" (reporter_id) -- the latter matters for
+    // spotting a bad-faith serial reporter, the same "admin can reconstruct
+    // what happened" principle as §2.4/§2.13.
     await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_order ON chat_reports(order_id)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_status ON chat_reports(status, created_at DESC)`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_reported ON chat_reports(reported_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_reporter ON chat_reports(reporter_id)`);
 
     await client.query('COMMIT');
     console.log('Flash database migration v37 completed: user_blocks + chat_reports tables (chat block/report, §2.7)');

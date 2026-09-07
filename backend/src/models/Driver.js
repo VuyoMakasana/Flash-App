@@ -3,6 +3,7 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const s3Service = require("../services/s3Service");
 const { PLANS, REQUIRED_DRIVER_DOCS } = require("../utils/constants");
+const UserBlock = require("./UserBlock");
 
 
 
@@ -531,7 +532,7 @@ class Driver extends BaseModel {
       `SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
               o.total, o.driver_payout, o.pickup_address, o.dropoff_address,
               o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng,
-              o.is_cash_delivery, o.created_at, o.is_return_order,
+              o.is_cash_delivery, o.created_at, o.is_return_order, o.user_id,
               u.name as customer_name, u.phone as customer_phone,
               CASE WHEN o.is_return_order THEN (
                 SELECT COUNT(*) FROM return_request_items rri
@@ -549,15 +550,29 @@ class Driver extends BaseModel {
       [driverId],
     );
 
-    return result.rows[0] || null;
+    const order = result.rows[0];
+    // §2.7 audit — same immediate call-cutoff-on-block reasoning as
+    // Order.getByIdWithDetails, mirrored for the driver's own view of the
+    // customer's phone number.
+    if (order?.user_id && (await UserBlock.isBlockedPair(driverId, order.user_id))) {
+      order.customer_phone = null;
+    }
+    return order || null;
   }
 
   // §2.7 audit — userId (optional, defaults to excluding nothing) lets a
   // customer's own chat blocks (user_blocks) filter their pick-a-driver
   // results in both directions -- a driver they blocked, or one who
   // blocked them, never shows up here. Same reasoning as
-  // autoMatchService.js's equivalent exclusion for fleet mode.
+  // autoMatchService.js's equivalent exclusion for fleet mode: blocked ids
+  // are fetched once (a single indexed lookup bounded by this one
+  // customer's own block count, never the whole user_blocks table) and
+  // excluded via a plain array filter, not a per-candidate-driver
+  // correlated subquery -- keeps this query's cost independent of how
+  // large user_blocks grows as the platform scales.
   static async getNearby(lat, lng, limit = 10, userId = null) {
+    const blockedDriverIds = userId ? await UserBlock.getBlockedDriverIdsForUser(userId) : [];
+
     if (!lat || !lng) {
       const result = await this.query(
         `
@@ -571,14 +586,10 @@ class Driver extends BaseModel {
                ) as is_busy
         FROM drivers
         WHERE is_online = true AND status = 'approved'
-          AND NOT EXISTS (
-            SELECT 1 FROM user_blocks ub
-            WHERE (ub.blocker_id = $2 AND ub.blocker_role = 'user' AND ub.blocked_id = drivers.id AND ub.blocked_role = 'driver')
-               OR (ub.blocked_id = $2 AND ub.blocked_role = 'user' AND ub.blocker_id = drivers.id AND ub.blocker_role = 'driver')
-          )
+          AND NOT (id = ANY($2::uuid[]))
         ORDER BY rating DESC LIMIT $1
       `,
-        [limit, userId],
+        [limit, blockedDriverIds],
       );
       return result.rows.map((d) => ({ ...d, estimated_fee: 35 }));
     }
@@ -599,11 +610,7 @@ class Driver extends BaseModel {
       FROM drivers d
       WHERE d.is_online = true AND d.status = 'approved'
         AND d.current_lat IS NOT NULL AND d.current_lng IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM user_blocks ub
-          WHERE (ub.blocker_id = $4 AND ub.blocker_role = 'user' AND ub.blocked_id = d.id AND ub.blocked_role = 'driver')
-             OR (ub.blocked_id = $4 AND ub.blocked_role = 'user' AND ub.blocker_id = d.id AND ub.blocker_role = 'driver')
-        )
+        AND NOT (d.id = ANY($4::uuid[]))
       ORDER BY distance_km ASC
       LIMIT $3
     `;
@@ -611,7 +618,7 @@ class Driver extends BaseModel {
       parseFloat(lat),
       parseFloat(lng),
       limit,
-      userId,
+      blockedDriverIds,
     ]);
     return result.rows.map((d) => ({
       ...d,
