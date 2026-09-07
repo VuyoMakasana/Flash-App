@@ -31,6 +31,7 @@ export default function DriverChat() {
   const [loading, setLoading]     = useState(true);
   const [sending, setSending]     = useState(false);
   const [connected, setConnected] = useState(false);
+  const [closed,    setClosed]    = useState(false);
   const listRef   = useRef(null);
   const socketRef = useRef(null);
 
@@ -43,7 +44,10 @@ export default function DriverChat() {
     const init = async () => {
       try {
         const data = await driverApi.messages.getMessages(orderId);
-        if (!cancelled) setMessages(data.messages || []);
+        if (!cancelled) {
+          setMessages(data.messages || []);
+          setClosed(!!data.closed);
+        }
       } catch (_e) {
         if (!cancelled) Alert.alert('Error', 'Could not load messages');
       } finally {
@@ -110,10 +114,15 @@ export default function DriverChat() {
       setMessages(prev =>
         prev.map(m => m.id === tempMsg.id ? data.message : m)
       );
-    } catch (_e) {
+    } catch (e) {
       setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
-      Alert.alert('Failed', 'Message not sent. Please try again.');
-      setInput(text);
+      if (e.message?.includes('conversation has closed')) {
+        setClosed(true);
+        Alert.alert('Conversation Closed', e.message);
+      } else {
+        Alert.alert('Failed', 'Message not sent. Please try again.');
+        setInput(text);
+      }
     } finally {
       setSending(false);
     }
@@ -186,29 +195,36 @@ export default function DriverChat() {
       )}
 
       {/* Input bar */}
-      <View style={s.inputBar}>
-        <TextInput
-          style={s.textInput}
-          placeholder="Message your customer..."
-          placeholderTextColor="#6b7280"
-          value={input}
-          onChangeText={setInput}
-          multiline
-          maxLength={500}
-          onSubmitEditing={handleSend}
-          returnKeyType="send"
-        />
-        <TouchableOpacity
-          style={[s.sendBtn, (!input.trim() || sending) && s.sendBtnDisabled]}
-          onPress={handleSend}
-          disabled={!input.trim() || sending}
-        >
-          {sending
-            ? <ActivityIndicator size="small" color="#0a0a0a" />
-            : <Ionicons name="send" size={18} color="#0a0a0a" />
-          }
-        </TouchableOpacity>
-      </View>
+      {closed ? (
+        <View style={s.closedBar}>
+          <Ionicons name="lock-closed-outline" size={16} color="#6b7280" />
+          <Text style={s.closedText}>This conversation has closed for this order.</Text>
+        </View>
+      ) : (
+        <View style={s.inputBar}>
+          <TextInput
+            style={s.textInput}
+            placeholder="Message your customer..."
+            placeholderTextColor="#6b7280"
+            value={input}
+            onChangeText={setInput}
+            multiline
+            maxLength={500}
+            onSubmitEditing={handleSend}
+            returnKeyType="send"
+          />
+          <TouchableOpacity
+            style={[s.sendBtn, (!input.trim() || sending) && s.sendBtnDisabled]}
+            onPress={handleSend}
+            disabled={!input.trim() || sending}
+          >
+            {sending
+              ? <ActivityIndicator size="small" color="#0a0a0a" />
+              : <Ionicons name="send" size={18} color="#0a0a0a" />
+            }
+          </TouchableOpacity>
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -242,6 +258,8 @@ const s = StyleSheet.create({
   emptyTitle: { fontSize: 16, fontWeight: '600', color: '#e5e7eb' },
   emptyText:  { fontSize: 13, color: '#6b7280' },
   inputBar:   { flexDirection: 'row', alignItems: 'flex-end', gap: 10, padding: 12, paddingHorizontal: 16, backgroundColor: '#0a0a0a', borderTopWidth: 1, borderTopColor: '#1f2937' },
+  closedBar:  { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16, backgroundColor: '#0a0a0a', borderTopWidth: 1, borderTopColor: '#1f2937' },
+  closedText: { fontSize: 13, color: '#6b7280', fontWeight: '500' },
   textInput:  { flex: 1, maxHeight: 100, borderWidth: 1, borderColor: '#374151', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, color: '#fff', backgroundColor: '#1a1a1a' },
   sendBtn:    { width: 44, height: 44, borderRadius: 22, backgroundColor: '#f59e0b', alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { backgroundColor: '#374151' },
