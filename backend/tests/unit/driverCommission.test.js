@@ -2,8 +2,10 @@
 /**
  * tests/unit/driverCommission.test.js
  *
- * Tests for the R20 cash commission system.
- * Covers: recording, auto-deduction, threshold blocking, payout deduction.
+ * Tests for the cash commission debt system.
+ * Covers: recording (computed per-order via the same flashCommission
+ * formula used for card orders, not a flat amount), auto-deduction,
+ * threshold blocking, payout deduction.
  */
 
 jest.mock('../../src/config/database');
@@ -26,6 +28,12 @@ describe('recordCashCommission', () => {
   const DRIVER_ID = 'driver-uuid-001';
   const ORDER_ID  = 'order-uuid-001';
 
+  // delivery_fee=80 -> flashCommission = max(10, 0.25*80) = 20, matching
+  // the existing R20-based expectations below without changing them --
+  // the point of the dedicated "computes... not a flat amount" test further
+  // down is to prove this is a real per-order computation, not a constant.
+  const ORDER_LOOKUP_R20 = { rows: [{ delivery_fee: '80.00' }] };
+
   beforeEach(() => jest.clearAllMocks());
 
   test('inserts debt row and increments counters', async () => {
@@ -33,6 +41,7 @@ describe('recordCashCommission', () => {
 
     // INSERT returns a new row (not a duplicate)
     client.query
+      .mockResolvedValueOnce(ORDER_LOOKUP_R20)                   // order lookup (delivery_fee)
       .mockResolvedValueOnce({ rows: [{ id: 'debt-uuid' }] })   // INSERT debt
       .mockResolvedValueOnce({ rows: [] })                       // upsert wallet
       .mockResolvedValueOnce({                                   // wallet SELECT FOR UPDATE
@@ -41,16 +50,60 @@ describe('recordCashCommission', () => {
 
     await commissionService.recordCashCommission(client, DRIVER_ID, ORDER_ID);
 
-    // First call: INSERT into driver_commission_debts
-    expect(client.query.mock.calls[0][0]).toMatch(/INSERT INTO driver_commission_debts/);
-    // Second call: upsert driver_wallets
-    expect(client.query.mock.calls[1][0]).toMatch(/INSERT INTO driver_wallets/);
+    // Second call: INSERT into driver_commission_debts, with the computed amount
+    expect(client.query.mock.calls[1][0]).toMatch(/INSERT INTO driver_commission_debts/);
+    expect(client.query.mock.calls[1][1]).toEqual([DRIVER_ID, ORDER_ID, 20]);
+    // Third call: upsert driver_wallets
+    expect(client.query.mock.calls[2][0]).toMatch(/INSERT INTO driver_wallets/);
   });
 
-  test('auto-deducts from wallet when balance >= R20', async () => {
+  test('computes commission from the order\'s own delivery fee, not a flat amount', async () => {
     const client = makeClient();
 
     client.query
+      .mockResolvedValueOnce({ rows: [{ delivery_fee: '200.00' }] }) // 25% of 200 = 50
+      .mockResolvedValueOnce({ rows: [{ id: 'debt-uuid' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ wallet_balance: '0.00', cash_commission_debt: '50.00', unpaid_cash_deliveries: '1' }],
+      });
+
+    const result = await commissionService.recordCashCommission(client, DRIVER_ID, ORDER_ID);
+
+    expect(result).toBe(50);
+    expect(client.query.mock.calls[1][1]).toEqual([DRIVER_ID, ORDER_ID, 50]);
+  });
+
+  test('applies the R10 minimum for a low delivery fee', async () => {
+    const client = makeClient();
+
+    client.query
+      .mockResolvedValueOnce({ rows: [{ delivery_fee: '15.00' }] }) // 25% of 15 = 3.75 -> floor R10
+      .mockResolvedValueOnce({ rows: [{ id: 'debt-uuid' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ wallet_balance: '0.00', cash_commission_debt: '10.00', unpaid_cash_deliveries: '1' }],
+      });
+
+    const result = await commissionService.recordCashCommission(client, DRIVER_ID, ORDER_ID);
+
+    expect(result).toBe(10);
+  });
+
+  test('throws when the order is not found', async () => {
+    const client = makeClient();
+    client.query.mockResolvedValueOnce({ rows: [] }); // order lookup misses
+
+    await expect(
+      commissionService.recordCashCommission(client, DRIVER_ID, ORDER_ID),
+    ).rejects.toThrow(/Order .* not found/);
+  });
+
+  test('auto-deducts from wallet when balance >= the computed commission', async () => {
+    const client = makeClient();
+
+    client.query
+      .mockResolvedValueOnce(ORDER_LOOKUP_R20)
       .mockResolvedValueOnce({ rows: [{ id: 'debt-uuid' }] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
@@ -62,8 +115,12 @@ describe('recordCashCommission', () => {
 
     await commissionService.recordCashCommission(client, DRIVER_ID, ORDER_ID);
 
+    // Root-caused via docs/audits/OPEN_FOLLOWUPS.md #3: the real query aligns
+    // its SET clauses with padding spaces (`wallet_balance         = ...`),
+    // so a plain .includes() with single spaces never matched -- the
+    // deduction logic itself was always correct. Regex tolerates whitespace.
     const updateCall = client.query.mock.calls.find(
-      (c) => typeof c[0] === 'string' && c[0].includes('wallet_balance = wallet_balance - $1'),
+      (c) => typeof c[0] === 'string' && /wallet_balance\s*=\s*wallet_balance\s*-\s*\$1/.test(c[0]),
     );
     expect(updateCall).toBeDefined();
   });
@@ -72,6 +129,7 @@ describe('recordCashCommission', () => {
     const client = makeClient();
 
     client.query
+      .mockResolvedValueOnce(ORDER_LOOKUP_R20)
       .mockResolvedValueOnce({ rows: [{ id: 'debt-uuid' }] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
@@ -90,6 +148,7 @@ describe('recordCashCommission', () => {
     const client = makeClient();
 
     client.query
+      .mockResolvedValueOnce(ORDER_LOOKUP_R20)
       .mockResolvedValueOnce({ rows: [{ id: 'debt-uuid' }] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({
@@ -107,19 +166,21 @@ describe('recordCashCommission', () => {
   test('is idempotent — duplicate order_id inserts nothing', async () => {
     const client = makeClient();
 
-    // ON CONFLICT DO NOTHING returns no rows
-    client.query.mockResolvedValueOnce({ rows: [] });
+    client.query
+      .mockResolvedValueOnce(ORDER_LOOKUP_R20)      // order lookup still happens
+      .mockResolvedValueOnce({ rows: [] });          // ON CONFLICT DO NOTHING returns no rows
 
     await commissionService.recordCashCommission(client, DRIVER_ID, ORDER_ID);
 
-    // Only the INSERT was called; no further wallet updates
-    expect(client.query).toHaveBeenCalledTimes(1);
+    // Order lookup + the no-op INSERT attempt; no further wallet updates
+    expect(client.query).toHaveBeenCalledTimes(2);
   });
 
   test('throws when wallet row missing after insert', async () => {
     const client = makeClient();
 
     client.query
+      .mockResolvedValueOnce(ORDER_LOOKUP_R20)
       .mockResolvedValueOnce({ rows: [{ id: 'debt-uuid' }] })
       .mockResolvedValueOnce({ rows: [] })
       .mockResolvedValueOnce({ rows: [] }); // wallet not found

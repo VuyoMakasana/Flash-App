@@ -87,47 +87,40 @@ separate gap.
 
 ## 3. `driverCommission.test.js` has a pre-existing failing test
 
-**Status:** Open. **Added:** 2026-09-07.
+**Status:** Resolved. **Added:** 2026-09-07. **Resolved:** 2026-09-08
+(§2.8 commission-debt audit follow-up).
 
-**What's true today:** `tests/unit/driverCommission.test.js` — `recordCashCommission
-› auto-deducts from wallet when balance >= R20` — fails with
-`expect(updateCall).toBeDefined()` receiving `undefined`: the test asserts
-`commissionService.recordCashCommission()` issues a query containing
-`wallet_balance = wallet_balance - $1`, and no mocked call matches that
-string. `driverCommissionService.js` itself has not been touched since
-`768bbbb` ("feat: add driver cash commission service (R20 per delivery)")
-— confirmed via `git diff` against this commit that neither the service
-nor the test changed as part of the production-readiness audit's account-
-deletion work (§2.1) or the `main` merge done alongside it. This is a
-pre-existing mock-assertion mismatch (either the real query text drifted
-from what the test expects, or a mock-response ordering issue), unrelated
-to and not introduced by this audit.
+**Root cause, confirmed by reading the real query text:**
+`recordCashCommission`'s wallet-deduction `UPDATE` aligns its `SET` clause
+with padding spaces for readability —
+`` `UPDATE driver_wallets SET wallet_balance         = wallet_balance - $1, ...` ``
+— while the test's assertion used a plain
+`.includes('wallet_balance = wallet_balance - $1')` with single spaces.
+`.includes()` requires an exact substring match, so the extra alignment
+whitespace in the real (correct) query never matched the test's
+(incorrectly strict) expected string. **The deduction logic itself was
+never wrong** — this was purely a test-assertion bug, confirmed by reading
+the query character-for-character rather than guessing.
 
-**Why deferred:** Found only because this audit ran the full test suite
-directly (`npm test`) rather than relying on CI, which normally does this
-on every push to `main` — this branch (and its unmerged predecessor
-branches) had accumulated commits without a full local test run in
-between. Root-causing a mock/assertion mismatch in an unrelated service
-is out of scope for the account-deletion section that surfaced it; fixing
-it blind (e.g. loosening the assertion) without confirming which side —
-the real query or the test's expectation — is actually wrong would risk
-masking a real commission-deduction bug instead of a stale test.
+**Fix:** changed the assertion from `.includes('wallet_balance =
+wallet_balance - $1')` to a whitespace-tolerant regex
+(`/wallet_balance\s*=\s*wallet_balance\s*-\s*\$1/`). No production code
+needed to change for this specific failure.
 
-**To close this out:**
-1. Read `commissionService.recordCashCommission()`'s actual wallet-deduction
-   query and compare it literally against the test's expected substring
-   (`wallet_balance = wallet_balance - $1`) — confirm whether the code or
-   the test drifted.
-2. Check the other two tests in the same file (`blocks driver when debt >=
-   R200 threshold`, `blocks driver when unpaid_cash_deliveries >= 10`) —
-   both pass today, so compare their mock call sequences against the
-   failing test's to spot what's different (likely a missing/misordered
-   `mockResolvedValueOnce` in the failing test's setup, given the other two
-   short-circuit before reaching the deduction query at all).
-3. Fix whichever side is actually wrong, then confirm `npm test` is fully
-   green (this was the last remaining known failure once
-   `premium_subscription_payments` was added to `adminCoverage.js`,
-   §2.1/§2.14).
+**Found while fixing a real, separate bug in the same function**
+(the driver cash-commission-debt audit requested alongside §2.8: the
+commission amount recorded per cash delivery was a hardcoded flat R20
+regardless of order size, instead of reusing the same percentage-based
+`flashCommission` formula already used for card orders. See
+`docs/audits/SECTION_2.8_COMMISSION_DEBT_AUDIT.md` for that fix). Since
+touching `recordCashCommission` already required rewriting this test
+file's mock sequences (an added order-lookup query shifted every
+`mockResolvedValueOnce` index), root-causing and fixing this pre-existing
+failure at the same time was effectively free — confirmed via `npm test`
+that the full suite is now green with no known failures other than the
+`adminCoverage.test.js` host-vs-Docker-network artifact (only reproduces
+outside the container; passes when run inside Docker, already documented
+history).
 
 ---
 
