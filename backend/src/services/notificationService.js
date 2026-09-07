@@ -149,6 +149,31 @@ async function notifyUserOrderUpdate(userId, orderId, status) {
   }
 }
 
+// Notify the other party in an order chat about a new message. Best-effort
+// like every helper above -- a slow/failed push must never block the
+// message itself, which is already saved to the DB and emitted over the
+// socket by the time this runs.
+async function notifyNewMessage(recipientId, recipientRole, orderId, senderRole, content) {
+  try {
+    const result = recipientRole === "driver"
+      ? await db.query(`SELECT push_token FROM drivers WHERE id = $1 AND push_token IS NOT NULL`, [recipientId])
+      : await db.query(`SELECT push_token FROM users WHERE id = $1 AND push_token IS NOT NULL`, [recipientId]);
+    if (!result.rows.length) return;
+
+    const senderLabel = senderRole === "driver" ? "driver" : "customer";
+    const preview = content.length > 100 ? `${content.slice(0, 100)}…` : content;
+
+    await sendPushNotification({
+      tokens: [result.rows[0].push_token],
+      title: `New message from your ${senderLabel}`,
+      body: preview,
+      data: { orderId, type: "new_message" },
+    });
+  } catch (err) {
+    console.error("[PushNotification] notifyNewMessage error:", err.message);
+  }
+}
+
 // Save or update the push token for a user.
 async function saveUserPushToken(userId, pushToken) {
   await db.query(
@@ -169,6 +194,7 @@ module.exports = {
   sendPushNotification,
   notifyDriversNewOrder,
   notifyUserOrderUpdate,
+  notifyNewMessage,
   saveUserPushToken,
   saveDriverPushToken,
 };
