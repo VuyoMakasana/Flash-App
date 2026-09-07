@@ -1,5 +1,6 @@
 const BaseModel = require("./BaseModel");
 const notificationService = require("../services/notificationService");
+const UserBlock = require("./UserBlock");
 
 // §2.2 audit — conversation lifecycle: chat had no cutoff at all tied to the
 // order's own lifecycle, so a customer/driver pair could keep messaging
@@ -63,7 +64,10 @@ class Message extends BaseModel {
       [orderId, userRole],
     );
 
-    return { messages: msgs.rows, closed: this._isConversationClosed(o) };
+    const otherPartyId = userRole === "user" ? o.driver_id : o.user_id;
+    const blocked = otherPartyId ? await UserBlock.isBlockedPair(userId, otherPartyId) : false;
+
+    return { messages: msgs.rows, closed: this._isConversationClosed(o), blocked };
   }
 
   static async sendMessage(orderId, userId, userRole, content, io) {
@@ -83,6 +87,16 @@ class Message extends BaseModel {
 
     if (!allowed) {
       throw new Error("Access denied");
+    }
+
+    // §2.7 audit — a block cuts off chat on this order *immediately*,
+    // regardless of the order's own status/lifecycle-grace window below.
+    // If someone blocks an abusive driver mid-delivery, that needs to stop
+    // the harassment right now, not just prevent a repeat next time -- the
+    // delivery itself is unaffected (this only ever gates messaging).
+    const otherPartyId = userRole === "user" ? o.driver_id : o.user_id;
+    if (otherPartyId && (await UserBlock.isBlockedPair(userId, otherPartyId))) {
+      throw new Error("BLOCKED");
     }
 
     if (this._isConversationClosed(o)) {

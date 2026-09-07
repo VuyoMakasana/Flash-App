@@ -32,6 +32,7 @@ export default function DriverChat() {
   const [sending, setSending]     = useState(false);
   const [connected, setConnected] = useState(false);
   const [closed,    setClosed]    = useState(false);
+  const [blocked,   setBlocked]   = useState(false);
   const listRef   = useRef(null);
   const socketRef = useRef(null);
 
@@ -47,6 +48,7 @@ export default function DriverChat() {
         if (!cancelled) {
           setMessages(data.messages || []);
           setClosed(!!data.closed);
+          setBlocked(!!data.blocked);
         }
       } catch (_e) {
         if (!cancelled) Alert.alert('Error', 'Could not load messages');
@@ -116,7 +118,9 @@ export default function DriverChat() {
       );
     } catch (e) {
       setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
-      if (e.message?.includes('conversation has closed')) {
+      if (e.message?.includes("can't message this")) {
+        setBlocked(true);
+      } else if (e.message?.includes('conversation has closed')) {
         setClosed(true);
         Alert.alert('Conversation Closed', e.message);
       } else {
@@ -161,7 +165,7 @@ export default function DriverChat() {
   const handleBlock = () => {
     Alert.alert(
       'Block this customer?',
-      "You won't be matched with this customer again on future orders. This won't affect your current order.",
+      "Messaging and calling with this customer will stop immediately, and you won't be matched with them again on future orders. Your current delivery will still complete normally.",
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -170,7 +174,8 @@ export default function DriverChat() {
           onPress: async () => {
             try {
               await driverApi.messages.blockUser(orderId);
-              Alert.alert('Customer blocked', "You won't be matched with this customer again.");
+              setBlocked(true);
+              Alert.alert('Customer blocked', "Messaging with this customer has stopped, and you won't be matched with them again.");
             } catch (e) {
               Alert.alert('Could not block customer', e.message || 'Please try again.');
             }
@@ -261,7 +266,12 @@ export default function DriverChat() {
       )}
 
       {/* Input bar */}
-      {closed ? (
+      {blocked ? (
+        <View style={s.closedBar}>
+          <Ionicons name="ban-outline" size={16} color="#6b7280" />
+          <Text style={s.closedText}>You can't message this customer.</Text>
+        </View>
+      ) : closed ? (
         <View style={s.closedBar}>
           <Ionicons name="lock-closed-outline" size={16} color="#6b7280" />
           <Text style={s.closedText}>This conversation has closed for this order.</Text>

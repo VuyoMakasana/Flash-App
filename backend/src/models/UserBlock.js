@@ -61,6 +61,25 @@ class UserBlock extends BaseModel {
     );
     return result.rows.map((r) => r.id);
   }
+
+  // Is there a block between these two people, in either direction? A
+  // single exact-pair lookup against the UNIQUE(blocker_id, blocked_id)
+  // index -- each OR-branch below hits that same composite index directly
+  // (swapped literal params), not a scan. Used to immediately cut off chat
+  // (Message.sendMessage) and to redact phone numbers on an active order
+  // (Order.getByIdWithDetails/getUserOrders, Driver.getActiveOrder) the
+  // moment either party blocks the other -- unlike the matching-exclusion
+  // helpers above, this applies to an order already in progress, not just
+  // future pairing.
+  static async isBlockedPair(idA, idB) {
+    const result = await this.query(
+      `SELECT 1 FROM user_blocks
+       WHERE (blocker_id = $1 AND blocked_id = $2) OR (blocker_id = $2 AND blocked_id = $1)
+       LIMIT 1`,
+      [idA, idB],
+    );
+    return result.rows.length > 0;
+  }
 }
 
 module.exports = UserBlock;
