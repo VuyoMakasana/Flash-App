@@ -85,6 +85,9 @@ class TrustedDriverController {
       if (err.message === "Request not found") {
         return res.status(404).json({ error: "Request not found" });
       }
+      if (err.message.startsWith("Outstanding commission debt")) {
+        return res.status(403).json({ error: err.message, code: "COMMISSION_DEBT_BLOCKED" });
+      }
       console.error("[TrustedDriver] respondToRequest error:", err.message);
       res.status(500).json({ error: "Failed to respond to request" });
     }
