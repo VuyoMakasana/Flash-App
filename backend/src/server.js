@@ -656,19 +656,50 @@ cron.schedule('30 1 * * *', async () => {
           const pool2 = require('./config/database');
           const ioInstance = _io;
 
-          await pool2.query(
-            `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
- VALUES ($1, 'system', 'no_driver_available_timeout', 'full_refund')`,
-[order.id]
-          );
+          // §2.9 audit fix: the order_cancellations record and the status
+          // transition now share one transaction (matching every other
+          // real cancellation path in this codebase -- orderController.
+          // cancelOrder, rejectPendingAcceptance) instead of the INSERT
+          // committing on its own, ahead of and independent from
+          // updateOrderStatus's own transition. Previously, if
+          // updateOrderStatus then threw (e.g. the order was no longer in
+          // a cancellable state by the time this ran -- a driver accepted
+          // it in the same window this query already missed), the INSERT
+          // stayed committed regardless: a phantom cancellation record for
+          // an order that was never actually cancelled by this attempt.
+          const client = await pool2.connect();
+          try {
+            await client.query('BEGIN');
 
-          await updateOrderStatus(order.id, 'cancelled', {
-            actorId: 'system',
-            actorRole: 'system',
-            io: ioInstance,
-          });
+            await client.query(
+              `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
+               VALUES ($1, 'system', 'no_driver_available_timeout', 'full_refund')`,
+              [order.id],
+            );
 
-          if (['card', 'payflex'].includes(order.payment_method) && order.payment_status === 'paid') {
+            await updateOrderStatus(order.id, 'cancelled', {
+              actorId: 'system',
+              actorRole: 'system',
+              io: ioInstance,
+              externalClient: client,
+            });
+
+            await client.query('COMMIT');
+          } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+          } finally {
+            client.release();
+          }
+
+          // Payflex was fully removed as a payment method (paymentController.js,
+          // CRITICAL-3 fix) -- refundOrderPayment itself immediately rejects
+          // any payment_method other than 'card', so the old `['card',
+          // 'payflex'].includes(...)` check here implied a capability that
+          // no longer exists. Cash orders never reach this branch at all
+          // (order.payment_status would never be 'paid' pre-delivery), so
+          // this is just the one real case: a paid card order.
+          if (order.payment_method === 'card' && order.payment_status === 'paid') {
             await RefundService.refundOrderPayment(
               order.id,
               order.user_id,
