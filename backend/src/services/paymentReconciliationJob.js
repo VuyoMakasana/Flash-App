@@ -65,7 +65,49 @@ async function reconcilePendingPayments(io) {
 // finalized through the same RefundService.finalizeRefund() the webhook
 // handlers use, so a dropped webhook doesn't leave a refund silently
 // unresolved forever.
+//
+// §2.9 audit addition: a SEPARATE, narrower orphan case this polling can't
+// cover — a payment_refunds row can be committed at status='processing'
+// with refund_reference still NULL if the process crashes (redeploy, OOM)
+// after that commit but before the Paystack HTTP call ever returns (the
+// reference is only ever set from Paystack's own response). There's
+// nothing to poll for a row like that — Paystack was never told about the
+// attempt, or its response never came back, so fetchRefund has no id to
+// ask about. Before this fix, such a row was invisible to every
+// reconciliation path forever: this function only looks at rows that
+// already have a reference, and reconcileMissingRefunds' retry would just
+// find this same 'processing' row via refundOrderPayment's own
+// existing-refund short-circuit and return it unchanged. paystackService's
+// own outbound Paystack timeout is 30 seconds, so any row still
+// 'processing' with no reference minutes later is not a legitimately
+// in-flight call — marking it 'failed' (excluded from that short-circuit)
+// lets reconcileMissingRefunds pick the underlying order back up fresh on
+// its next pass.
+async function reconcileOrphanedProcessingRefunds() {
+  const result = await db.query(
+    `UPDATE payment_refunds
+     SET status = 'failed',
+         provider_response = COALESCE(provider_response, '{}'::jsonb) || '{"orphaned": true}'::jsonb,
+         updated_at = NOW()
+     WHERE status = 'processing'
+       AND refund_reference IS NULL
+       AND updated_at < NOW() - INTERVAL '5 minutes'
+     RETURNING id, order_id`,
+  );
+
+  for (const row of result.rows) {
+    console.warn(
+      `[Reconciliation] Marked orphaned refund ${row.id} (order ${row.order_id}) as failed for retry — ` +
+      `no Paystack reference was ever recorded, likely a process crash mid-request.`,
+    );
+  }
+
+  return result;
+}
+
 async function reconcileStuckRefunds() {
+  await reconcileOrphanedProcessingRefunds();
+
   const result = await db.query(
     `SELECT id, refund_reference
      FROM payment_refunds
@@ -100,20 +142,56 @@ async function reconcileStuckRefunds() {
 // payment_refunds row exists with status='failed'). Nothing else retries
 // this, so without it a customer's money would be stuck indefinitely purely
 // because of a transient failure at the moment their order was cancelled.
+//
+// §2.9 audit fix: this used to always retry with the FULL original payment
+// amount, with no idea whether the original cancellation was a split
+// compensation (driver_assigned/driver_arrived_store -- see
+// computeCancellationSplit, orderController.js), where the *correct* refund
+// is only the customer's share -- the store's and driver's withheld shares
+// are meant to stay withheld. If that split refund's first attempt failed
+// for any transient reason, this job would "fix" it 5 minutes later by
+// refunding the FULL amount instead, silently overpaying the customer by
+// exactly what the store/driver were supposed to keep. order_cancellations
+// already stores everything needed to get this right (it's written in the
+// same transaction as the cancellation itself, by every real cancellation
+// path in this codebase), so this now joins to the most recent cancellation
+// record for each order and only overrides the amount for a genuine split.
 async function reconcileMissingRefunds(io) {
   const result = await db.query(
-    `SELECT id, user_id
-     FROM orders
-     WHERE status = 'cancelled'
-       AND payment_method = 'card'
-       AND payment_status = 'paid'
-       AND updated_at < NOW() - INTERVAL '5 minutes'
+    `SELECT o.id, o.user_id, oc.refund_mode, oc.customer_item_refund, oc.delivery_fee_refunded
+     FROM orders o
+     LEFT JOIN LATERAL (
+       SELECT refund_mode, customer_item_refund, delivery_fee_refunded
+       FROM order_cancellations
+       WHERE order_id = o.id
+       ORDER BY created_at DESC
+       LIMIT 1
+     ) oc ON true
+     WHERE o.status = 'cancelled'
+       AND o.payment_method = 'card'
+       AND o.payment_status = 'paid'
+       AND o.updated_at < NOW() - INTERVAL '5 minutes'
      LIMIT 50`,
   );
 
   for (const order of result.rows) {
     try {
-      await RefundService.refundOrderPayment(order.id, order.user_id, "reconciliation_retry");
+      const isSplit = order.refund_mode === 'pre_pickup_split' || order.refund_mode === 'store_arrival_split';
+      let overrideAmount = null;
+      if (isSplit) {
+        overrideAmount = Math.round(
+          (parseFloat(order.customer_item_refund || 0) + parseFloat(order.delivery_fee_refunded || 0)) * 100,
+        ) / 100;
+        if (!(overrideAmount > 0)) {
+          // A split cancellation whose customer share is genuinely zero
+          // (e.g. a zero delivery fee) was never meant to trigger a refund
+          // at all -- cancelOrder itself only calls refundOrderPayment when
+          // split.totalCustomerRefund > 0. Nothing to retry here.
+          continue;
+        }
+      }
+
+      await RefundService.refundOrderPayment(order.id, order.user_id, "reconciliation_retry", overrideAmount);
       console.log(`[Reconciliation] Retried missing refund for cancelled order ${order.id}`);
     } catch (err) {
       console.warn(`[Reconciliation] Refund retry failed for order ${order.id}: ${err.message}`);
@@ -124,5 +202,6 @@ async function reconcileMissingRefunds(io) {
 module.exports = {
   reconcilePendingPayments,
   reconcileStuckRefunds,
+  reconcileOrphanedProcessingRefunds,
   reconcileMissingRefunds,
 };
