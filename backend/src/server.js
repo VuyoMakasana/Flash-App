@@ -755,6 +755,53 @@ cron.schedule('30 1 * * *', async () => {
     }
   });
 
+  // PAYMENT-NEVER-INITIATED AUTO-CANCEL: Runs every 15 minutes.
+  // §2.10 audit (stuck-order state machine) — a customer who abandons
+  // checkout before ever calling initializePayment leaves that order, and
+  // the real flash_inventory stock Order.create() already decremented for
+  // it, stuck at payment_pending forever with nothing else to catch it.
+  // See orderStateMachineService.cancelAbandonedPaymentPendingOrders for
+  // the real logic and reasoning — kept there, not here, so it's
+  // independently unit-testable like paymentReconciliationJob.js's
+  // functions already are.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { cancelAbandonedPaymentPendingOrders } = require('./services/orderStateMachineService');
+      await cancelAbandonedPaymentPendingOrders({ io: _io });
+    } catch (e) {
+      console.warn('[Cron] Payment-never-initiated auto-cancel error:', e.message);
+    }
+  });
+
+  // STALE-PREPARING AUTO-CANCEL: Runs every 15 minutes.
+  // §2.10 audit — a store accepting an order (-> 'preparing') but never
+  // calling markReadyForPickup left it with no timeout at all, unlike
+  // pending_store_acceptance and waiting_for_driver. See
+  // orderStateMachineService.cancelStalePreparingOrders.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { cancelStalePreparingOrders } = require('./services/orderStateMachineService');
+      await cancelStalePreparingOrders({ io: _io });
+    } catch (e) {
+      console.warn('[Cron] Stale-preparing auto-cancel error:', e.message);
+    }
+  });
+
+  // STUCK-AT-PAID RETRY: Runs every 15 minutes.
+  // §2.10 audit — the paid -> pending_store_acceptance transition fires
+  // automatically right after payment confirms, but both real call sites
+  // swallow a failure to make that transition, and nothing else ever
+  // scanned for an order stuck at status='paid'. See
+  // orderStateMachineService.recoverStuckPaidOrders.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { recoverStuckPaidOrders } = require('./services/orderStateMachineService');
+      await recoverStuckPaidOrders({ io: _io });
+    } catch (e) {
+      console.warn('[Cron] Stuck-at-paid detection error:', e.message);
+    }
+  });
+
   // WHY: users.flagged_for_cash_abuse/cash_refusal_count are real columns
   // already written to by paymentController.js (a customer flagged after
   // their second cash-payment refusal), but users can't be registered as a

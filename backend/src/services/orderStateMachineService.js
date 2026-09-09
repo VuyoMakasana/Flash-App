@@ -646,6 +646,183 @@ async function markReadyForPickup(orderId, context = {}) {
   return updatedOrder;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// §2.10 audit — stuck-order recovery, called from server.js's timeout
+// crons. Extracted as real, independently-testable functions (rather than
+// left as inline cron bodies, which nothing in this codebase can unit-test)
+// for the same reason paymentReconciliationJob.js's functions are: this is
+// real business logic touching real money/inventory, not incidental
+// scheduling glue. context.thresholdMinutes overrides the founder-set
+// default, purely so tests don't need to backdate rows by the full real
+// window to exercise this.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// A customer who abandons checkout before ever calling initializePayment
+// leaves the order — and the real flash_inventory stock Order.create()
+// already decremented for it — stuck at payment_pending forever.
+// paymentReconciliationJob.reconcilePendingPayments exists for a DIFFERENT
+// case (a payment that WAS attempted but whose webhook was missed) and
+// explicitly excludes this one (its own paystack_reference IS NOT NULL
+// guard). No refund is needed or attempted — payment_status never reached
+// 'paid' here, so there is genuinely nothing to refund.
+async function cancelAbandonedPaymentPendingOrders(context = {}) {
+  const io = context.io;
+  const thresholdMinutes = context.thresholdMinutes ?? 60;
+
+  const result = await pool.query(
+    `SELECT id, user_id FROM orders
+     WHERE status = 'payment_pending'
+       AND paystack_reference IS NULL
+       AND updated_at < NOW() - ($1 || ' minutes')::interval`,
+    [thresholdMinutes],
+  );
+
+  let cancelled = 0;
+  for (const order of result.rows) {
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
+           VALUES ($1, 'system', 'payment_never_initiated_timeout', 'full_refund')`,
+          [order.id],
+        );
+        await updateOrderStatus(order.id, 'cancelled', {
+          actorId: 'system', actorRole: 'system', io, externalClient: client,
+        });
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      if (io) {
+        io.to(`user:${order.user_id}`).emit('order_update', {
+          orderId: order.id,
+          status: 'cancelled',
+          message: 'Your order was cancelled because payment was never completed.',
+        });
+      }
+      console.log(`[OrderStateMachine] Auto-cancelled abandoned payment_pending order ${order.id}`);
+      cancelled += 1;
+    } catch (orderErr) {
+      console.warn(`[OrderStateMachine] Failed to auto-cancel abandoned order ${order.id}:`, orderErr.message);
+    }
+  }
+  return { cancelled, total: result.rows.length };
+}
+
+// A store accepting an order (-> 'preparing') but never calling
+// markReadyForPickup left it with no timeout at all, unlike
+// pending_store_acceptance (rejectPendingAcceptance's own 15-min timeout)
+// and waiting_for_driver (30-min timeout). Mirrors the no-driver-timeout
+// cron's own shape (inline transaction, refund-after-commit) rather than
+// reusing rejectPendingAcceptance, which is hardcoded to the
+// pending_store_acceptance stage specifically and means something
+// different there (a real store rejection, not a system timeout after the
+// store already accepted).
+async function cancelStalePreparingOrders(context = {}) {
+  const io = context.io;
+  const thresholdMinutes = context.thresholdMinutes ?? 30;
+
+  const result = await pool.query(
+    `SELECT id, user_id, payment_method, payment_status FROM orders
+     WHERE status = 'preparing'
+       AND updated_at < NOW() - ($1 || ' minutes')::interval`,
+    [thresholdMinutes],
+  );
+
+  let cancelled = 0;
+  for (const order of result.rows) {
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
+           VALUES ($1, 'system', 'store_preparation_timeout', 'full_refund')`,
+          [order.id],
+        );
+        await updateOrderStatus(order.id, 'cancelled', {
+          actorId: 'system', actorRole: 'system', io, externalClient: client,
+        });
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      // Same isCardPaid-style gate as every other real cancellation path —
+      // a card order that already paid gets a real refund; a cash order
+      // (payment_status never reaches 'paid' before delivery) has nothing
+      // to refund yet.
+      if (order.payment_method === 'card' && order.payment_status === 'paid') {
+        const RefundService = require('./refundService');
+        await RefundService.refundOrderPayment(
+          order.id, order.user_id, 'store_preparation_timeout',
+        ).catch((e) => console.warn(`[OrderStateMachine] Refund failed for ${order.id}:`, e.message));
+      }
+
+      if (io) {
+        io.to(`user:${order.user_id}`).emit('order_update', {
+          orderId: order.id,
+          status: 'cancelled',
+          message: 'Your order was cancelled because the store did not confirm it was ready for pickup in time. A refund has been initiated if you were charged.',
+        });
+      }
+      console.log(`[OrderStateMachine] Auto-cancelled stale preparing order ${order.id}`);
+      cancelled += 1;
+    } catch (orderErr) {
+      console.warn(`[OrderStateMachine] Failed to auto-cancel stale preparing order ${order.id}:`, orderErr.message);
+    }
+  }
+  return { cancelled, total: result.rows.length };
+}
+
+// The paid -> pending_store_acceptance transition fires automatically
+// right after payment confirms (webhookController.handleChargeSuccess, and
+// paymentReconciliationJob.reconcilePendingPayments as its own webhook-
+// missed fallback) — but BOTH of those call sites wrap it in a swallow-all
+// try/catch, and nothing else ever scans for an order stuck at
+// status='paid'. This just retries the same transition; safe, since
+// updateOrderStatus's own canTransition guard means it can never do
+// anything wrong if the order has genuinely already moved on (the WHERE
+// clause naturally stops matching it the moment it succeeds), rather than
+// building a second resolution path.
+async function recoverStuckPaidOrders(context = {}) {
+  const io = context.io;
+  const thresholdMinutes = context.thresholdMinutes ?? 10;
+
+  const result = await pool.query(
+    `SELECT id FROM orders
+     WHERE status = 'paid'
+       AND updated_at < NOW() - ($1 || ' minutes')::interval`,
+    [thresholdMinutes],
+  );
+
+  let recovered = 0;
+  for (const order of result.rows) {
+    try {
+      await updateOrderStatus(order.id, 'pending_store_acceptance', {
+        actorId: 'system', actorRole: 'system', io,
+      });
+      console.log(`[OrderStateMachine] Recovered order ${order.id} stuck at 'paid' — advanced to pending_store_acceptance`);
+      recovered += 1;
+    } catch (orderErr) {
+      const Sentry = require('@sentry/node');
+      const recoveryErr = new Error(`Order ${order.id} still stuck at 'paid' after retry: ${orderErr.message}`);
+      console.error(`[OrderStateMachine] ${recoveryErr.message}`);
+      Sentry.captureException(recoveryErr);
+    }
+  }
+  return { recovered, total: result.rows.length };
+}
+
 module.exports = {
   ORDER_STATES,
   ALLOWED_TRANSITIONS,
@@ -659,4 +836,7 @@ module.exports = {
   markReadyForPickup,
   emitOrderUpdate,
   notifyOrderStatusChange,
+  cancelAbandonedPaymentPendingOrders,
+  cancelStalePreparingOrders,
+  recoverStuckPaidOrders,
 };
