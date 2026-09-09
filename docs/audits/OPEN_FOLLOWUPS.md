@@ -408,3 +408,56 @@ speculatively.
 `onError` handler that shows a small "map unavailable" banner in place
 of the blank canvas, so the gap is at least visibly explained rather than
 looking like a rendering bug.
+
+---
+
+## 12. No admin override for an order permanently stuck at picked_up/in_transit/delivered
+
+**Status:** Open — a real trust/policy decision, deliberately not built.
+**Added:** 2026-09-09 (production-readiness audit §2.10, stuck-order state
+machine).
+
+**What's true today:** `ALLOWED_TRANSITIONS.picked_up = ['in_transit']`
+and `in_transit = ['delivered']` — neither allows `cancelled`. This isn't
+a missing timeout; the order state machine itself has no path out of
+either state except forward to `delivered`. If a driver genuinely vanishes
+with the goods (device destroyed, quits mid-delivery), the order is
+**permanently** stuck — the existing 25-minute driver-connection-lost flag
+(and the 2-hour stuck-at-delivered flag, for the equivalent case where the
+*customer* never confirms the OTP) just marks the order visible in the
+admin panel forever, with no software path to ever close it out.
+Compounding this: AdminJS's `orders` resource is deliberately fully
+read-only (`edit: { isAccessible: false }`, confirmed by reading
+`adminPanel.js` — no generic status editor, no "force complete"/"force
+cancel" action of any kind exists anywhere in the codebase). Resolution
+today is 100% outside the software — an admin has to notice the flag and
+resolve it by, e.g., phoning the customer or driver directly.
+
+**Why deferred:** building a safe admin override here isn't a pure bug
+fix, it's a real trust/authorization decision — should an admin be able to
+force-complete an order (releasing the driver's payout, marking the
+customer as having received goods) without the real OTP that mechanism
+exists specifically to require? Should force-cancelling an in-transit
+order write off the goods as a loss, trigger a `driver_penalties` row, or
+something else? These are business/policy calls, not something to decide
+silently while auditing timeouts — matches this audit's standing rule
+(the same discipline already applied to the cancellation split, the
+premium subscription perk, and other founder-level calls throughout this
+engagement).
+
+**To close this out:**
+1. Decide the actual policy first: what evidence (a phone call transcript?
+   a photo? nothing, admin discretion?) should be required before an admin
+   force-completes or force-cancels an order this way.
+2. Design the admin action with a mandatory justification field and a full
+   audit trail (matches this audit's existing "admin must be able to
+   reconstruct exactly what happened" bar from §2.4) — never a silent
+   status edit.
+3. Decide what happens to the driver's payout/penalty and (for a
+   force-cancel) the customer's refund in each case — these aren't
+   automatic consequences of the existing state machine today, since this
+   path doesn't exist yet.
+4. Notify the other party (the customer, if an admin acts on a stuck
+   in-transit order; the driver, if an admin acts on a stuck delivered
+   order) so neither side is left silently guessing what happened to their
+   order.
