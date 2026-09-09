@@ -17,7 +17,7 @@ const Order = require('../models/Order');
 const Subscription = require('../models/Subscription');
 const Boost = require('../models/Boost');
 const RefundService = require('../services/refundService');
-const { updateOrderStatus } = require('../services/orderStateMachineService');
+const { updateOrderStatus, notifyAdminNewOrderPendingAcceptance } = require('../services/orderStateMachineService');
 const PayoutService               = require('../services/payoutService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
 
@@ -239,11 +239,17 @@ class WebhookController {
         // store's own "Mark Ready for Pickup" admin action, not
         // automatically the moment payment clears.
         try {
-          await updateOrderStatus(orderId, 'pending_store_acceptance', {
+          const updated = await updateOrderStatus(orderId, 'pending_store_acceptance', {
             actorId:   String(event.id || 'paystack'),
             actorRole: 'webhook',
             io,
           });
+          // §2.12 audit — a new order reaching pending_store_acceptance
+          // previously had zero admin-facing signal (see
+          // orderStateMachineService.js's own §2.12 comment for the full
+          // reasoning). Best-effort, never blocks the payment-confirmed
+          // response to the customer.
+          notifyAdminNewOrderPendingAcceptance(updated, io);
         } catch (transitionErr) {
           console.warn('[Webhook] pending_store_acceptance transition skipped:', transitionErr.message);
         }
