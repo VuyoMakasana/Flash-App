@@ -15,7 +15,7 @@ const Payment           = require('../models/Payment');
 const Order             = require('../models/Order');
 const paystackService   = require('../services/paystackService');
 const db                = require('../config/database');
-const { updateOrderStatus, emitOrderUpdate, notifyOrderStatusChange } = require('../services/orderStateMachineService');
+const { updateOrderStatus, emitOrderUpdate, notifyOrderStatusChange, notifyAdminNewOrderPendingAcceptance } = require('../services/orderStateMachineService');
 const cashOtpService               = require('../services/cashOtpService');
 const { sendPushNotification, reportPushFailure } = require('../services/notificationService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
@@ -136,6 +136,13 @@ class PaymentController {
       }
       return res.json({ ...result, scheduled: true, openAt });
     }
+
+    // §2.12 audit — same reasoning as the card webhook/reconciliation call
+    // sites for this exact transition: a new order reaching
+    // pending_store_acceptance previously had zero admin-facing signal.
+    // Only reached here when !scheduled (finalOrder.status is genuinely
+    // 'pending_store_acceptance', not 'scheduled_for_morning').
+    notifyAdminNewOrderPendingAcceptance(finalOrder, io);
 
     return res.json(result);
   }

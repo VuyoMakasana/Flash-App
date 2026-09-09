@@ -812,6 +812,30 @@ cron.schedule('30 1 * * *', async () => {
     }
   });
 
+  // ORDER-ACCEPTANCE ESCALATION: Runs every 5 minutes.
+  // §2.12 audit (store missed-order reliability) — a real, growing risk of
+  // an order sitting unaccepted with nothing telling anyone until the
+  // 15-minute auto-cancel silently refunds it. Runs at 5-minute cadence
+  // (not 15, like the timeout crons above) specifically so an order that
+  // crosses the 5-minute escalation threshold gets a real chance to be
+  // caught before the 15-minute cutoff, not just once right at the edge.
+  // See orderStateMachineService.escalateStuckPendingAcceptanceOrders /
+  // escalateStuckPreparingOrders for the real logic.
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const { escalateStuckPendingAcceptanceOrders } = require('./services/orderStateMachineService');
+      await escalateStuckPendingAcceptanceOrders();
+    } catch (e) {
+      console.warn('[Cron] Order-acceptance escalation error:', e.message);
+    }
+    try {
+      const { escalateStuckPreparingOrders } = require('./services/orderStateMachineService');
+      await escalateStuckPreparingOrders();
+    } catch (e) {
+      console.warn('[Cron] Order-preparation escalation error:', e.message);
+    }
+  });
+
   // WHY: users.flagged_for_cash_abuse/cash_refusal_count are real columns
   // already written to by paymentController.js (a customer flagged after
   // their second cash-payment refusal), but users can't be registered as a

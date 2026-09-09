@@ -1,7 +1,7 @@
 const db = require("../config/database");
 const paystackService = require("./paystackService");
 const RefundService = require("./refundService");
-const { updateOrderStatus } = require("./orderStateMachineService");
+const { updateOrderStatus, notifyAdminNewOrderPendingAcceptance } = require("./orderStateMachineService");
 
 async function reconcilePendingPayments(io) {
   const result = await db.query(
@@ -45,11 +45,16 @@ async function reconcilePendingPayments(io) {
         // before driver matching begins, same as the webhook/cash paths
         // this job exists to catch missed webhooks for.
         try {
-          await updateOrderStatus(order.id, "pending_store_acceptance", {
+          const updated = await updateOrderStatus(order.id, "pending_store_acceptance", {
             actorId: "reconciliation_job",
             actorRole: "system",
             io,
           });
+          // §2.12 audit — same reasoning as webhookController's own call
+          // site for this exact transition: a new order reaching
+          // pending_store_acceptance previously had zero admin-facing
+          // signal. Best-effort.
+          notifyAdminNewOrderPendingAcceptance(updated, io);
         } catch (_) {}
       }
     } catch (err) {

@@ -1108,6 +1108,17 @@ async function migrate() {
     throw err;
   } finally {
     client38.release();
+  }
+
+  // ── v39 ────────────────────────────────────────────────────────────────────
+  const client39 = await pool.connect();
+  try {
+    await migrateV39(client39);
+  } catch (err) {
+    console.error('Migration v39 failed:', err.message);
+    throw err;
+  } finally {
+    client39.release();
     await pool.end();
   }
 
@@ -2500,4 +2511,44 @@ async function migrateV38(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38 };
+// §2.12 audit (store missed-order reliability) — a new order reaching
+// pending_store_acceptance had ZERO proactive admin-facing signal: no
+// io.to('admin') socket alert (every other real admin alert in this
+// codebase -- SOS, stuck-delivery, driver-connection-lost, refund-failed
+// -- has one; this transition never did), and no email fallback either
+// (emailService.js already has the exact proven pattern for "don't rely
+// solely on a live socket connection", sendSosAlertEmail/
+// sendReturnAwaitingReviewEmail -- nothing equivalent existed here). Worse,
+// when the 15-minute store-acceptance-timeout cron (or the 30-minute
+// stale-preparing one, §2.10) actually auto-cancelled a genuinely missed
+// order -- a real lost sale -- that also produced nothing but a
+// console.log, breaking the "admin can reconstruct what happened"
+// principle already enforced everywhere else in this audit.
+//
+// These two idempotent escalation-flag columns (same shape as
+// stuck_delivery_flagged_at/driver_connection_flagged_at) back a new,
+// founder-confirmed design: an immediate socket alert on entry to
+// pending_store_acceptance, a one-time escalation email if it's still
+// unaccepted after 5 minutes (leaving a real 10-minute buffer before the
+// 15-minute auto-cancel), the same shape for preparing at 20/30 minutes,
+// and a distinct "you just missed this order" email when the timeout
+// actually fires. See orderStateMachineService.js's
+// escalateStuckPendingAcceptanceOrders/escalateStuckPreparingOrders.
+async function migrateV39(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS acceptance_escalated_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS preparation_escalated_at TIMESTAMPTZ`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_acceptance_escalation_check ON orders(status, updated_at) WHERE acceptance_escalated_at IS NULL`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_preparation_escalation_check ON orders(status, updated_at) WHERE preparation_escalated_at IS NULL`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v39 completed: orders.acceptance_escalated_at + preparation_escalated_at (§2.12, store missed-order reliability)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v39 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39 };
