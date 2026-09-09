@@ -52,11 +52,23 @@ if (isKnownProductionDatabaseUrl(dbUrl) && process.env.RENDER !== "true") {
 // Create pool with configuration
 const pool = new Pool({
   connectionString: dbUrl,
-  // INCREASED: DB pool max from 20 to 50
-  // WHY: At 20 connections with 100 concurrent users each holding a connection
-  // during a 2-3 second Paystack API call, the pool exhausts and new requests
-  // queue or time out. 50 is safer for early production traffic.
-  max: parseInt(process.env.DB_POOL_MAX || "50"),
+  // LOWERED: DB pool max from 50 back down to 30 (§2.11 audit).
+  // WHY: the 50 figure (itself raised from an original 20, reasoning: "100
+  // concurrent users each holding a connection during a 2-3 second Paystack
+  // call") was never checked against the real ceiling -- Supabase's free
+  // tier caps at 60 total connections platform-wide, shared with Supabase's
+  // own internal use, any dashboard session, and any migration/admin script
+  // run concurrently. 50 left almost no headroom under that cap even with a
+  // single backend instance (confirmed live: this project is genuinely on
+  // the free plan, not hypothetical), and a second Render instance would
+  // have overflowed it outright (each instance opens its own pool, so two
+  // instances at 50 each needs 100). 30 keeps real headroom under 60 while
+  // still comfortably covering this app's actual concurrent load at current
+  // and near-term traffic (a few hundred orders/day doesn't produce
+  // anywhere near 30 simultaneous Paystack-call-holding requests) -- not a
+  // hard technical ceiling, just deliberately not run up against the real
+  // one. Revisit alongside DB_POOL_MAX if a second instance is ever added.
+  max: parseInt(process.env.DB_POOL_MAX || "30"),
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
   allowExitOnIdle: false,
