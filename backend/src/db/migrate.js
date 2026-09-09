@@ -1020,6 +1020,23 @@ async function migrate() {
     throw err;
   } finally {
     client30.release();
+  }
+
+  // ── v31 ─────────────────────────────────────────────────────────────────────────────────
+  // Note (security-fixes reconciliation): numbered v38 on the unmerged
+  // production-readiness-audit line (v31-v37 there were multi-tenant Store
+  // Admin migrations, deliberately excluded here -- see
+  // docs/audits/SECURITY_REMEDIATION_LOG.md, Phase 0). Renumbered to v31,
+  // the next free slot on this line; purely additive indexes, no schema
+  // dependency on anything excluded.
+  const client31 = await pool.connect();
+  try {
+    await migrateV31(client31);
+  } catch (err) {
+    console.error('Migration v31 failed:', err.message);
+    throw err;
+  } finally {
+    client31.release();
     await pool.end();
   }
 
@@ -1892,4 +1909,60 @@ async function migrateV30(client) {
     throw err;
   }
 }
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30 };
+// §2.11 audit (traffic-scaling path) — the three §2.10 stuck-order timeout
+// crons (cancelAbandonedPaymentPendingOrders, cancelStalePreparingOrders,
+// recoverStuckPaidOrders, orderStateMachineService.js) each query
+// `WHERE status = <one literal> AND updated_at < NOW() - interval`.
+// Before this, orders only had status and updated_at indexed separately
+// (idx_orders_status, idx_orders_updated_at) — usable individually, but
+// not as efficient as one composite index scan, and neither is as
+// selective on its own once the table has real long-term volume (most
+// orders are completed/cancelled at any given time; only a small,
+// fast-draining fraction ever sit in payment_pending/preparing/paid). A
+// single non-partial composite index (not three narrow partial ones, the
+// pattern used for idx_orders_stuck_delivery_check/idx_orders_driver_
+// connection_check) serves all three crons' different status literals at
+// once, and is reusable by any future staleness-detection query too —
+// the same complementary shape as the existing idx_orders_status_created
+// (status, created_at DESC), just keyed on updated_at instead. Verified
+// with real EXPLAIN ANALYZE against 80,000 synthetic orders (realistic
+// long-term volume, only ~0.1% in each transient status — see
+// docs/audits/SECTION_2.11_TRAFFIC_SCALING_AUDIT.md): all three cron
+// queries use this index, sub-millisecond, not a sequential scan.
+async function migrateV31(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_status_updated ON orders(status, updated_at)`);
+
+    // Second, independently-discovered fix bundled into the same migration:
+    // orders.parent_order_id (self-referential FK to orders.id, written once
+    // by Return.js when creating a return's reverse-delivery order, never
+    // read back anywhere -- the return<->original-order relationship is
+    // actually looked up via return_requests.order_id/return_order_id
+    // instead) had NO supporting index. Postgres does not automatically
+    // index foreign key columns, and every DELETE (or key-changing UPDATE,
+    // though orders.id is a UUID PK and is never updated in practice) of an
+    // orders row requires checking whether any OTHER row's parent_order_id
+    // points at it -- without an index, that check is a full sequential
+    // scan of the entire orders table, once PER ROW deleted. No live
+    // application code path deletes from orders today (confirmed by
+    // grepping the whole backend), so this wasn't biting real traffic, but
+    // it will bite the next bulk-cleanup/data-retention script that ever
+    // needs to delete order rows -- confirmed directly, not theoretically:
+    // a routine synthetic-data cleanup during this section's own scale
+    // verification stalled for 12+ minutes deleting ~71,000 rows and had
+    // to be cancelled, and pg_stat_activity showed the exact query it was
+    // stuck on was Postgres's own internal parent_order_id FK-integrity
+    // check. Trivial, purely additive, zero behavior change to add.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_parent_order_id ON orders(parent_order_id) WHERE parent_order_id IS NOT NULL`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v31 completed: orders(status, updated_at) + orders(parent_order_id) indexes (§2.11, scale + FK-check fixes)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v31 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31 };
