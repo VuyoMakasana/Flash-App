@@ -572,6 +572,20 @@ async function rejectPendingAcceptance(orderId, context = {}) {
     }
   }
 
+  // §2.12 audit — only for the system-timeout path (cancelledByRole ===
+  // 'system'), never a deliberate store reject, which the store obviously
+  // already knows about since they're the ones who did it. A timeout
+  // means a real order was genuinely missed; best-effort, must never
+  // affect the response for a cancellation that has already committed.
+  if (cancelledByRole === 'system') {
+    try {
+      const { sendOrderMissedEmail } = require('./emailService');
+      await sendOrderMissedEmail(cancelledOrder, 'acceptance');
+    } catch (emailErr) {
+      console.warn('[OrderStateMachine] Failed to send missed-order email:', emailErr.message);
+    }
+  }
+
   return { order: cancelledOrder, refund, refundError };
 }
 
@@ -729,7 +743,7 @@ async function cancelStalePreparingOrders(context = {}) {
   const thresholdMinutes = context.thresholdMinutes ?? 30;
 
   const result = await pool.query(
-    `SELECT id, user_id, payment_method, payment_status FROM orders
+    `SELECT id, order_number, user_id, payment_method, payment_status, total FROM orders
      WHERE status = 'preparing'
        AND updated_at < NOW() - ($1 || ' minutes')::interval`,
     [thresholdMinutes],
@@ -775,6 +789,17 @@ async function cancelStalePreparingOrders(context = {}) {
           message: 'Your order was cancelled because the store did not confirm it was ready for pickup in time. A refund has been initiated if you were charged.',
         });
       }
+      // §2.12 audit — this function is only ever reached via the system
+      // timeout cron, unlike rejectPendingAcceptance (which also serves a
+      // real store-initiated reject) -- always a genuinely missed order,
+      // so no cancelledByRole gate needed here. Best-effort.
+      try {
+        const { sendOrderMissedEmail } = require('./emailService');
+        await sendOrderMissedEmail(order, 'preparation');
+      } catch (emailErr) {
+        console.warn('[OrderStateMachine] Failed to send missed-order email:', emailErr.message);
+      }
+
       console.log(`[OrderStateMachine] Auto-cancelled stale preparing order ${order.id}`);
       cancelled += 1;
     } catch (orderErr) {
@@ -808,11 +833,17 @@ async function recoverStuckPaidOrders(context = {}) {
   let recovered = 0;
   for (const order of result.rows) {
     try {
-      await updateOrderStatus(order.id, 'pending_store_acceptance', {
+      const updated = await updateOrderStatus(order.id, 'pending_store_acceptance', {
         actorId: 'system', actorRole: 'system', io,
       });
       console.log(`[OrderStateMachine] Recovered order ${order.id} stuck at 'paid' — advanced to pending_store_acceptance`);
       recovered += 1;
+
+      // §2.12 audit — this recovery IS a genuine arrival at
+      // pending_store_acceptance (the order was stuck, now it's real and
+      // needs the same attention any other new arrival does), so it gets
+      // the same immediate admin alert as the three normal call sites.
+      notifyAdminNewOrderPendingAcceptance(updated, io);
     } catch (orderErr) {
       const Sentry = require('@sentry/node');
       const recoveryErr = new Error(`Order ${order.id} still stuck at 'paid' after retry: ${orderErr.message}`);
@@ -821,6 +852,102 @@ async function recoverStuckPaidOrders(context = {}) {
     }
   }
   return { recovered, total: result.rows.length };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §2.12 audit — store missed-order reliability.
+//
+// A new order reaching pending_store_acceptance previously had ZERO
+// proactive admin-facing signal: no io.to('admin') socket alert (every
+// other real admin alert in this codebase -- SOS, stuck-delivery,
+// driver-connection-lost, refund-failed -- has one; this transition never
+// did), and no email fallback (emailService.js already has the exact
+// proven pattern for "don't rely solely on a live socket connection" --
+// nothing equivalent existed here). The only thing that happened: the
+// *customer* got a push saying "the store is reviewing your order" -- the
+// store got nothing telling them to actually go review it. Worse, when
+// the 15-minute (pending_store_acceptance) or 30-minute (preparing)
+// timeout cron actually auto-cancelled a genuinely missed order -- a real
+// lost sale, a real refund issued -- that too produced nothing but a
+// console.log, breaking the "admin can reconstruct what happened"
+// principle enforced everywhere else in this audit.
+//
+// Three-tier fix: an immediate socket alert on arrival (this function),
+// a one-time escalation email if still unhandled after a threshold well
+// short of the real auto-cancel timeout (the two functions below), and
+// the sendOrderMissedEmail calls already added to rejectPendingAcceptance
+// (system-timeout path only) and cancelStalePreparingOrders above.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function notifyAdminNewOrderPendingAcceptance(order, io) {
+  if (!io) return;
+  io.to('admin').emit('fleet_alert', {
+    type: 'new_order_pending_acceptance',
+    orderId: order.id,
+    orderNumber: order.order_number,
+    message: `New order ${order.order_number} is awaiting store acceptance.`,
+  });
+}
+
+// Escalation threshold: 5 minutes (founder-confirmed), leaving a real
+// 10-minute buffer before the 15-minute pending_store_acceptance
+// auto-cancel -- not fired on every order (that would just become noise
+// to ignore at real volume), only once one is genuinely at risk.
+// acceptance_escalated_at is an idempotent flag (same shape as
+// stuck_delivery_flagged_at/driver_connection_flagged_at) so this never
+// re-sends for the same order.
+async function escalateStuckPendingAcceptanceOrders(context = {}) {
+  const thresholdMinutes = context.thresholdMinutes ?? 5;
+
+  const result = await pool.query(
+    `SELECT id, order_number, total FROM orders
+     WHERE status = 'pending_store_acceptance'
+       AND acceptance_escalated_at IS NULL
+       AND updated_at < NOW() - ($1 || ' minutes')::interval`,
+    [thresholdMinutes],
+  );
+
+  let escalated = 0;
+  for (const order of result.rows) {
+    try {
+      await pool.query(`UPDATE orders SET acceptance_escalated_at = NOW() WHERE id = $1`, [order.id]);
+      const { sendOrderEscalationEmail } = require('./emailService');
+      await sendOrderEscalationEmail(order, 'acceptance');
+      escalated += 1;
+    } catch (err) {
+      console.warn(`[OrderStateMachine] Failed to escalate pending-acceptance order ${order.id}:`, err.message);
+    }
+  }
+  return { escalated, total: result.rows.length };
+}
+
+// Same shape, for preparing -> the 30-minute auto-cancel (§2.10). 20
+// minutes keeps the same real 10-minute buffer ratio the founder already
+// confirmed for the pending_store_acceptance case above, not a separately
+// re-litigated threshold.
+async function escalateStuckPreparingOrders(context = {}) {
+  const thresholdMinutes = context.thresholdMinutes ?? 20;
+
+  const result = await pool.query(
+    `SELECT id, order_number, total FROM orders
+     WHERE status = 'preparing'
+       AND preparation_escalated_at IS NULL
+       AND updated_at < NOW() - ($1 || ' minutes')::interval`,
+    [thresholdMinutes],
+  );
+
+  let escalated = 0;
+  for (const order of result.rows) {
+    try {
+      await pool.query(`UPDATE orders SET preparation_escalated_at = NOW() WHERE id = $1`, [order.id]);
+      const { sendOrderEscalationEmail } = require('./emailService');
+      await sendOrderEscalationEmail(order, 'preparation');
+      escalated += 1;
+    } catch (err) {
+      console.warn(`[OrderStateMachine] Failed to escalate stale-preparing order ${order.id}:`, err.message);
+    }
+  }
+  return { escalated, total: result.rows.length };
 }
 
 module.exports = {
@@ -839,4 +966,7 @@ module.exports = {
   cancelAbandonedPaymentPendingOrders,
   cancelStalePreparingOrders,
   recoverStuckPaidOrders,
+  notifyAdminNewOrderPendingAcceptance,
+  escalateStuckPendingAcceptanceOrders,
+  escalateStuckPreparingOrders,
 };

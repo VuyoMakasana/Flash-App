@@ -31,6 +31,7 @@ jest.mock('@sentry/node');
 
 const pool = require('../../src/config/database');
 const notificationService = require('../../src/services/notificationService');
+const emailService = require('../../src/services/emailService');
 const RefundService = require('../../src/services/refundService');
 const Sentry = require('@sentry/node');
 const {
@@ -181,6 +182,16 @@ describe('cancelStalePreparingOrders', () => {
     expect(insertCall[0]).toMatch(/store_preparation_timeout/);
   });
 
+  test('§2.12: sends a missed-order email for every stale-preparing cancellation', async () => {
+    const order = { id: 'order-4', order_number: 'FLASH-4', user_id: 'user-4', payment_method: 'cash', payment_status: 'pending', total: '150.00' };
+    pool.query = jest.fn().mockResolvedValue({ rows: [order] });
+    pool.connect = jest.fn().mockResolvedValue(makeClient({ id: 'order-4', status: 'preparing', user_id: 'user-4' }));
+
+    await cancelStalePreparingOrders({});
+
+    expect(emailService.sendOrderMissedEmail).toHaveBeenCalledWith(order, 'preparation');
+  });
+
   test('defaults to 30 minutes when no threshold is given', async () => {
     pool.query = jest.fn().mockResolvedValue({ rows: [] });
     await cancelStalePreparingOrders({});
@@ -198,6 +209,23 @@ describe('recoverStuckPaidOrders', () => {
     const result = await recoverStuckPaidOrders({});
 
     expect(result).toEqual({ recovered: 1, total: 1 });
+  });
+
+  test('§2.12: alerts admin when a recovered order arrives at pending_store_acceptance', async () => {
+    pool.query = jest.fn().mockResolvedValue({ rows: [{ id: 'order-1' }] });
+    pool.connect = jest.fn().mockResolvedValue(
+      makeClient({ id: 'order-1', order_number: 'FLASH-1', status: 'paid', user_id: 'user-1' }),
+    );
+    const io = { to: jest.fn().mockReturnThis(), emit: jest.fn() };
+
+    await recoverStuckPaidOrders({ io });
+
+    expect(io.to).toHaveBeenCalledWith('admin');
+    expect(io.emit).toHaveBeenCalledWith('fleet_alert', expect.objectContaining({
+      type: 'new_order_pending_acceptance',
+      orderId: 'order-1',
+      orderNumber: 'FLASH-1',
+    }));
   });
 
   test('reports to Sentry (not silently) when the retry itself fails', async () => {
