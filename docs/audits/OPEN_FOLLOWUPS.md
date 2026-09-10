@@ -5,6 +5,12 @@ deferred rather than fixed on the spot. Each entry states what's actually
 true today, why it was deferred, and exactly what "done" looks like — so
 picking this up later doesn't require re-deriving any of it from memory.
 
+Many of these items also appear, prioritized into an execution order, in
+`POST_AUDIT_PRIORITY_ROADMAP.md` — **that roadmap is currently paused**
+(Vuyo does not have funding yet to act on it; nothing there should start
+until he explicitly says to), but it's the place to look for sequencing
+once work on this list resumes.
+
 ---
 
 ## 1. `flash-user-app` production builds have Sentry source-map upload disabled
