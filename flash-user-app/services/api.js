@@ -190,6 +190,9 @@ const auth = {
 
   acceptTerms: () => request('/auth/user/accept-terms', { method: 'POST' }),
 
+  setDateOfBirth: (dateOfBirth) =>
+    request('/auth/user/date-of-birth', { method: 'POST', body: JSON.stringify({ date_of_birth: dateOfBirth }) }),
+
   resendVerification: (email) =>
     request('/auth/user/resend-verification', { method: 'POST', body: JSON.stringify({ email }) }),
 

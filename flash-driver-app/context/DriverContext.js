@@ -225,6 +225,16 @@ export const DriverProvider = ({ children }) => {
     });
   }, []);
 
+  // Apple App Store compliance audit: closes the OAuth age-gate bypass —
+  // Google/Apple Sign In create a driver row with no date_of_birth. Unlike
+  // acceptTerms above, a failed call here must surface (an invalid/under-18
+  // date is rejected server-side), so this doesn't swallow the error.
+  const submitDateOfBirth = useCallback(async (dateOfBirth) => {
+    const data = await driverApi.auth.setDateOfBirth(dateOfBirth);
+    setDriver(data.driver);
+    await AsyncStorage.setItem(AS_KEYS.driver, JSON.stringify(data.driver));
+  }, []);
+
   const refreshProfile = useCallback(async () => {
     try {
       const data = await driverApi.driver.getProfile();
@@ -285,6 +295,7 @@ export const DriverProvider = ({ children }) => {
     register,
     logout,
     acceptTerms,
+    submitDateOfBirth,
     refreshProfile,
     setOnline,
     handleSessionExpired,

@@ -73,6 +73,23 @@ class User extends BaseModel {
     });
   }
 
+  // Apple App Store compliance audit: closes the OAuth age-gate bypass —
+  // Google/Apple Sign In create a user row with no date_of_birth at all.
+  // WHERE date_of_birth IS NULL makes this genuinely one-time (matches the
+  // caller's own "one-time entry" requirement): a double-submit (e.g. a
+  // duplicate tap) is idempotent rather than silently overwriting an
+  // already-set value with a second, unvalidated one.
+  static async setDateOfBirth(userId, dateOfBirth) {
+    const result = await this.query(
+      `UPDATE users SET date_of_birth = $1, updated_at = NOW()
+       WHERE id = $2 AND date_of_birth IS NULL
+       RETURNING *`,
+      [dateOfBirth, userId]
+    );
+    if (result.rows[0]) return result.rows[0];
+    return await this.findById(userId, this.tableName);
+  }
+
   // H8 FIX: account deletion — anonymizes PII rather than a hard DELETE.
   // A hard delete would cascade (ON DELETE CASCADE) through orders,
   // payment_methods, messages, etc., destroying financial/transactional
