@@ -529,6 +529,12 @@ are actually closed, and mostly they aren't:
   admin-override gap (**+4 to +6** combined, depending on how many are
   actually tackled — these are real but lower-severity than the items above).
 
+The priority order for executing the above — sequenced, with the
+founder/legal-entity dependency and the paused status explicitly noted —
+is `POST_AUDIT_PRIORITY_ROADMAP.md`. **That roadmap is currently paused:
+Vuyo does not have funding yet to act on it, and none of it should start
+until he explicitly says to.**
+
 Doing all of the above would put Flash in the high 80s to low 90s — not
 100, since a genuine staging environment, a second Render instance, and
 masked calling would still be deliberately-deferred, real infrastructure/
