@@ -14,8 +14,10 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useDriver } from '../../context/DriverContext';
 import driverApi, { BASE_URL } from '../../services/api';
+import analytics from '../../services/analytics';
 import { io } from 'socket.io-client';
 import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
@@ -109,6 +111,8 @@ export default function DriverDashboard() {
   // orderId and customers never saw driver movement during a delivery.
   const { driver, token, isOnline, setOnline, logout, activeOrder, setActiveOrder } = useDriver();
   const router = useRouter();
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Dashboard'); }, []));
 
   const [availableOrders, setAvailableOrders] = useState([]);
   const [earnings, setEarnings]               = useState({
@@ -298,6 +302,7 @@ export default function DriverDashboard() {
     }
     try {
       const data = await driverApi.orders.accept(orderId);
+      analytics.orderAccepted(orderId);
       await setActiveOrder(data.order);
       setAvailableOrders(prev => prev.filter(o => o.id !== orderId));
       Alert.alert('Order Accepted!', `Collect from:\n${data.order.pickup_address}`);
@@ -327,6 +332,7 @@ export default function DriverDashboard() {
     try {
       await driverApi.orders.updateStatus(activeOrder.id, nextStatus);
       if (nextStatus === 'completed') {
+        analytics.orderCompletedByDriver(activeOrder.id);
         await setActiveOrder(null);
         setSosSent(false);
         await loadAll();
@@ -378,6 +384,8 @@ export default function DriverDashboard() {
         ? driverApi.driver.submitPickupPhoto
         : driverApi.driver.submitDropoffPhoto;
       const data = await submit(activeOrder.id, formData);
+      if (type === 'pickup') analytics.pickupConfirmed(activeOrder.id);
+      else analytics.dropoffConfirmed(activeOrder.id);
       await setActiveOrder({ ...activeOrder, status: data.status });
     } catch (e) {
       Alert.alert('Upload failed', e.message || 'Could not submit the photo. Please try again.');

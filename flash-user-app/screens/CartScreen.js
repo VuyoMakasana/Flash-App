@@ -1,12 +1,15 @@
-import React from 'react';
+import React, { useCallback } from 'react';
 import { View, Text, FlatList, Image, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
+import analytics from '../services/analytics';
 
 export default function CartScreen() {
   const navigation = useNavigation();
   const { cart, updateCartQuantity, removeCartItem } = useFlash();
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Cart'); }, []));
 
   const subtotal = cart.reduce((sum, i) => sum + i.price * i.quantity, 0);
 

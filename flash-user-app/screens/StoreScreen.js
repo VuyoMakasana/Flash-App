@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Pressable,
   Image, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
 import api from '../services/api';
+import analytics from '../services/analytics';
 
 // Multi-tenant Stage 7 — the customer-facing storefront's individual store
 // page. Store profile (banner/logo/name/description) comes from a real
@@ -25,6 +26,8 @@ export default function StoreScreen() {
   const { products } = useFlash();
   const [store, setStore] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Store'); }, []));
 
   useEffect(() => {
     api.stores.getById(storeId)

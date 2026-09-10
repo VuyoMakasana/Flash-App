@@ -4,10 +4,11 @@ import {
   Platform, Linking, Animated, Image, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { io } from 'socket.io-client';
 import * as Location from 'expo-location';
 import api, { BASE_URL, getToken } from '../services/api';
+import analytics from '../services/analytics';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 
 // FIX 4: Align tracking labels with backend state machine values
@@ -81,6 +82,13 @@ export default function TrackingScreen() {
 
   const socketRef = useRef(null);
   const mapRef    = useRef(null);
+  // Guards analytics.orderCompleted() to fire at most once per screen
+  // session — a plain ref rather than inside a setState updater, since
+  // updater functions must stay pure (React may invoke them more than once
+  // in development) and firing an analytics event is a real side effect.
+  const completedTrackedRef = useRef(false);
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Tracking'); }, []));
 
   // ── Show arrival banner with auto-dismiss ──────────────────────────────────
   const showBanner = useCallback((msg) => {
@@ -211,7 +219,16 @@ export default function TrackingScreen() {
 
       // Order status changed
       socket.on('order_update', (data) => {
-        if (data.orderId === orderId) setOrderStatus(data.status);
+        if (data.orderId !== orderId) return;
+        if (data.status === 'completed' && !completedTrackedRef.current) {
+          completedTrackedRef.current = true;
+          // order_value/time_to_deliver_minutes not available here — this
+          // event only carries { orderId, status }, and fetching the full
+          // order purely for analytics is out of scope for this pass (see
+          // analytics.js's orderCompleted comment).
+          analytics.orderCompleted({ orderId });
+        }
+        setOrderStatus(data.status);
       });
 
       // ── Arrival milestones from backend (Part 2) ─────────────────────────
@@ -240,6 +257,10 @@ export default function TrackingScreen() {
             const api = (await import('../services/api')).default;
             const data = await api.orders.getOrder(orderId);
             if (data?.order) {
+              if (data.order.status === 'completed' && !completedTrackedRef.current) {
+                completedTrackedRef.current = true;
+                analytics.orderCompleted({ orderId, orderValue: data.order.total });
+              }
               setOrderStatus(data.order.status);
               if (data.order.driver_name) {
                 setDriver({

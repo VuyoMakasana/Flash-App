@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import api from '../services/api';
+import analytics from '../services/analytics';
 
 // A real, required confirmation step before any cancellation with a real
 // financial consequence finalizes — the exact amounts are always shown
@@ -51,6 +52,7 @@ export default function CancelOrderScreen() {
     setSubmitting(true);
     try {
       await api.orders.cancel(order.id, { reason: reason.trim() || null });
+      analytics.orderCancelled(order.id, order.status);
       Alert.alert('Order Cancelled', 'Your cancellation has been processed.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);

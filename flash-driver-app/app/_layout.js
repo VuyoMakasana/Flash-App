@@ -7,10 +7,15 @@
 
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { View, ActivityIndicator, Text, ScrollView } from 'react-native';
 import { DriverProvider, useDriver } from '../context/DriverContext';
 import { setSessionExpiredHandler } from '../services/api';
+// Its own module-scope init (mirrors the Sentry.init() guard below) runs
+// the first time this is imported — analytics.js's own client-null guard
+// means this is a safe no-op until EXPO_PUBLIC_POSTHOG_API_KEY has a real
+// value.
+import analytics from '../services/analytics';
 
 // ── BACKGROUND LOCATION TASK REGISTRATION ───────────────────────────────────
 // This import MUST stay at module level and MUST appear before any component
@@ -103,6 +108,20 @@ function RootLayoutNav() {
   const { isAuthenticated, loading, driver, handleSessionExpired } = useDriver();
   const router = useRouter();
   const segments = useSegments();
+
+  // Fires at most once per app session, the first time this driver's status
+  // is observed as 'approved' — a ref rather than derived render state,
+  // since `driver` gets refreshed from a real profile fetch on every cold
+  // start (DriverContext's hydrate()), so without a guard this would refire
+  // on every launch for an already-approved driver, not just the one real
+  // approval transition.
+  const approvedTrackedRef = useRef(false);
+  useEffect(() => {
+    if (driver?.status === 'approved' && !approvedTrackedRef.current) {
+      approvedTrackedRef.current = true;
+      analytics.driverApproved();
+    }
+  }, [driver?.status]);
 
   // H11 FIX: session-expiry recovery now runs via a direct callback that
   // api.js's request() invokes the instant it detects an expired/revoked

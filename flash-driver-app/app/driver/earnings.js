@@ -1,11 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, ActivityIndicator, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import driverApi from '../../services/api';
+import analytics from '../../services/analytics';
 
 export default function DriverEarningsScreen() {
   const router = useRouter();
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Earnings'); }, []));
+
   const [data, setData] = useState({ orders: [], totalEarnings: '0.00' });
   const [loading, setLoading] = useState(true);
 

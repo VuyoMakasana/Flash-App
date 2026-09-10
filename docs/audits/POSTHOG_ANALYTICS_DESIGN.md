@@ -131,22 +131,116 @@ need a real update, not just a mental note:
   Sentry/Resend, with the same one-sentence-per-service treatment already
   drafted for those five.
 
-Neither update is made yet — there's nothing real to describe until the
-SDK is actually wired in and sending real events. Flagging this now so
-it isn't forgotten between implementation and whenever those forms are
-actually submitted (a Section 2.14/roadmap item already paused pending
-funding).
+**Both updates are now made** — see §7 below.
 
 ## 6. Next steps, once unblocked
 
 1. Vuyo creates the PostHog account and provides a real project API key
    (and sets the billing-limit safeguard from §4 if a card is ever added).
-2. Implement: `posthog-react-native` in both apps, a thin wrapper service
+   **Still the one thing blocking real events — everything else is done.**
+2. ~~Implement: `posthog-react-native` in both apps, a thin wrapper service
    matching the existing `services/api.js` pattern, wired to the event
-   taxonomy in §2 exactly — no autocapture, no session replay, per §3.
-3. Update the App Privacy/Data Safety draft and the privacy-policy
-   third-party-services text per §5, before either is actually submitted.
-4. Test and document, same as every other section.
+   taxonomy in §2 exactly — no autocapture, no session replay, per §3.~~ Done.
+3. ~~Update the App Privacy/Data Safety draft and the privacy-policy
+   third-party-services text per §5, before either is actually submitted.~~ Done.
+4. ~~Test and document, same as every other section.~~ Done — §7.
 
-Steps 2–4 are not started. Reporting back with this design before writing
-any tracking code, as instructed.
+## 7. Implementation
+
+Steps 2–4 above are complete. What actually got built, and its limits:
+
+### What was built
+
+`posthog-react-native` (plus its Expo peer deps — `expo-file-system`,
+`expo-application`, `expo-device`, `expo-localization`) installed in both
+apps. A thin `services/analytics.js` in each, mirroring `services/api.js`'s
+existing shape exactly: a plain module exporting named functions, one per
+event in §2's table — no generic `track(eventName, props)` escape hatch,
+so the full set of events Flash ever sends is visible by reading that one
+file per app. The PostHog client is created via direct instantiation
+(`new PostHog(...)`), never `<PostHogProvider>` — confirmed directly
+against the installed package's own type definitions
+(`posthog-rn.d.ts`, `PostHogProvider.d.ts`) that autocapture (screen/touch
+capture) is wired entirely through the Provider's React-tree integration;
+a bare instantiated client has no autocapture mechanism to disable in the
+first place, which is a stronger guarantee than "capture is off." App
+lifecycle events (`captureAppLifecycleEvents`) and session replay
+(`enableSessionReplay`) are both explicitly set `false` regardless.
+
+Wired into the exact call sites the taxonomy implies: `_postLogin`/
+`register`/`login`/`loginWithApple`/`loginWithGoogle` in both apps'
+context providers (identify + signup events; user app also fires
+`user_logged_in`, matching its own table — the driver table never defined
+a login event, so the driver app intentionally sends nothing on login, not
+an oversight); `useFocusEffect` on the 9 user-app screens and 4 driver-app
+screens named in §2; `placeOrder`/`CancelOrderScreen.js`/`PaymentScreen.js`/
+`TrackingScreen.js` for the user app's order events; `setOnline`/
+`handleAcceptOrder`/`handleCapturePhoto`/`handleStatusUpdate` in the driver
+app's dashboard for driver events. `driver_approved` and `order_completed`
+(both apps) use a `useRef` guard rather than derived render state or a
+`setState` updater's own callback, so each fires at most once per relevant
+transition — not on every re-render or profile refresh, and never inside
+an impure state-updater function (React may invoke those more than once).
+
+### Two honest gaps between the approved taxonomy and real app behavior, found during implementation
+
+- **`order_rejected` has no real call site.** The driver app has no
+  decline/reject action anywhere — a driver either taps Accept or the
+  match times out. The function exists in `analytics.js` (matches the
+  taxonomy, ready for a future real decline button) but nothing calls it
+  today. Flagging this rather than inventing a call site that doesn't
+  correspond to real behavior.
+- **`order_value`/`time_to_deliver_minutes` aren't always populated** on
+  `order_completed` (user app) and `earnings` on `order_completed_by_driver`
+  (driver app). The live call sites that detect these transitions (a
+  socket event, and the driver's own status-update action) don't carry
+  the full order record — fetching one purely to enrich an analytics
+  event would be a new network call, out of scope for "nothing more than
+  the taxonomy." Each event still fires with `order_id` and whatever's
+  cheaply available (the one user-app call site that does have the full
+  order already — the socket-fallback poll — does pass `order_value`
+  through). Documented inline in both `analytics.js` files.
+
+Also not in the original design-doc table but added on review: `driver_approved`
+was already scoped in §2, but its call site (`_layout.js`'s router guard)
+needed a session-scoped ref guard the design doc didn't spell out, since
+`driver` is refreshed from a real profile fetch on every cold start — the
+guard prevents refiring on every app open for an already-approved driver.
+
+### Verification
+
+- **Syntax**: every changed/new file in both apps parses cleanly. User
+  app (no lint script — confirmed in `CLAUDE.md`) verified via the
+  JSX-aware `@babel/parser` AST check already established as trustworthy
+  earlier in this engagement (proven against a deliberately broken
+  snippet before trusting a clean result). Driver app verified via the
+  project's real `expo lint` — **zero new errors or warnings** introduced
+  by any of these changes; the 5 problems the run reports are all
+  pre-existing and unrelated (`chat.js`, `bank.js`, `notifications.js`,
+  and two dependency-array warnings already present before this work,
+  confirmed by reading each one directly rather than assuming).
+- **Real event delivery was not tested and could not be** — both apps'
+  `EXPO_PUBLIC_POSTHOG_API_KEY` are unset by design (§6 item 1 is still
+  open), so `services/analytics.js`'s client-null guard means every
+  function call in this implementation is currently a safe no-op. I could
+  not verify that a real event reaches a real PostHog project, because no
+  real project exists yet — stated plainly rather than implied otherwise.
+  What *is* verified: the guard itself (every function checks `if
+  (!client) return;` before touching the SDK) and the call-site wiring
+  (confirmed by reading each one directly, listed above).
+- **Privacy/compliance updates**: `app-privacy-data-safety-draft.md` and
+  `privacy-policy-additions.md` (both in the scratchpad handoff location,
+  not committed — neither is code) updated to add PostHog by name,
+  matching §5's plan. Found one additional real gap while updating the
+  Data Safety draft, not previously flagged anywhere: account deletion
+  today purges Flash's own database but does not separately delete a
+  user's/driver's past events from PostHog's own copy — added as an
+  explicit open question in that draft for whoever submits the form to
+  resolve, rather than silently leaving it unaddressed.
+
+### Outcome
+
+The design is fully implemented and wired, with zero regressions to
+either app's existing lint/syntax cleanliness. The one thing standing
+between this and real data flowing is unchanged from §6 item 1: Vuyo
+creating the PostHog account and providing a real API key.
