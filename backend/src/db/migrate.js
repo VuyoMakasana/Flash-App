@@ -1119,6 +1119,17 @@ async function migrate() {
     throw err;
   } finally {
     client39.release();
+  }
+
+  // ── v40 ────────────────────────────────────────────────────────────────────
+  const client40 = await pool.connect();
+  try {
+    await migrateV40(client40);
+  } catch (err) {
+    console.error('Migration v40 failed:', err.message);
+    throw err;
+  } finally {
+    client40.release();
     await pool.end();
   }
 
@@ -2551,4 +2562,48 @@ async function migrateV39(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39 };
+// §2.13 audit (full admin visibility) — driver_commission_debts and
+// driver_penalties (real money owed to Flash by drivers, and the actual
+// record of why a driver was penalized/auto-suspended) were previously
+// visible only as an aggregate total on a driver's page — no per-row
+// browse, so an admin investigating a real dispute had no path to the
+// individual records without raw DB access. admin_actions (the admin
+// panel's own audit log) and driver_subscriptions/premium_subscriptions
+// (real recurring revenue, previously dashboard-aggregate-only) had the
+// same gap. All five are being promoted to real, read-only, browsable
+// AdminJS resources (adminPanel.js) — each needs a plain index on its own
+// "when did this happen" column (RESOURCE_TIMESTAMP_COLUMNS,
+// adminResourceDefaults.js) for the resource's default most-recent-first
+// sort to stay a real index scan instead of a full-table sort as these
+// tables grow, matching this audit's own §2.11 scale standard. The
+// existing indexes on these five tables (driver_id/status/admin_id-scoped
+// composites) don't cover a *global*, unscoped "most recent overall"
+// sort — confirmed by checking each table's actual index list, not
+// assumed.
+async function migrateV40(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_commission_debts_created_at ON driver_commission_debts(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_penalties_created_at ON driver_penalties(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_admin_actions_created_at ON admin_actions(created_at DESC)`);
+    // driver_subscriptions/premium_subscriptions renew via UPSERT on the
+    // same row (confirmed directly -- Admin.getFinancials()'s own comment:
+    // "premium_subscriptions itself can't be [summed for revenue] since
+    // renewals upsert the same row"), so updated_at (last real change --
+    // a renewal or a cancellation), not created_at (this row's original,
+    // one-time insert), is the column that actually answers "when did
+    // something happen here" -- same reasoning already applied to
+    // driver_wallets in RESOURCE_TIMESTAMP_COLUMNS.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_subscriptions_updated_at ON driver_subscriptions(updated_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_premium_subscriptions_updated_at ON premium_subscriptions(updated_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v40 completed: chronological-sort indexes for the five new §2.13 admin resources');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v40 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40 };
