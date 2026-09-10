@@ -11,10 +11,14 @@
  * comment in flash-user-app/services/analytics.js for why direct
  * instantiation (never <PostHogProvider>) already guarantees this.
  *
- * EXPO_PUBLIC_POSTHOG_API_KEY has no real value yet — same pattern as
- * EXPO_PUBLIC_SENTRY_DSN before Sentry was fully configured. Every function
- * below no-ops safely until Vuyo creates the PostHog account and provides
- * a real key.
+ * EXPO_PUBLIC_POSTHOG_API_KEY carries a real project key as of 2026-09-10
+ * (set in .env locally and as a plaintext EAS env var for both the
+ * production and preview build profiles — see the matching comment in
+ * flash-user-app/services/analytics.js for why "plaintext," not "secret").
+ * Real events now flow — verified end-to-end
+ * (docs/audits/POSTHOG_ANALYTICS_DESIGN.md §7). The client-null guard below
+ * stays regardless: it's what makes a missing/blank key a safe no-op
+ * rather than a crash, in any environment that doesn't have one set.
  */
 
 import PostHog from 'posthog-react-native';

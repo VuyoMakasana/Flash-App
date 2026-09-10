@@ -219,15 +219,9 @@ guard prevents refiring on every app open for an already-approved driver.
   pre-existing and unrelated (`chat.js`, `bank.js`, `notifications.js`,
   and two dependency-array warnings already present before this work,
   confirmed by reading each one directly rather than assuming).
-- **Real event delivery was not tested and could not be** — both apps'
-  `EXPO_PUBLIC_POSTHOG_API_KEY` are unset by design (§6 item 1 is still
-  open), so `services/analytics.js`'s client-null guard means every
-  function call in this implementation is currently a safe no-op. I could
-  not verify that a real event reaches a real PostHog project, because no
-  real project exists yet — stated plainly rather than implied otherwise.
-  What *is* verified: the guard itself (every function checks `if
-  (!client) return;` before touching the SDK) and the call-site wiring
-  (confirmed by reading each one directly, listed above).
+- **Real event delivery**: at the time this section was first written,
+  both apps' `EXPO_PUBLIC_POSTHOG_API_KEY` were unset by design and every
+  function call was a safe no-op. **That gap is now closed — see §8.**
 - **Privacy/compliance updates**: `app-privacy-data-safety-draft.md` and
   `privacy-policy-additions.md` (both in the scratchpad handoff location,
   not committed — neither is code) updated to add PostHog by name,
@@ -241,6 +235,84 @@ guard prevents refiring on every app open for an already-approved driver.
 ### Outcome
 
 The design is fully implemented and wired, with zero regressions to
-either app's existing lint/syntax cleanliness. The one thing standing
-between this and real data flowing is unchanged from §6 item 1: Vuyo
-creating the PostHog account and providing a real API key.
+either app's existing lint/syntax cleanliness. At the time of writing,
+the one thing standing between this and real data flowing was §6 item 1
+— resolved the same day; see §8.
+
+## 8. Real key added, real delivery confirmed (2026-09-10, same day)
+
+Vuyo created the PostHog project and provided a real project API key.
+
+### What was configured
+
+`EXPO_PUBLIC_POSTHOG_API_KEY` and `EXPO_PUBLIC_POSTHOG_HOST` added as real
+values to both apps' local `.env` (gitignored, confirmed via `git
+check-ignore` — never committed; `.env.example` in both apps still shows
+only a placeholder). Also added as EAS environment variables for both the
+`production` and `preview` build profiles, on both projects — **plaintext
+visibility, not secret**: EAS itself rejects `secret` visibility for an
+`EXPO_PUBLIC_`-prefixed variable (confirmed live — the CLI's own error
+explains why: these variables compile directly into the client bundle
+regardless of EAS visibility setting, so "secret" would misrepresent how
+protected the value actually is; PostHog's project token is a write-only
+key meant to be public-safe anyway, the same posture already documented
+for `EXPO_PUBLIC_SENTRY_DSN`). Confirmed present, correct, and consistent
+across both environments and both projects via a direct `eas env:list`
+read-back afterward — not just trusting the "Created" confirmation message.
+
+### Real end-to-end delivery — what was actually verified, and the boundary of what wasn't
+
+`posthog-react-native` is a React-Native-only package — confirmed
+directly (attempting `require()` on it in plain Node fails immediately on
+syntax the package expects a bundler to transform first), and this
+project's Expo SDK 54 setup has no standalone `babel-preset-expo`/
+`metro-react-native-babel-preset` package to compile it through outside
+Metro either (checked; not present in `node_modules`). There is also no
+browser- or device-interaction tool available in this environment to
+literally launch a simulator/Expo-web session and tap through a real
+screen. Given those two real constraints, full literal "ran the app and
+watched it happen" verification wasn't possible — stated plainly rather
+than glossed over.
+
+What was actually done instead: sent two real HTTP requests directly to
+PostHog's own documented public single-event Capture API
+(`POST https://us.i.posthog.com/i/v0/e/` — the same stable endpoint
+family `posthog-react-native`'s own core (`@posthog/core`) sends to
+internally, confirmed by reading its actual compiled source, not
+assumed), using the real project key and matching the exact event
+name/property shape the real app code sends for two taxonomy events:
+`screen_viewed` (`screen_name: "Home"`) and `user_logged_in`
+(`login_method: "password"`). Both requests returned `HTTP 200
+{"status":"Ok"}` — PostHog's own ingestion server accepted both events
+under the real key. Both were sent with `distinct_id:
+"verification-claude-2026-09-10"` and an explicit `verification: true`
+property plus a plain-language note, specifically so they're identifiable
+and easy to filter out or delete from real analytics data, not mistaken
+for genuine user behavior.
+
+**What this proves**: the real key and host are valid and live; PostHog's
+ingestion pipeline accepts them; the exact event shape this app's code
+sends will succeed. **What this does not prove**: that a real device
+running the actual compiled app produces byte-identical requests (the
+SDK adds its own metadata — `$lib`, `$lib_version`, and similar — that
+this test didn't attempt to replicate exactly), or that the events are
+now visibly queryable in the PostHog dashboard's UI — confirming that
+last step needs either Vuyo's own dashboard login or a separate
+*read-scoped* personal API key (different in kind from the write-only
+project token already added — not requested here, since it wasn't
+needed for the app itself to work and asking for one would have been
+outside this task's explicit scope).
+
+**Recommended next step for Vuyo, optional**: open the PostHog project's
+Activity/Events view and filter for `distinct_id =
+verification-claude-2026-09-10` to see both events land — the final,
+visual confirmation this session's own tools couldn't perform. Both are
+clearly labeled test/verification events and safe to delete.
+
+### Outcome
+
+`services/analytics.js`'s code-level comments in both apps now reflect
+reality (no longer say "no real value yet"). Real events are confirmed
+accepted by PostHog under the real project key, end to end, at the
+network/ingestion level — the one gap the previous version of this
+section left open is closed, within the honest limits described above.
