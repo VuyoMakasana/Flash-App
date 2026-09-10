@@ -501,6 +501,15 @@ const PAYOUT_TRANSACTION_STATUS_VALUES = [
   { value: 'failed', label: 'Failed' },
 ];
 
+// §2.13 audit — real values, confirmed against the actual CHECK constraint
+// on driver_commission_debts.status (migrate.js v8).
+const DRIVER_COMMISSION_DEBT_STATUS_VALUES = [
+  { value: 'outstanding',       label: 'Outstanding' },
+  { value: 'collected_wallet',  label: 'Collected (Wallet)' },
+  { value: 'collected_payout',  label: 'Collected (Payout)' },
+  { value: 'waived',            label: 'Waived' },
+];
+
 // Real values, confirmed against webhookController.js/models/Payment.js/
 // paymentController.js (payments.status) and refundService.js
 // (payment_refunds.status). pending_cash (Payment.createCashPayment) was
@@ -760,7 +769,12 @@ function buildResources(db) {
           // is left at its default (every real column), so raw IDs and every
           // other field stay available to anyone who opens a driver's detail
           // page, per the founder's explicit instruction.
-          listProperties: ['name', 'email', 'phone', 'status', 'vehicle_type', 'rating', 'created_at'],
+          // §2.13 audit — commission_blocked added: previously only visible
+          // by opening a driver's own detail page (inside the wallet
+          // summary), the same "impossible to miss while scanning"
+          // reasoning as orders' stuck_delivery_flagged_at/
+          // driver_connection_flagged_at columns below.
+          listProperties: ['name', 'email', 'phone', 'status', 'commission_blocked', 'vehicle_type', 'rating', 'created_at'],
           // isVisible: false only hides the field in the rendered UI — confirmed
           // live: the raw list API response still included the real bcrypt hash
           // in plain text over the wire. AdminJS's own documented fix for
@@ -840,6 +854,37 @@ function buildResources(db) {
             },
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.drivers),
+      },
+      {
+        // §2.13 audit (full admin visibility) — the admin panel's own audit
+        // log previously had no browse UI at all (AdminAction.log() writes
+        // to it from every custom action in this file; AdminAction.
+        // getRecent() was the only read path, never wired to a screen).
+        // Read-only, same as every other event-log resource here — this is
+        // a record of what already happened, never something an admin
+        // edits directly.
+        resource: db.table('admin_actions'),
+        options: withChronologicalDefaults({
+          listProperties: ['action_type', 'admin_id', 'target_table', 'target_id', 'created_at'],
+          properties: {
+            // admins isn't a registered resource (Phase 0's own note: no
+            // "manage admins" screen exists yet), so admin_id can't resolve
+            // to a real reference/name the way driver_id does elsewhere in
+            // this file -- action_type is the real, human-readable
+            // identifying value for this row instead (matters specifically
+            // for the mobile responsive fix, see drivers.name above).
+            action_type: { isTitle: true },
+            metadata: { type: 'textarea' },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.admin_actions),
       },
       {
         resource: suppressReference(db.table('orders'), 'user_id'),
@@ -1262,6 +1307,59 @@ function buildResources(db) {
         }, RESOURCE_TIMESTAMP_COLUMNS.driver_wallet_ledger),
       },
       {
+        // §2.13 audit — previously visible only as an aggregate total
+        // ("Cash commission owed: RX") on a driver's own page
+        // (attachWalletSummary above). Real money owed to Flash by
+        // drivers, the exact data the production-readiness audit's §2.8
+        // commission-debt work found and corrected two real rows of by
+        // querying raw SQL directly, since no browsable view existed --
+        // this resource is that view. order_id already resolves to a real
+        // order-number link since orders is a registered resource.
+        resource: db.table('driver_commission_debts'),
+        options: withChronologicalDefaults({
+          listProperties: ['driver_id', 'order_id', 'commission_amount', 'status', 'created_at', 'settled_at'],
+          properties: {
+            // Responsive fix (see drivers.name above).
+            driver_id: { isTitle: true },
+            status: { availableValues: DRIVER_COMMISSION_DEBT_STATUS_VALUES },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.driver_commission_debts),
+      },
+      {
+        // §2.13 audit — previously visible only as an aggregate count +
+        // total ("Penalties: 2 (R40.00 total)") on a driver's own page
+        // (attachTrustedDriverScorecard above) -- the individual `reason`
+        // text for each penalty (e.g. the detailed auto-suspension message
+        // §2.10's stuck-order cron writes) was invisible anywhere in the
+        // panel. Central to fraud/dispute reconstruction (§2.4's own "admin
+        // must be able to reconstruct what happened" principle).
+        resource: db.table('driver_penalties'),
+        options: withChronologicalDefaults({
+          listProperties: ['driver_id', 'order_id', 'amount', 'reason', 'status', 'created_at'],
+          properties: {
+            // Responsive fix (see drivers.name above).
+            driver_id: { isTitle: true },
+            reason: { type: 'textarea' },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.driver_penalties),
+      },
+      {
         resource: db.table('driver_payout_requests'),
         options: withChronologicalDefaults({
           listProperties: ['driver_id', 'amount', 'status', 'created_at', 'updated_at'],
@@ -1300,6 +1398,49 @@ function buildResources(db) {
             bulkDelete: { isAccessible: false },
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.payout_transactions),
+      },
+      {
+        // §2.13 audit — real recurring revenue, previously visible only as
+        // platform-wide dashboard aggregates (Admin.getFinancials()'s
+        // subscription-revenue/active-count totals) with no way to look up
+        // one driver's own subscription status/history. Read-only —
+        // subscription state changes go through the real subscription
+        // flows (subscriptionService.js), never a raw admin edit.
+        resource: db.table('driver_subscriptions'),
+        options: withChronologicalDefaults({
+          listProperties: ['driver_id', 'plan_type', 'price', 'status', 'deliveries_used', 'deliveries_limit', 'expires_at'],
+          properties: {
+            // Responsive fix (see drivers.name above).
+            driver_id: { isTitle: true },
+          },
+          actions: {
+            list: { after: [stripSensitive] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.driver_subscriptions),
+      },
+      {
+        // Same §2.13 fix as driver_subscriptions above, customer side.
+        // user_id references users, which can't be a registered resource
+        // (see suppressReference's own comment elsewhere in this file) --
+        // same attachUserNames treatment as every other user_id column
+        // here.
+        resource: suppressReference(db.table('premium_subscriptions'), 'user_id'),
+        options: withChronologicalDefaults({
+          listProperties: ['user_id', 'price', 'status', 'starts_at', 'expires_at', 'cancelled_at'],
+          actions: {
+            list: { after: [stripSensitive, attachUserNames('user_id')] },
+            show: { after: [stripSensitive] },
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.premium_subscriptions),
       },
       // Critical-flow/edge-case audit §2.7 -- previously payments/
       // payment_refunds only fed dashboard aggregate totals (adminCoverage.js's
@@ -1622,6 +1763,14 @@ async function mountAdminPanel(app) {
     database: dbName,
   }).init();
 
+  // §2.13 audit (full admin visibility) — captured once so the startup log
+  // line below can report the real, current resource list instead of a
+  // hand-maintained string that had already drifted out of date (missing
+  // the marketing_* resources even before this section's own five
+  // additions) — full visibility should extend to what the logs
+  // themselves say is actually mounted, not just the panel's own UI.
+  const resources = buildResources(db);
+
   const admin = new AdminJS({
     rootPath: ADMIN_PANEL_PATH,
     componentLoader,
@@ -1668,7 +1817,7 @@ async function mountAdminPanel(app) {
     // under /admin-panel.
     loginPath: `${ADMIN_PANEL_PATH}/login`,
     logoutPath: `${ADMIN_PANEL_PATH}/logout`,
-    resources: buildResources(db),
+    resources,
     // component registered above (financeDashboardComponent) -- see the
     // comment by componentLoader's construction for why this replaced the
     // silent-no-op default dashboard. handler still returns real, correct
@@ -1811,7 +1960,7 @@ async function mountAdminPanel(app) {
 
   adminPanelRouter.use(router);
 
-  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (drivers, orders, order_cancellations, return_requests, sos_alerts, chat_reports, user_blocks, driver_wallets, driver_wallet_ledger, driver_payout_requests, payout_transactions, payments, payment_refunds, driver_ratings, flagged_accounts, flash_inventory)`);
+  console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (${resources.map((r) => r.resource.tableName).join(', ')})`);
 }
 
 module.exports = { mountAdminPanel, ADMIN_PANEL_PATH, buildResources };

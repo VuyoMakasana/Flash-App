@@ -50,6 +50,23 @@ const RESOURCE_TIMESTAMP_COLUMNS = {
   marketing_applications: 'created_at',
   chat_reports: 'created_at',
   user_blocks: 'created_at',
+  // §2.13 audit (full admin visibility) — driver_commission_debts,
+  // driver_penalties, and admin_actions are all real append-only event
+  // logs (one row per debt/penalty/admin action), same shape as
+  // driver_wallet_ledger above — created_at is the real "when did this
+  // happen" column.
+  driver_commission_debts: 'created_at',
+  driver_penalties: 'created_at',
+  admin_actions: 'created_at',
+  // driver_subscriptions/premium_subscriptions renew via UPSERT on the
+  // same row (confirmed directly — Admin.getFinancials()'s own comment:
+  // "premium_subscriptions itself can't be [summed for revenue] since
+  // renewals upsert the same row"), so updated_at (the last real change —
+  // a renewal or a cancellation) is the meaningful column, not
+  // created_at (this row's one-time original insert) — same reasoning as
+  // driver_wallets above.
+  driver_subscriptions: 'updated_at',
+  premium_subscriptions: 'updated_at',
 };
 
 // Applied via the same options object every resource already builds, not a

@@ -56,19 +56,19 @@ module.exports = {
 
     // ── Phase 0 — this table and its own audit trail ─────────────────────
     admins:        'Phase 0 — the account itself. A "manage other admins" screen is a natural Phase 4 addition once there\'s a real second admin (Addendum 3 §4\'s role decision).',
-    admin_actions: 'Phase 0 — the audit log itself. AdminAction.getRecent() already exists to read it back; a real UI view showing it is a natural near-term addition.',
+    admin_actions: 'Phase 0 — real, browsable, read-only AdminJS resource, now built and verified live (production-readiness audit §2.13, full admin visibility). AdminAction.getRecent() remains the backend read path other code uses; this resource is the human-facing browse/search view over the same table.',
 
     // ── Phase 2 — financial and dispute visibility ──────────────────────
     payments:                'Phase 2 — real, browsable AdminJS resource (critical-flow/edge-case audit §2.7), per-transaction, not just dashboard totals.',
     payment_refunds:         'Phase 2 — real, browsable AdminJS resource (critical-flow/edge-case audit §2.7), per-refund, not just the aggregate reconciliation-check target (Addendum 1 §4.4).',
-    driver_commission_debts: 'Phase 2 — cash-order commission revenue line (Addendum 1 §4.3).',
+    driver_commission_debts: 'Phase 2 — cash-order commission revenue line (Addendum 1 §4.3); previously aggregate-only (a driver-page summary total). Now ALSO a real, browsable, read-only AdminJS resource in its own right (production-readiness audit §2.13) — per-order debt records (driver, order, amount, status, settled_at), not just the total, so a real dispute ("why do I owe this much?") can actually be reconstructed without raw DB access.',
     driver_wallet_ledger:    'Phase 2 — real AdminJS resource + inline summary on a driver\'s own page, now built and verified live.',
     driver_wallets:          'Phase 2 — real AdminJS resource + inline summary on a driver\'s own page, now built and verified live.',
-    driver_penalties:        'Phase 2 — cost-offset line (nets against payouts, per Addendum 1 §4.3).',
+    driver_penalties:        'Phase 2 — cost-offset line (nets against payouts, per Addendum 1 §4.3); previously aggregate-only (a driver-page count + total). Now ALSO a real, browsable, read-only AdminJS resource (§2.13) — the individual reason text for each penalty is now visible, not just a count.',
     driver_payout_requests:  'Phase 2 — real AdminJS resource, now built and verified live.',
     payout_transactions:     'Phase 2 — real AdminJS resource, real Paystack transfer trail, now built and verified live.',
-    driver_subscriptions:    'Phase 2 — subscription status/history (added in Addendum 3 §1, fixing the inconsistency where the revenue was counted without the record).',
-    premium_subscriptions:   'Phase 2 — same fix as driver_subscriptions, Addendum 3 §1.',
+    driver_subscriptions:    'Phase 2 — subscription status/history (added in Addendum 3 §1, fixing the inconsistency where the revenue was counted without the record). Previously dashboard-aggregate-only (totals/counts via Admin.getFinancials()); now ALSO a real, browsable, read-only AdminJS resource (§2.13) — per-driver subscription status/history, not just platform-wide totals.',
+    premium_subscriptions:   'Phase 2 — same fix as driver_subscriptions, Addendum 3 §1. Same §2.13 promotion to a real, browsable, read-only AdminJS resource.',
     premium_subscription_payments: 'Phase 2 — real append-only payment log (migrate.js v25) already queried directly by Admin.getStats() (cumulative Premium revenue) and the admin revenue-trend chart; premium_subscriptions itself can\'t be summed for revenue since renewals upsert the same row. Found missing from this registry during the production-readiness audit (§2.1/§2.14) despite already being real, live admin-visible data.',
     driver_documents:        'Phase 2/1 — document review via signed URLs; Admin.getDriverById already does this correctly, no UI yet.',
     messages:                'Phase 2 — order chat now shown inline on the order-detail screen alongside pickup/dropoff photos, now built and verified live.',
