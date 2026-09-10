@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useDriver } from '../../context/DriverContext';
 import driverApi from '../../services/api';
+import analytics from '../../services/analytics';
 
 const STATUS_INFO = {
   pending_documents: { label: 'Pending Documents', color: '#f59e0b', bg: '#fef3c7' },
@@ -19,6 +21,9 @@ const STATUS_INFO = {
 export default function DriverProfileScreen() {
   const router = useRouter();
   const { driver, refreshProfile, logout } = useDriver();
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Profile'); }, []));
+
   const [form, setForm] = useState({ name: '', phone: '', vehicle_type: '', vehicle_plate: '' });
   const [saving, setSaving] = useState(false);
   const [documents, setDocuments] = useState([]);

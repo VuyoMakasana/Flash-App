@@ -18,6 +18,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import api, { saveTokens, clearTokens } from '../services/api';
+import analytics from '../services/analytics';
 
 const FlashContext = createContext(null);
 
@@ -129,6 +130,9 @@ export const FlashProvider = ({ children }) => {
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   const _postLogin = useCallback(async (data) => {
+    // Shared by all four auth paths (password + Apple/Google, new + existing
+    // account) — the one place every successful login/signup passes through.
+    analytics.identify(data.user?.id);
     // Tokens → SecureStore (encrypted)
     await saveTokens(data.token, data.refreshToken);
     // User profile snapshot → AsyncStorage (non-sensitive)
@@ -148,24 +152,28 @@ export const FlashProvider = ({ children }) => {
   const login = useCallback(async (email, password) => {
     const data = await api.auth.login(email, password);
     await _postLogin(data);
+    analytics.userLoggedIn('password');
     return data;
   }, [_postLogin]);
 
   const register = useCallback(async (name, email, password, phone, dateOfBirth) => {
     const data = await api.auth.register(name, email, password, phone, dateOfBirth);
     await _postLogin(data);
+    analytics.userSignedUp('password');
     return data;
   }, [_postLogin]);
 
   const loginWithApple = useCallback(async (identityToken, fullName, email) => {
     const data = await api.auth.appleSignIn(identityToken, fullName, email);
     await _postLogin(data);
+    if (data.isNewUser) analytics.userSignedUp('apple'); else analytics.userLoggedIn('apple');
     return data;
   }, [_postLogin]);
 
   const loginWithGoogle = useCallback(async (idToken) => {
     const data = await api.auth.googleSignIn(idToken);
     await _postLogin(data);
+    if (data.isNewUser) analytics.userSignedUp('google'); else analytics.userLoggedIn('google');
     return data;
   }, [_postLogin]);
 
@@ -334,6 +342,13 @@ export const FlashProvider = ({ children }) => {
     const data = await api.orders.create(orderData);
     setOrders(prev => [data.order, ...prev]);
     setCart([]);
+    analytics.orderPlaced({
+      orderId: data.order?.id,
+      orderValue: total,
+      itemCount: cart.reduce((sum, i) => sum + (i.quantity || 1), 0),
+      storeId: storeId || null,
+      deliveryType: timeSlot && timeSlot !== 'ASAP' ? 'scheduled' : 'immediate',
+    });
     return data.order;
   }, [cart, profile.address]);
 

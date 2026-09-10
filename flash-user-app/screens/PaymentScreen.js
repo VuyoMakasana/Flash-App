@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, Pressable, ScrollView,
   ActivityIndicator, Alert, Platform, Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
+import analytics from '../services/analytics';
 
 // TEMPORARY TEST-MODE — remove before real launch. Card payments are
 // confirmed broken in production right now (PAYSTACK_SECRET_KEY not
@@ -37,6 +38,8 @@ export default function PaymentScreen() {
   const [savedCards, setSavedCards] = useState([]);
   const [selectedCardId, setSelectedCardId] = useState(null);
   const [useNewCard, setUseNewCard] = useState(false);
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Payment'); }, []));
   // The checkout screen's total is a client-side estimate (fleet mode
   // defaults to R90 same-mall and only learns the real R180 cross-mall fee
   // after the order is created) — what Paystack actually charges is
@@ -211,7 +214,7 @@ export default function PaymentScreen() {
           <Pressable
             key={method.id}
             style={[s.methodCard, active && s.methodActive]}
-            onPress={() => setSelected(method.id)}
+            onPress={() => { setSelected(method.id); analytics.paymentMethodSelected(method.id); }}
           >
             <View style={[s.methodIcon, active && s.methodIconActive]}>
               <Ionicons name={method.icon} size={22} color={active ? '#fff' : '#374151'} />

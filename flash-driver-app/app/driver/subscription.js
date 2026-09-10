@@ -5,7 +5,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import driverApi from '../../services/api';
+import analytics from '../../services/analytics';
 
 // Apple App Store compliance audit (queued section) — these plans unlock
 // in-app functionality (delivery slot count, priority matching, cash-order
@@ -91,6 +93,9 @@ const PLANS = [
 
 export default function SubscriptionScreen() {
   const router = useRouter();
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Subscription'); }, []));
+
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState(null);
