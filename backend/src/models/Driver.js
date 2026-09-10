@@ -2,8 +2,9 @@ const BaseModel = require("./BaseModel");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const s3Service = require("../services/s3Service");
-const { PLANS, REQUIRED_DRIVER_DOCS } = require("../utils/constants");
+const { REQUIRED_DRIVER_DOCS } = require("../utils/constants");
 const UserBlock = require("./UserBlock");
+const Subscription = require("./Subscription");
 
 
 
@@ -86,12 +87,17 @@ class Driver extends BaseModel {
         );
       }
 
-      const plan = PLANS.monthly;
-      await client.query(
-        `INSERT INTO driver_subscriptions (driver_id, plan_type, price, deliveries_limit, expires_at, status, paystack_reference)
-         VALUES ($1,'monthly',$2,$3,NOW() + INTERVAL '30 days','active',$4)`,
-        [driver.id, plan.price, plan.deliveries, "TEST_MODE_GRANT"],
-      );
+      // Routed through the real activation path (Subscription.js's own
+      // comment on it: "the other half of purchaseDriverPlan()... called by
+      // webhookController once Paystack confirms a charge succeeded") rather
+      // than a duplicate raw INSERT, so a test-mode grant can never silently
+      // drift from what a real, paid activation actually does (expiry math
+      // via PLANS[planId].days, not a hardcoded interval; correctly expires
+      // any prior active row first). Passed `client` so this insert commits
+      // or rolls back atomically with the driver row above it — a test-mode
+      // driver can never end up existing without its subscription, or vice
+      // versa, even if something later in this transaction fails.
+      await Subscription.activateDriverPlan(driver.id, "monthly", "TEST_MODE_GRANT", client);
 
       return driver;
     });
