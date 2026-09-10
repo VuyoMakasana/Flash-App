@@ -10,6 +10,10 @@ import { StatusBar } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { FlashProvider, useFlash } from './context/FlashContext';
 import api, { setSessionExpiredHandler } from './services/api';
+// Imported for its module-scope init side effect (mirrors the Sentry.init()
+// guard directly below) — analytics.js's own client-null guard means this
+// is a safe no-op until EXPO_PUBLIC_POSTHOG_API_KEY has a real value.
+import './services/analytics';
 import { View, ActivityIndicator, AppState } from 'react-native';
 import RatingGateModal from './components/RatingGateModal';
 

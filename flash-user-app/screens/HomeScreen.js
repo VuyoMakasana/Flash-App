@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Pressable,
   Image, TextInput, ScrollView, StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
+import analytics from '../services/analytics';
 
 const CATEGORIES = ['All', 'Men', 'Women', 'Sports', 'Casual'];
 
@@ -19,6 +20,8 @@ export default function HomeScreen() {
   // column today, so every product's storeId is null and this stays hidden until
   // the backend actually supports multiple stores.
   const [activeStore, setActiveStore] = useState('all');
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Home'); }, []));
 
   const cartCount = cart.reduce((sum, i) => sum + i.quantity, 0);
 

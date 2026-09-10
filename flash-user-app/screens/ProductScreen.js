@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { View, Text, Image, Pressable, StyleSheet, ScrollView, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
+import analytics from '../services/analytics';
 
 export default function ProductScreen() {
   const navigation = useNavigation();
@@ -11,6 +12,8 @@ export default function ProductScreen() {
   const { addToCart, cart } = useFlash();
   const [selectedSize, setSelectedSize] = useState(null);
   const [quantity, setQuantity] = useState(1);
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Product'); }, []));
 
   const cartCount = cart.reduce((s, i) => s + i.quantity, 0);
 
