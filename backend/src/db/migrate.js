@@ -990,6 +990,146 @@ async function migrate() {
     throw err;
   } finally {
     client28.release();
+  }
+
+  // ── v29 ────────────────────────────────────────────────────────────────────
+  const client29 = await pool.connect();
+  try {
+    await migrateV29(client29);
+  } catch (err) {
+    console.error('Migration v29 failed:', err.message);
+    throw err;
+  } finally {
+    client29.release();
+  }
+
+  // ── v30 ────────────────────────────────────────────────────────────────────
+  const client30 = await pool.connect();
+  try {
+    await migrateV30(client30);
+  } catch (err) {
+    console.error('Migration v30 failed:', err.message);
+    throw err;
+  } finally {
+    client30.release();
+  }
+
+  // ── v31 ────────────────────────────────────────────────────────────────────
+  const client31 = await pool.connect();
+  try {
+    await migrateV31(client31);
+  } catch (err) {
+    console.error('Migration v31 failed:', err.message);
+    throw err;
+  } finally {
+    client31.release();
+  }
+
+  // ── v32 ────────────────────────────────────────────────────────────────────
+  const client32 = await pool.connect();
+  try {
+    await migrateV32(client32);
+  } catch (err) {
+    console.error('Migration v32 failed:', err.message);
+    throw err;
+  } finally {
+    client32.release();
+  }
+
+  // ── v33 ────────────────────────────────────────────────────────────────────
+  const client33 = await pool.connect();
+  try {
+    await migrateV33(client33);
+  } catch (err) {
+    console.error('Migration v33 failed:', err.message);
+    throw err;
+  } finally {
+    client33.release();
+  }
+
+  // ── v34 ────────────────────────────────────────────────────────────────────
+  const client34 = await pool.connect();
+  try {
+    await migrateV34(client34);
+  } catch (err) {
+    console.error('Migration v34 failed:', err.message);
+    throw err;
+  } finally {
+    client34.release();
+  }
+
+  // ── v35 ────────────────────────────────────────────────────────────────────
+  const client35 = await pool.connect();
+  try {
+    await migrateV35(client35);
+  } catch (err) {
+    console.error('Migration v35 failed:', err.message);
+    throw err;
+  } finally {
+    client35.release();
+  }
+
+  // ── v36 ────────────────────────────────────────────────────────────────────
+  // Merge note (production-readiness-audit, 2026-09-07): this was v29 on
+  // main's own lineage (marketing waitlist/contact/application tables),
+  // developed in parallel with this branch's real v29 (stores table) with
+  // no shared history to catch the collision. Renumbered here to the next
+  // free slot rather than fixed in place — v29 the stores migration is
+  // already real and already applied on every branch that has it, so
+  // renumbering an already-applied migration would be far riskier than
+  // renumbering one that isn't deployed anywhere yet.
+  const client36 = await pool.connect();
+  try {
+    await migrateV36(client36);
+  } catch (err) {
+    console.error('Migration v36 failed:', err.message);
+    throw err;
+  } finally {
+    client36.release();
+  }
+
+  // ── v37 ────────────────────────────────────────────────────────────────────
+  const client37 = await pool.connect();
+  try {
+    await migrateV37(client37);
+  } catch (err) {
+    console.error('Migration v37 failed:', err.message);
+    throw err;
+  } finally {
+    client37.release();
+  }
+
+  // ── v38 ────────────────────────────────────────────────────────────────────
+  const client38 = await pool.connect();
+  try {
+    await migrateV38(client38);
+  } catch (err) {
+    console.error('Migration v38 failed:', err.message);
+    throw err;
+  } finally {
+    client38.release();
+  }
+
+  // ── v39 ────────────────────────────────────────────────────────────────────
+  const client39 = await pool.connect();
+  try {
+    await migrateV39(client39);
+  } catch (err) {
+    console.error('Migration v39 failed:', err.message);
+    throw err;
+  } finally {
+    client39.release();
+  }
+
+  // ── v40 ────────────────────────────────────────────────────────────────────
+  const client40 = await pool.connect();
+  try {
+    await migrateV40(client40);
+  } catch (err) {
+    console.error('Migration v40 failed:', err.message);
+    throw err;
+  } finally {
+    client40.release();
     await pool.end();
   }
 
@@ -1724,4 +1864,746 @@ async function migrateV28(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28 };
+// ── Multi-tenant foundation, Stage 1 (schema only) ──────────────────────────
+// docs/audits/MULTI_TENANT_ARCHITECTURE_BLUEPRINT.md §2/§3 step 1: the real
+// `stores` table, seeded with exactly one row for Flash's own current,
+// single real store. Columns match the blueprint's exact spec (id, name,
+// address, lat, lng, service_area_bounds, is_active, created_at) plus
+// updated_at (matching every other table in this schema) and three real
+// ownership-contact fields (owner_name/owner_email/owner_phone) -- not in
+// the blueprint's own minimal column list, added here as a reasoned,
+// explicitly-flagged extension: "independent from Flash's own identity"
+// (this stage's own instruction) needs *some* way to identify who the
+// store's real owner/contact is, distinct from Flash's own admin account,
+// without reaching into banking/settlement details yet (deliberately
+// deferred -- that's PCI-adjacent, sensitive data deserving its own later,
+// careful design, same reasoning payment_methods already gets).
+async function migrateV29(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS stores (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name VARCHAR(200) NOT NULL,
+        address TEXT,
+        lat DOUBLE PRECISION,
+        lng DOUBLE PRECISION,
+        service_area_bounds JSONB,
+        owner_name VARCHAR(200),
+        owner_email VARCHAR(255),
+        owner_phone VARCHAR(20),
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    // Seed exactly one row, for Flash's own real store -- real coordinates
+    // and address from geoBoundary.js's FLASH_STORE_LOCATION (12B Mkele
+    // Street, Kwazakhele, 6205), real service-area bounds from the same
+    // file's NMB_BOUNDS. Only seeded if the table is genuinely empty, so
+    // this migration stays safely re-runnable.
+    const existing = await client.query(`SELECT id FROM stores LIMIT 1`);
+    if (existing.rows.length === 0) {
+      await client.query(
+        `INSERT INTO stores (name, address, lat, lng, service_area_bounds, is_active)
+         VALUES ($1, $2, $3, $4, $5::jsonb, true)`,
+        [
+          'Flash Closet',
+          '12B Mkele Street, Kwazakhele, 6205',
+          -33.8842210,
+          25.5853185,
+          JSON.stringify({ minLat: -34.03, maxLat: -33.76, minLng: 25.55, maxLng: 25.68 }),
+        ],
+      );
+    }
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v29 completed: stores table created, seeded with Flash\'s own real store row');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v29 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v36: Marketing website leads (waitlist, contact, driver/seller applications) ─
+// Merge note (production-readiness-audit, 2026-09-07): this was v29 on
+// main's own lineage, developed in parallel with this branch's real v29
+// (stores table, above) with no shared history to catch the collision.
+// Renumbered to v36 -- see the call-site merge note near the top of
+// runMigrations() for why the renumbering went here rather than onto the
+// stores migration.
+// The public marketing site (flash-website-rebuild) has its own waitlist,
+// contact, and driver/seller application forms. These previously called a
+// separate, undeployed Node service (flash-server) that wrote to a local
+// JSON file — no notification path, no admin view, and (separately) never
+// actually deployed anywhere, so every real submission has been silently
+// lost. Moved into this backend's real Postgres database instead: one place
+// to see everything (the AdminJS panel already in daily use), and a real
+// email notification via the existing admin-email path (emailService's
+// getAdminEmails), rather than running and maintaining a second backend
+// service for three small public forms.
+async function migrateV36(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE TABLE IF NOT EXISTS marketing_waitlist (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      email VARCHAR(255) NOT NULL UNIQUE,
+      role VARCHAR(20) NOT NULL DEFAULT 'customer' CHECK (role IN ('customer','seller','driver')),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS marketing_contact_messages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      subject VARCHAR(100) NOT NULL,
+      message TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS marketing_applications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      applicant_type VARCHAR(10) NOT NULL CHECK (applicant_type IN ('driver','seller')),
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      city VARCHAR(100),
+      message TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_waitlist_created ON marketing_waitlist(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_contact_created ON marketing_contact_messages(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_applications_created ON marketing_applications(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_marketing_applications_type ON marketing_applications(applicant_type, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v36 completed: marketing_waitlist, marketing_contact_messages, marketing_applications');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v36 failed:', err.message);
+    throw err;
+  }
+}
+
+// docs/audits/MULTI_TENANT_ARCHITECTURE_BLUEPRINT.md §3 step 2: the
+// type-consistency fix, now that a real `stores` row exists to point at.
+// orders.store_id is already UUID (migration v27) but has no FK constraint
+// and every real row is NULL -- this stage's own explicit instruction is to
+// backfill every existing order to the one real seeded store, not leave
+// them orphaned, since every one of Flash's real historical orders was in
+// fact fulfilled by this one store. store_boosts/store_promotions/
+// brand_size_mappings.store_id are VARCHAR(100) NOT NULL -- confirmed live
+// before writing this that all three tables are genuinely empty (zero rows
+// each), so the type conversion has no real data to backfill; kept NOT
+// NULL through the conversion to preserve their existing constraint.
+// order_cancellation_store_shares.store_id is already UUID and nullable
+// (confirmed empty too) -- just needs the FK constraint added.
+// Idempotency note (found during Stage 2's migration run, when the full
+// script re-ran from v1 as it always does): the ALTER COLUMN ... TYPE UUID
+// USING NULLIF(store_id, '')::uuid casts below fail on a second run once
+// store_id is already UUID, because comparing an already-UUID column against
+// the text literal '' requires casting '' to uuid, which is never valid --
+// so each is now skipped once the column is confirmed already UUID. The
+// ADD CONSTRAINT statements are wrapped in the same DO $$ ... EXCEPTION WHEN
+// duplicate_object pattern migrateV28 already uses for its ENUM type, for
+// the same reason (re-adding a same-named constraint always errors).
+async function columnIsUuid(client, table, column) {
+  const result = await client.query(
+    `SELECT data_type FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`,
+    [table, column],
+  );
+  return result.rows[0]?.data_type === 'uuid';
+}
+
+async function migrateV30(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE orders ADD CONSTRAINT orders_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
+    await client.query(`UPDATE orders SET store_id = (SELECT id FROM stores LIMIT 1) WHERE store_id IS NULL`);
+
+    if (!(await columnIsUuid(client, 'store_boosts', 'store_id'))) {
+      await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id DROP NOT NULL`);
+      await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
+      await client.query(`ALTER TABLE store_boosts ALTER COLUMN store_id SET NOT NULL`);
+    }
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE store_boosts ADD CONSTRAINT store_boosts_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
+
+    if (!(await columnIsUuid(client, 'store_promotions', 'store_id'))) {
+      await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id DROP NOT NULL`);
+      await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
+      await client.query(`ALTER TABLE store_promotions ALTER COLUMN store_id SET NOT NULL`);
+    }
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE store_promotions ADD CONSTRAINT store_promotions_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
+
+    if (!(await columnIsUuid(client, 'brand_size_mappings', 'store_id'))) {
+      await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id DROP NOT NULL`);
+      await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id TYPE UUID USING NULLIF(store_id, '')::uuid`);
+      await client.query(`ALTER TABLE brand_size_mappings ALTER COLUMN store_id SET NOT NULL`);
+    }
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE brand_size_mappings ADD CONSTRAINT brand_size_mappings_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
+
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE order_cancellation_store_shares ADD CONSTRAINT order_cancellation_store_shares_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
+
+    // Real index for future query performance at scale, per the blueprint's
+    // own §7 performance section -- every store-scoped WHERE clause needs
+    // one, not an afterthought added when a slow query is first noticed.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_store_id ON orders(store_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v30 completed: store_id FK constraints added across orders/store_boosts/store_promotions/brand_size_mappings/order_cancellation_store_shares, orders backfilled to the real seeded store');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v30 failed:', err.message);
+    throw err;
+  }
+}
+
+// docs/audits/FINANCIAL_DOMAIN_SPECIFICATION.md §2.2: the real
+// commission_rates table, with the founder's explicit three-tier
+// precedence (promotional > store-specific > global default) enforced by
+// real constraints, not left as an application-layer-only convention.
+// Schema only, per this stage's own explicit instruction -- not wired into
+// any actual pricing/order calculation yet.
+async function migrateV31(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS commission_rates (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        scope_type VARCHAR(20) NOT NULL CHECK (scope_type IN ('global', 'store', 'promotional')),
+        store_id UUID REFERENCES stores(id),
+        rate DECIMAL(5,4) NOT NULL CHECK (rate >= 0 AND rate <= 1),
+        starts_at TIMESTAMPTZ,
+        ends_at TIMESTAMPTZ,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_by UUID REFERENCES admins(id),
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        -- A global rate has no store; a store/promotional rate always has one --
+        -- real, enforced, not just documented convention.
+        CONSTRAINT commission_rates_scope_store_check CHECK (
+          (scope_type = 'global' AND store_id IS NULL) OR
+          (scope_type IN ('store', 'promotional') AND store_id IS NOT NULL)
+        ),
+        -- A promotional rate's entire reason for existing is a bounded active
+        -- window -- both bounds are required, and the window must be real.
+        CONSTRAINT commission_rates_promotional_window_check CHECK (
+          scope_type != 'promotional' OR (starts_at IS NOT NULL AND ends_at IS NOT NULL AND ends_at > starts_at)
+        )
+      )
+    `);
+
+    // "Exactly one active global row at all times" (§2.2) -- a partial
+    // unique index enforces "at most one" at the database layer (the
+    // stronger half of the invariant); the application layer is still
+    // responsible for never deactivating the last active global row
+    // without inserting its replacement first, same as this migration's
+    // own seed-before-anything-else ordering guarantees on day one.
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_commission_rates_one_active_global
+      ON commission_rates (scope_type)
+      WHERE scope_type = 'global' AND is_active = true
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_commission_rates_store_id ON commission_rates(store_id) WHERE store_id IS NOT NULL`);
+
+    // Seed the real 10% launch default, as a data row -- never a code
+    // constant. Only seeded if no active global row exists yet, so this
+    // migration stays safely re-runnable without violating the one-active-
+    // global-row unique index above.
+    const existingGlobal = await client.query(
+      `SELECT id FROM commission_rates WHERE scope_type = 'global' AND is_active = true LIMIT 1`,
+    );
+    if (existingGlobal.rows.length === 0) {
+      await client.query(
+        `INSERT INTO commission_rates (scope_type, store_id, rate, is_active, reason)
+         VALUES ('global', NULL, 0.10, true, 'Launch commission rate (founder-confirmed, temporary) -- seeded by migration v31')`,
+      );
+    }
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v31 completed: commission_rates table created with real precedence constraints, seeded with the 10% global launch rate');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v31 failed:', err.message);
+    throw err;
+  }
+}
+
+// docs/audits/FINANCIAL_DOMAIN_SPECIFICATION.md §3.1/§3.3: the real
+// settlement_config (configurable cycle, same global-default/store-override
+// shape as commission_rates) and the store_settlements/
+// store_settlement_line_items lifecycle tables. Schema only -- no actual
+// settlement calculation or Paystack transfer logic yet, per this stage's
+// own explicit instruction; no rows are seeded into the settlement/
+// line-item tables since no order has ever had a real store_commission
+// computed yet (that wiring is a later stage).
+async function migrateV32(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS settlement_config (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        scope_type VARCHAR(20) NOT NULL CHECK (scope_type IN ('global', 'store')),
+        store_id UUID REFERENCES stores(id),
+        cycle_days INTEGER NOT NULL CHECK (cycle_days > 0),
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT settlement_config_scope_store_check CHECK (
+          (scope_type = 'global' AND store_id IS NULL) OR
+          (scope_type = 'store' AND store_id IS NOT NULL)
+        )
+      )
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_config_one_active_global
+      ON settlement_config (scope_type)
+      WHERE scope_type = 'global' AND is_active = true
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_settlement_config_store_id ON settlement_config(store_id) WHERE store_id IS NOT NULL`);
+
+    const existingGlobalCycle = await client.query(
+      `SELECT id FROM settlement_config WHERE scope_type = 'global' AND is_active = true LIMIT 1`,
+    );
+    if (existingGlobalCycle.rows.length === 0) {
+      await client.query(
+        `INSERT INTO settlement_config (scope_type, store_id, cycle_days, is_active)
+         VALUES ('global', NULL, 7, true)`,
+      );
+    }
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_settlements (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id UUID NOT NULL REFERENCES stores(id),
+        status VARCHAR(20) NOT NULL CHECK (status IN ('accruing', 'under_review', 'finalized', 'paid', 'adjusted')),
+        cycle_start TIMESTAMPTZ NOT NULL,
+        cycle_end TIMESTAMPTZ NOT NULL,
+        total_amount DECIMAL(12,2),
+        paid_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT store_settlements_cycle_check CHECK (cycle_end > cycle_start)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_settlements_store_id ON store_settlements(store_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_settlements_status ON store_settlements(status)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_settlement_line_items (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_settlement_id UUID NOT NULL REFERENCES store_settlements(id) ON DELETE CASCADE,
+        order_id UUID NOT NULL REFERENCES orders(id),
+        item_value DECIMAL(10,2) NOT NULL,
+        store_commission DECIMAL(10,2) NOT NULL,
+        store_earnings DECIMAL(10,2) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT store_settlement_line_items_earnings_check CHECK (store_earnings = item_value - store_commission)
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_settlement_line_items_settlement_id ON store_settlement_line_items(store_settlement_id)`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_store_settlement_line_items_order_id ON store_settlement_line_items(order_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v32 completed: settlement_config (7-day global default), store_settlements, store_settlement_line_items created');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v32 failed:', err.message);
+    throw err;
+  }
+}
+
+// Multi-tenant Stage 2 (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §3.2/§5.3-5.4)
+// — store-scoped authentication. store_users is deliberately a structurally
+// separate table from admins (never a shared query shape between the two
+// trust domains, per §2's reasoning), gated by the six real roles §5.3
+// defines. store_actions mirrors admin_actions exactly but adds its own
+// store_id column, since (unlike a platform-wide admin) a store action's
+// tenant scope must be provable from the log itself later, independent of
+// the actor (§5.4). No refresh-token table -- Stage 2 mirrors the internal
+// Admin Panel's own real auth pattern (one access token, jti-based
+// revocation via the existing shared revoked_tokens table on logout), per
+// the founder's explicit direction, not the user/driver refresh-token flow
+// the earlier design draft assumed. No rows are seeded here: there is no
+// staff-creation endpoint yet (that's Stage 3's Owner-managed Settings
+// screen), so a real store_users row can only be created by a deliberate,
+// explicit action once that exists -- not guessed at by this migration.
+async function migrateV33(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id UUID NOT NULL REFERENCES stores(id),
+        name VARCHAR(200) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(20) NOT NULL CHECK (role IN (
+          'owner', 'store_manager', 'inventory_staff', 'sales_staff', 'finance', 'marketing'
+        )),
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_users_store_id ON store_users(store_id)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_actions (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_user_id UUID NOT NULL REFERENCES store_users(id) ON DELETE CASCADE,
+        store_id      UUID NOT NULL REFERENCES stores(id),
+        action_type   VARCHAR(50) NOT NULL,
+        target_table  VARCHAR(50),
+        target_id     UUID,
+        metadata      JSONB,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_actions_store_user_id ON store_actions(store_user_id, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_actions_store_id ON store_actions(store_id, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v33 completed: store_users + store_actions tables created (multi-tenant Stage 2, schema only, zero rows seeded)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v33 failed:', err.message);
+    throw err;
+  }
+}
+
+// Multi-tenant Stage 4 (store-scoped Inventory) -- flash_inventory has no
+// store_id at all today, unlike orders (which at least had an unused
+// nullable column before Stage 3 wired it up). The internal Flash Admin
+// Panel's own "Add Product"/"Edit Product" forms (adminPanel.js's
+// db.table('flash_inventory') resource) do a raw INSERT/UPDATE straight
+// against this table via AdminJS's own SQL adapter -- completely bypassing
+// Inventory.addProduct/updateStock/deleteProduct, and with no knowledge of
+// store_id at all. Making the new column NOT NULL with no DB-level default
+// would either surface it as a confusing required field on that form, or
+// silently break "Add Product" the moment AdminJS's INSERT omits it -- so
+// the column gets a real DEFAULT pointing at the one real seeded store
+// (looked up live, not a guessed/hardcoded UUID), and adminPanel.js's own
+// resource config (separately) hides it from the new/edit forms so nobody
+// ever has to think about it there. Every *new* store-portal-created
+// product still gets a real, explicit store_id passed by the new
+// storeInventoryController -- the default only exists for callers (the
+// internal panel, the existing Flash-admin-only /api/inventory REST
+// endpoints) that were never store-aware and must stay working exactly as
+// they are.
+async function migrateV34(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE flash_inventory ADD COLUMN IF NOT EXISTS store_id UUID`);
+
+    const defaultStore = await client.query(`SELECT id FROM stores WHERE is_active = true LIMIT 1`);
+    if (!defaultStore.rows.length) {
+      throw new Error('No active store found to backfill flash_inventory.store_id');
+    }
+    const defaultStoreId = defaultStore.rows[0].id;
+    // Defense in depth: defaultStoreId comes from gen_random_uuid() in the
+    // DB itself, never user input, but this value gets string-interpolated
+    // into a DDL statement below (ALTER COLUMN ... SET DEFAULT does not
+    // accept a bind parameter) -- validate its shape before that happens.
+    if (!/^[0-9a-f-]{36}$/i.test(defaultStoreId)) {
+      throw new Error(`Unexpected non-UUID store id: ${defaultStoreId}`);
+    }
+
+    await client.query(`UPDATE flash_inventory SET store_id = $1 WHERE store_id IS NULL`, [defaultStoreId]);
+    await client.query(`ALTER TABLE flash_inventory ALTER COLUMN store_id SET NOT NULL`);
+    await client.query(`ALTER TABLE flash_inventory ALTER COLUMN store_id SET DEFAULT '${defaultStoreId}'`);
+
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE flash_inventory ADD CONSTRAINT flash_inventory_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_flash_inventory_store_id ON flash_inventory(store_id)`);
+
+    await client.query('COMMIT');
+    console.log(`Flash database migration v34 completed: flash_inventory.store_id added (FK+index), all existing products backfilled to the real seeded store (${defaultStoreId}), real DB-level DEFAULT set for future admin-panel-created products`);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v34 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v35: customer-facing storefront — stores.logo_url/banner_url/description ─
+// Multi-tenant Stage 7 — the real `stores` table (v29) had no visual/marketing
+// fields at all. Purely additive and nullable: no existing row or column is
+// touched, and every current reader of `stores` (Store.getDefaultStoreId,
+// Store.findById, the Store Admin Portal) keeps working unchanged. Actual
+// image upload (Flash Closet's real logo, via s3Service.uploadPublicFile --
+// the same real Cloudinary mechanism product images already use) is a
+// separate, verifiable data-seeding step, not part of this schema migration,
+// so a migration re-run never depends on an external network call succeeding.
+async function migrateV35(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS logo_url TEXT`);
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS banner_url TEXT`);
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS description TEXT`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v35 completed: stores.logo_url/banner_url/description added (nullable, additive)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v35 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v37: chat block/report — §2.7 production-readiness audit ────────────────
+// Section 2.2 deferred "blocking/reporting" as a real design decision rather
+// than a chat-only bolt-on; §2.7 is where that design was approved and built.
+// Two small, purpose-built tables rather than overloading trusted_drivers
+// (which already means the opposite thing -- a customer requesting a
+// preferred driver again; a 'blocked' status there would conflate two
+// opposite concepts under one UNIQUE(user_id, driver_id) constraint).
+//
+// user_blocks: one-directional "don't pair us again" record. Symmetric --
+// either party can block the other. Enforced going forward (autoMatchService.js
+// fleet auto-assignment, Driver.getNearby() pick-a-driver mode) AND
+// immediately against any currently-active order between the two parties
+// (Message.sendMessage -- a block ends chat right away, not just future
+// matching; see UserBlock.isBlockedPair). Indexed for the exact three real
+// query shapes this table gets, not the columns alone -- see below.
+//
+// chat_reports: a real, admin-reviewed queue -- reporting never
+// auto-suspends anyone (same "a human confirms before any consequence"
+// principle as the driver-fraud work in §2.4), just creates a real,
+// investigatable record. message_id is nullable and ON DELETE SET NULL
+// (not CASCADE) so a report survives even if the underlying message is
+// ever removed -- the report itself is the durable record, not the message.
+async function migrateV37(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE TABLE IF NOT EXISTS user_blocks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      blocker_id UUID NOT NULL,
+      blocker_role VARCHAR(10) NOT NULL CHECK (blocker_role IN ('user','driver')),
+      blocked_id UUID NOT NULL,
+      blocked_role VARCHAR(10) NOT NULL CHECK (blocked_role IN ('user','driver')),
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(blocker_id, blocked_id)
+    )`);
+    // The UNIQUE(blocker_id, blocked_id) constraint above already gives a
+    // composite index covering UserBlock.isBlockedPair's exact-pair lookup
+    // in both directions (each OR-branch is a direct hit on this same
+    // index, just with swapped literal params) -- no separate index needed
+    // for that query. These two are for the *other* real query shape,
+    // UserBlock.getBlockedDriverIdsForUser: "all of this person's blocks in
+    // one specific direction" -- composite on (id, opposite_role) rather
+    // than a single-column index, so the role filter is answered by the
+    // same index lookup instead of a separate heap recheck. Every block is
+    // always user<->driver (never user-user or driver-driver, enforced by
+    // UserBlock.blockOtherPartyInOrder always setting opposite roles), so
+    // these two indexes are exactly the two directions ever queried.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON user_blocks(blocker_id, blocked_role)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_id, blocker_role)`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS chat_reports (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      reporter_id UUID NOT NULL,
+      reporter_role VARCHAR(10) NOT NULL CHECK (reporter_role IN ('user','driver')),
+      reported_id UUID NOT NULL,
+      reported_role VARCHAR(10) NOT NULL CHECK (reported_role IN ('user','driver')),
+      message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+      reason TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','reviewed','actioned','dismissed')),
+      admin_notes TEXT,
+      reviewed_by UUID REFERENCES admins(id),
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    // Covers the three real admin-side lookups: the pending queue (status +
+    // recency, one composite index answers both the filter and the sort),
+    // "every report against this person" (reported_id), and "every report
+    // this person has filed" (reporter_id) -- the latter matters for
+    // spotting a bad-faith serial reporter, the same "admin can reconstruct
+    // what happened" principle as §2.4/§2.13.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_order ON chat_reports(order_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_status ON chat_reports(status, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_reported ON chat_reports(reported_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_reporter ON chat_reports(reporter_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v37 completed: user_blocks + chat_reports tables (chat block/report, §2.7)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v37 failed:', err.message);
+    throw err;
+  }
+}
+
+// §2.11 audit (traffic-scaling path) — the three §2.10 stuck-order timeout
+// crons (cancelAbandonedPaymentPendingOrders, cancelStalePreparingOrders,
+// recoverStuckPaidOrders, orderStateMachineService.js) each query
+// `WHERE status = <one literal> AND updated_at < NOW() - interval`.
+// Before this, orders only had status and updated_at indexed separately
+// (idx_orders_status, idx_orders_updated_at) — usable individually, but
+// not as efficient as one composite index scan, and neither is as
+// selective on its own once the table has real long-term volume (most
+// orders are completed/cancelled at any given time; only a small,
+// fast-draining fraction ever sit in payment_pending/preparing/paid). A
+// single non-partial composite index (not three narrow partial ones, the
+// pattern used for idx_orders_stuck_delivery_check/idx_orders_driver_
+// connection_check) serves all three crons' different status literals at
+// once, and is reusable by any future staleness-detection query too —
+// the same complementary shape as the existing idx_orders_status_created
+// (status, created_at DESC), just keyed on updated_at instead. Verified
+// with real EXPLAIN ANALYZE against 80,000 synthetic orders (realistic
+// long-term volume, only ~0.1% in each transient status — see
+// docs/audits/SECTION_2.11_TRAFFIC_SCALING_AUDIT.md): all three cron
+// queries use this index, sub-millisecond, not a sequential scan.
+async function migrateV38(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_status_updated ON orders(status, updated_at)`);
+
+    // Second, independently-discovered fix bundled into the same migration:
+    // orders.parent_order_id (self-referential FK to orders.id, written once
+    // by Return.js when creating a return's reverse-delivery order, never
+    // read back anywhere -- the return<->original-order relationship is
+    // actually looked up via return_requests.order_id/return_order_id
+    // instead) had NO supporting index. Postgres does not automatically
+    // index foreign key columns, and every DELETE (or key-changing UPDATE,
+    // though orders.id is a UUID PK and is never updated in practice) of an
+    // orders row requires checking whether any OTHER row's parent_order_id
+    // points at it -- without an index, that check is a full sequential
+    // scan of the entire orders table, once PER ROW deleted. No live
+    // application code path deletes from orders today (confirmed by
+    // grepping the whole backend), so this wasn't biting real traffic, but
+    // it will bite the next bulk-cleanup/data-retention script that ever
+    // needs to delete order rows -- confirmed directly, not theoretically:
+    // a routine synthetic-data cleanup during this section's own scale
+    // verification stalled for 12+ minutes deleting ~71,000 rows and had
+    // to be cancelled, and pg_stat_activity showed the exact query it was
+    // stuck on was Postgres's own internal parent_order_id FK-integrity
+    // check. Trivial, purely additive, zero behavior change to add.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_parent_order_id ON orders(parent_order_id) WHERE parent_order_id IS NOT NULL`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v38 completed: orders(status, updated_at) + orders(parent_order_id) indexes (§2.11, scale + FK-check fixes)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v38 failed:', err.message);
+    throw err;
+  }
+}
+
+// §2.12 audit (store missed-order reliability) — a new order reaching
+// pending_store_acceptance had ZERO proactive admin-facing signal: no
+// io.to('admin') socket alert (every other real admin alert in this
+// codebase -- SOS, stuck-delivery, driver-connection-lost, refund-failed
+// -- has one; this transition never did), and no email fallback either
+// (emailService.js already has the exact proven pattern for "don't rely
+// solely on a live socket connection", sendSosAlertEmail/
+// sendReturnAwaitingReviewEmail -- nothing equivalent existed here). Worse,
+// when the 15-minute store-acceptance-timeout cron (or the 30-minute
+// stale-preparing one, §2.10) actually auto-cancelled a genuinely missed
+// order -- a real lost sale -- that also produced nothing but a
+// console.log, breaking the "admin can reconstruct what happened"
+// principle already enforced everywhere else in this audit.
+//
+// These two idempotent escalation-flag columns (same shape as
+// stuck_delivery_flagged_at/driver_connection_flagged_at) back a new,
+// founder-confirmed design: an immediate socket alert on entry to
+// pending_store_acceptance, a one-time escalation email if it's still
+// unaccepted after 5 minutes (leaving a real 10-minute buffer before the
+// 15-minute auto-cancel), the same shape for preparing at 20/30 minutes,
+// and a distinct "you just missed this order" email when the timeout
+// actually fires. See orderStateMachineService.js's
+// escalateStuckPendingAcceptanceOrders/escalateStuckPreparingOrders.
+async function migrateV39(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS acceptance_escalated_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS preparation_escalated_at TIMESTAMPTZ`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_acceptance_escalation_check ON orders(status, updated_at) WHERE acceptance_escalated_at IS NULL`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_preparation_escalation_check ON orders(status, updated_at) WHERE preparation_escalated_at IS NULL`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v39 completed: orders.acceptance_escalated_at + preparation_escalated_at (§2.12, store missed-order reliability)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v39 failed:', err.message);
+    throw err;
+  }
+}
+
+// §2.13 audit (full admin visibility) — driver_commission_debts and
+// driver_penalties (real money owed to Flash by drivers, and the actual
+// record of why a driver was penalized/auto-suspended) were previously
+// visible only as an aggregate total on a driver's page — no per-row
+// browse, so an admin investigating a real dispute had no path to the
+// individual records without raw DB access. admin_actions (the admin
+// panel's own audit log) and driver_subscriptions/premium_subscriptions
+// (real recurring revenue, previously dashboard-aggregate-only) had the
+// same gap. All five are being promoted to real, read-only, browsable
+// AdminJS resources (adminPanel.js) — each needs a plain index on its own
+// "when did this happen" column (RESOURCE_TIMESTAMP_COLUMNS,
+// adminResourceDefaults.js) for the resource's default most-recent-first
+// sort to stay a real index scan instead of a full-table sort as these
+// tables grow, matching this audit's own §2.11 scale standard. The
+// existing indexes on these five tables (driver_id/status/admin_id-scoped
+// composites) don't cover a *global*, unscoped "most recent overall"
+// sort — confirmed by checking each table's actual index list, not
+// assumed.
+async function migrateV40(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_commission_debts_created_at ON driver_commission_debts(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_penalties_created_at ON driver_penalties(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_admin_actions_created_at ON admin_actions(created_at DESC)`);
+    // driver_subscriptions/premium_subscriptions renew via UPSERT on the
+    // same row (confirmed directly -- Admin.getFinancials()'s own comment:
+    // "premium_subscriptions itself can't be [summed for revenue] since
+    // renewals upsert the same row"), so updated_at (last real change --
+    // a renewal or a cancellation), not created_at (this row's original,
+    // one-time insert), is the column that actually answers "when did
+    // something happen here" -- same reasoning already applied to
+    // driver_wallets in RESOURCE_TIMESTAMP_COLUMNS.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_subscriptions_updated_at ON driver_subscriptions(updated_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_premium_subscriptions_updated_at ON premium_subscriptions(updated_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v40 completed: chronological-sort indexes for the five new §2.13 admin resources');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v40 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40 };

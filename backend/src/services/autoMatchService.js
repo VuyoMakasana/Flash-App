@@ -20,10 +20,11 @@
 
 const pool = require("../config/database");
 const { assignDriver } = require("./orderStateMachineService");
+const UserBlock = require("../models/UserBlock");
 
 async function autoAssignNearestDriver(orderId, io) {
   const orderResult = await pool.query(
-    `SELECT id, delivery_mode, status, preferred_driver_id, pickup_lat, pickup_lng
+    `SELECT id, user_id, delivery_mode, status, preferred_driver_id, pickup_lat, pickup_lng
      FROM orders WHERE id = $1`,
     [orderId],
   );
@@ -32,6 +33,16 @@ async function autoAssignNearestDriver(orderId, io) {
   const order = orderResult.rows[0];
   if (order.delivery_mode !== "fleet" || order.preferred_driver_id) return null;
   if (order.status !== "waiting_for_driver") return null;
+
+  // §2.7 audit: exclude any driver either direction of a chat block pairs
+  // this customer with -- a block only prevents *future* pairing, so this
+  // doesn't touch orders already in progress. Fetched once as a plain id
+  // array (a single indexed lookup against user_blocks, bounded by this
+  // one customer's own block count, never the whole table) rather than a
+  // per-candidate-driver correlated subquery in the query below -- keeps
+  // the driver-matching query's cost independent of how large user_blocks
+  // grows as the platform scales.
+  const blockedDriverIds = await UserBlock.getBlockedDriverIdsForUser(order.user_id);
 
   const nearby = await pool.query(
     `SELECT d.id,
@@ -50,9 +61,10 @@ async function autoAssignNearestDriver(orderId, io) {
          WHERE o.driver_id = d.id
            AND o.status IN ('driver_assigned', 'driver_arrived_store', 'picked_up', 'in_transit')
        )
+       AND NOT (d.id = ANY($3::uuid[]))
      ORDER BY distance_km ASC
      LIMIT 1`,
-    [order.pickup_lat, order.pickup_lng],
+    [order.pickup_lat, order.pickup_lng, blockedDriverIds],
   );
 
   if (!nearby.rows.length) return null;

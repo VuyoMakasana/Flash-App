@@ -50,6 +50,39 @@ class S3Service {
     });
   }
 
+  // Multi-tenant Stage 6 — product images. Deliberately NOT the same
+  // upload() above: that method hardcodes type: 'authenticated' (private,
+  // only ever reachable via getSignedUrl()) because every existing caller
+  // (driver KYC documents, order pickup/dropoff proof) is genuinely
+  // sensitive. A product image is the opposite — meant to be publicly
+  // visible in the customer catalog, matching flash_inventory.image_url's
+  // existing plain-permanent-URL shape. Same Cloudinary account, same
+  // upload_stream mechanism, just type: 'upload' (Cloudinary's real public
+  // delivery type) instead — not a new or reinvented mechanism.
+  async uploadPublicFile(file, folder = 'flash-public') {
+    if (!process.env.CLOUDINARY_CLOUD_NAME) {
+      throw new Error('Image storage is not configured. Please contact support.');
+    }
+
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder,
+          resource_type: 'image',
+          type: 'upload',
+        },
+        (error, result) => {
+          if (error) return reject(error);
+          resolve({
+            url: result.secure_url,
+            publicId: result.public_id,
+          });
+        }
+      );
+      uploadStream.end(file.buffer);
+    });
+  }
+
   // Generate a signed, time-limited URL for private document access.
   // H-access-audit FIX: this function was already dead code (never called)
   // and, separately, actually broken — it never passed resource_type (so

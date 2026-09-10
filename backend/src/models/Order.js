@@ -11,6 +11,7 @@
 const BaseModel = require('./BaseModel');
 const { randomBytes } = require('crypto');
 const { calculateDistance } = require('../utils/helpers');
+const UserBlock = require('./UserBlock');
 
 // H-4 FIX: delivery fee used to be picked by the client (matching
 // pickup_mall_id/dropoff_mall_id, both client-supplied with no malls table
@@ -138,6 +139,16 @@ class Order extends BaseModel {
 
       let computedSubtotal = 0;
       const validatedItems  = [];
+      // Multi-tenant Stage 7 — the checkout safety guard. flash_inventory
+      // items are the only ones with a real, trustworthy store_id (external/
+      // partner items have no matching row and are excluded here, same as
+      // they're already excluded from server-price trust above). Today,
+      // with one real seeded store, this set can only ever have 0 or 1
+      // members — this only starts doing real work the moment a second
+      // store exists, at which point it fails a mixed-store cart loudly
+      // instead of Store.getDefaultStoreId() silently misattributing the
+      // whole order to whichever store happens to be "default."
+      const distinctStoreIds = new Set();
 
       for (const item of items) {
         const rawQty = Number(item.quantity);
@@ -151,7 +162,7 @@ class Order extends BaseModel {
 
         if (item.productId) {
           const invRow = await client.query(
-            `SELECT id, price, product_name, stock_by_size
+            `SELECT id, price, product_name, stock_by_size, store_id
              FROM flash_inventory
              WHERE id = $1 AND is_active = true
              FOR UPDATE`,
@@ -160,6 +171,7 @@ class Order extends BaseModel {
 
           if (invRow.rows.length) {
             // ── FLASH INVENTORY PATH: use server price, ignore client price ──
+            if (invRow.rows[0].store_id) distinctStoreIds.add(invRow.rows[0].store_id);
             serverPrice = parseFloat(invRow.rows[0].price);
             if (activeDiscountPercent > 0) {
               serverPrice = Math.round(serverPrice * (1 - activeDiscountPercent / 100) * 100) / 100;
@@ -212,6 +224,21 @@ class Order extends BaseModel {
       }
       // ── END PRICE VALIDATION ───────────────────────────────────────────────
 
+      // Multi-tenant Stage 7 — reject a cart spanning more than one real
+      // store, and derive the order's real store_id from the cart itself
+      // (strictly more correct than the caller-supplied default even at one
+      // store today) rather than the blind Store.getDefaultStoreId() pick.
+      // A cart with zero Flash-inventory items (all external/partner) keeps
+      // today's exact behavior: whatever store_id the caller passed in.
+      if (distinctStoreIds.size > 1) {
+        throw new Error(
+          'Your cart contains items from more than one store — please check out separately for now.'
+        );
+      }
+      const resolvedStoreId = distinctStoreIds.size === 1
+        ? [...distinctStoreIds][0]
+        : store_id;
+
       // Flash Premium (R99/mo) perk, approved 25% off the delivery fee,
       // uncapped: delivery_fee/driver_payout/flashCommission below are all
       // still derived from computedDeliveryFee (the full, undiscounted tier
@@ -258,7 +285,7 @@ class Order extends BaseModel {
           finalTotal,
           driverPayout,
           premiumDiscountApplied,
-          store_id            || null,
+          resolvedStoreId     || null,
           preferred_driver_id || null,
           preferredDriverExpiresAt,
           pickup_address,
@@ -290,6 +317,46 @@ class Order extends BaseModel {
 
       return order;
     });
+  }
+
+  // Reverses exactly what create()'s FOR UPDATE-locked decrement removed
+  // for this order's flash_inventory items — called whenever an order is
+  // genuinely no longer going to be fulfilled (cancelled via the state
+  // machine, or a payment that never succeeded in the first place). Must
+  // run inside the caller's own transaction/client so the restock and the
+  // status/payment change that triggers it commit or roll back together.
+  //
+  // Mirrors create()'s own decrement condition exactly: only order_items
+  // with a real product_id AND a size were ever decremented (external/
+  // partner items and sizeless flash_inventory items were not touched at
+  // create() time either), so restocking anything else would restore
+  // stock that was never actually taken. A flash_inventory row that no
+  // longer exists (product deleted since the order was placed) has
+  // nothing real to restock into — logged, not silently swallowed, so a
+  // genuine "where did this stock go" question has a trail.
+  static async restockItems(orderId, client) {
+    const itemsResult = await client.query(
+      `SELECT product_id, size, quantity FROM order_items WHERE order_id = $1 AND product_id IS NOT NULL AND size IS NOT NULL`,
+      [orderId],
+    );
+
+    for (const item of itemsResult.rows) {
+      const invResult = await client.query(
+        `SELECT stock_by_size FROM flash_inventory WHERE id = $1 FOR UPDATE`,
+        [item.product_id],
+      );
+      if (!invResult.rows.length) {
+        console.warn(`[Order] restockItems: product ${item.product_id} no longer exists, skipping restock for order ${orderId}`);
+        continue;
+      }
+      const stock    = invResult.rows[0].stock_by_size || {};
+      const current  = parseInt(stock[item.size] || 0, 10);
+      const restored = { ...stock, [item.size]: current + item.quantity };
+      await client.query(
+        `UPDATE flash_inventory SET stock_by_size = $1, updated_at = NOW() WHERE id = $2`,
+        [JSON.stringify(restored), item.product_id],
+      );
+    }
   }
 
   static async updateStatus(orderId, status, driverId = null) {
@@ -338,6 +405,16 @@ class Order extends BaseModel {
     const order = result.rows[0];
     if (userId   && order.user_id   !== userId)   return null;
     if (driverId && order.driver_id !== driverId) return null;
+
+    // §2.7 audit — a block cuts off calling on this order immediately too,
+    // not just chat. There's no masked-calling layer yet (deferred to the
+    // pre-launch checklist, §2.2), so this can't erase a number the other
+    // party may have already noted down before blocking -- but it stops
+    // the app itself from displaying/re-serving it going forward, and the
+    // mobile Call button hides itself once phone is missing.
+    if (order.driver_id && (await UserBlock.isBlockedPair(order.user_id, order.driver_id))) {
+      order.driver_phone = null;
+    }
     return order;
   }
 
@@ -362,6 +439,20 @@ class Order extends BaseModel {
       LIMIT $2 OFFSET $3
     `;
     const result = await this.query(sql, [userId, limit, offset]);
+
+    // §2.7 audit — same phone redaction as getByIdWithDetails, batched: one
+    // query for all of this customer's blocked driver ids (bounded by
+    // their own block count, not this page's size or the platform's total
+    // order/block volume), then a plain in-memory Set lookup per row --
+    // never a per-row query, regardless of how many distinct drivers
+    // appear across this page of orders.
+    const blockedDriverIds = new Set(await UserBlock.getBlockedDriverIdsForUser(userId));
+    if (blockedDriverIds.size) {
+      result.rows.forEach((row) => {
+        if (blockedDriverIds.has(row.driver_id)) row.driver_phone = null;
+      });
+    }
+
     return result.rows;
   }
 

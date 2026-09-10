@@ -21,6 +21,7 @@ import * as Notifications from 'expo-notifications';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import driverApi, { saveTokens, clearTokens } from '../services/api';
+import analytics from '../services/analytics';
 import {
   BACKGROUND_LOCATION_TASK,
   startBackgroundLocation,
@@ -153,6 +154,9 @@ export const DriverProvider = ({ children }) => {
 
   // ── Shared post-login helper ──────────────────────────────────────────────
   const _postLogin = useCallback(async (data) => {
+    // Shared by all four auth paths — the one place every successful
+    // login/signup passes through.
+    analytics.identify(data.driver?.id);
     // Auth tokens → SecureStore (encrypted)
     await saveTokens(data.token, data.refreshToken);
     // Driver snapshot → AsyncStorage (for background task access)
@@ -173,6 +177,7 @@ export const DriverProvider = ({ children }) => {
   const loginWithApple = useCallback(async (identityToken, fullName, email) => {
     const data = await driverApi.auth.appleSignIn({ identityToken, fullName, email });
     await _postLogin(data);
+    if (data.isNewDriver) analytics.driverSignedUp('apple');
     if (data.driver?.status === 'approved') await registerPushToken();
     return data;
   }, [_postLogin]);
@@ -180,6 +185,7 @@ export const DriverProvider = ({ children }) => {
   const loginWithGoogle = useCallback(async (idToken) => {
     const data = await driverApi.auth.googleSignIn(idToken);
     await _postLogin(data);
+    if (data.isNewDriver) analytics.driverSignedUp('google');
     if (data.driver?.status === 'approved') await registerPushToken();
     return data;
   }, [_postLogin]);
@@ -187,6 +193,7 @@ export const DriverProvider = ({ children }) => {
   const register = useCallback(async (formData) => {
     const data = await driverApi.auth.register(formData);
     await _postLogin(data);
+    analytics.driverSignedUp('password');
     return data;
   }, [_postLogin]);
 
@@ -225,6 +232,16 @@ export const DriverProvider = ({ children }) => {
     });
   }, []);
 
+  // Apple App Store compliance audit: closes the OAuth age-gate bypass —
+  // Google/Apple Sign In create a driver row with no date_of_birth. Unlike
+  // acceptTerms above, a failed call here must surface (an invalid/under-18
+  // date is rejected server-side), so this doesn't swallow the error.
+  const submitDateOfBirth = useCallback(async (dateOfBirth) => {
+    const data = await driverApi.auth.setDateOfBirth(dateOfBirth);
+    setDriver(data.driver);
+    await AsyncStorage.setItem(AS_KEYS.driver, JSON.stringify(data.driver));
+  }, []);
+
   const refreshProfile = useCallback(async () => {
     try {
       const data = await driverApi.driver.getProfile();
@@ -259,6 +276,7 @@ export const DriverProvider = ({ children }) => {
     }
 
     await driverApi.driver.setOnline(online, lat, lng);
+    analytics.driverOnlineToggled(online ? 'online' : 'offline');
     setIsOnlineState(online);
     setDriver(prev => (prev ? { ...prev, is_online: online } : prev));
 
@@ -285,6 +303,7 @@ export const DriverProvider = ({ children }) => {
     register,
     logout,
     acceptTerms,
+    submitDateOfBirth,
     refreshProfile,
     setOnline,
     handleSessionExpired,

@@ -1,4 +1,5 @@
 const https = require("https");
+const crypto = require("crypto");
 const pool = require("../config/database");
 const { getOptional, isProd } = require("../config/env");
 
@@ -70,35 +71,36 @@ class PaystackService {
     });
   }
 
+  // Production-readiness audit §2.8 — this previously did a plain SELECT
+  // (no lock) then, only after a slow external Paystack call, an UPDATE.
+  // The mobile app's own request timeout (20s, api.js) is shorter than
+  // this service's own outbound Paystack timeout (30s, this.request
+  // above) by design margin -- meaning Paystack can genuinely still be
+  // in flight when the app gives up and re-enables "Pay", and a retry's
+  // SELECT would see the same pre-update state the first attempt saw,
+  // independently calling Paystack a second time. Two real, valid
+  // Paystack references could exist for one order, with orders.paystack_
+  // reference (a single column) silently overwritten by whichever UPDATE
+  // landed last -- meaning a real successful charge on the *other*
+  // reference could arrive as a webhook that no longer matches anything
+  // (`WHERE ... AND paystack_reference = $2`), leaving a genuinely
+  // charged customer's order stuck unpaid with no reconciliation path
+  // (the reconciliation cron re-verifies whatever reference is *currently*
+  // stored, not the one that was actually completed).
+  //
+  // Fixed with the exact pattern chargeSavedCard already uses correctly:
+  // generate our own reference, lock the order row, commit the reference
+  // *before* calling Paystack (not after) -- a concurrent second call
+  // blocks on the row lock, then sees the just-committed reference and
+  // short-circuits instead of ever reaching Paystack. If the external
+  // call itself then fails, the reference is reverted (scoped to the
+  // exact reference we just set, so a concurrent successful attempt's
+  // reference is never clobbered) so a retry can proceed cleanly.
   async initializePayment(orderId, userId) {
-    const orderResult = await pool.query(
-      "SELECT id, total, subtotal, user_id, payment_status, paystack_reference FROM orders WHERE id=$1",
-      [orderId],
-    );
-
-    if (!orderResult.rows.length) throw new Error("Order not found");
-    const order = orderResult.rows[0];
-    if (order.user_id !== userId) throw new Error("Not your order");
-    if (order.payment_status === "paid") throw new Error("Order already paid");
-
-    // If a payment is already pending with a reference, avoid re-initializing
-    // and risking duplicate charge attempts while webhook confirmation is in-flight.
-    if (order.payment_status === "pending" && order.paystack_reference) {
-      return {
-        reference: order.paystack_reference,
-        amount: order.total,
-        awaitingWebhook: true,
-        message: "Payment already initiated. Waiting for confirmation.",
-      };
-    }
-
-    const userResult = await pool.query("SELECT email FROM users WHERE id=$1", [
-      userId,
-    ]);
-    const email = userResult.rows[0]?.email;
-    const amountInCents = Math.round(parseFloat(order.total) * 100);
-
-    // Ensure APP_URL is configured
+    // Resolved before the transaction below touches anything -- a missing
+    // APP_URL in production must fail with zero DB side effects, exactly
+    // like before this fix, not leave a committed "pending" reference
+    // behind that was never actually sent to Paystack.
     let callbackUrl = process.env.APP_URL;
     if (!callbackUrl) {
       if (isProd) {
@@ -112,33 +114,108 @@ class PaystackService {
       );
     }
 
-    const paystackRes = await this.request("POST", "/transaction/initialize", {
-      email,
-      amount: amountInCents,
-      currency: "ZAR",
-      reference: `flash_${orderId}_${Date.now()}`,
-      callback_url: `${callbackUrl}/payment/callback`,
-      metadata: {
-        orderId,
-        userId,
-        platform: "flash",
-      },
-    });
+    let reference;
+    let order;
 
-    if (!paystackRes.status) {
-      throw new Error(paystackRes.message || "Paystack initialization failed");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const orderResult = await client.query(
+        "SELECT id, total, subtotal, user_id, payment_status, paystack_reference, updated_at FROM orders WHERE id=$1 FOR UPDATE",
+        [orderId],
+      );
+
+      if (!orderResult.rows.length) {
+        await client.query("ROLLBACK");
+        throw new Error("Order not found");
+      }
+      order = orderResult.rows[0];
+      if (order.user_id !== userId) {
+        await client.query("ROLLBACK");
+        throw new Error("Not your order");
+      }
+      if (order.payment_status === "paid") {
+        await client.query("ROLLBACK");
+        throw new Error("Order already paid");
+      }
+
+      // If a payment is already pending with a reference, avoid re-initializing
+      // and risking duplicate charge attempts while webhook confirmation is in-flight.
+      // Staleness check (2 min, matching paymentReconciliationJob.js's own
+      // threshold for consistency): a legitimate Paystack init completes
+      // well within that window (this.request's own 30s timeout above), so
+      // a reference still sitting 'pending' past it likely means the
+      // caller who set it never actually reached Paystack successfully
+      // (e.g. its own outbound call failed *after* this row was already
+      // committed but *before* a concurrent second caller's short-circuit
+      // read it here -- a real, if narrow, gap this fix closes: without
+      // this check, that second caller would be handed a reference no
+      // webhook will ever arrive for, stuck "awaiting confirmation"
+      // forever). Past the threshold, fall through and safely supersede it
+      // with a fresh reference instead of trusting a possibly-dead one.
+      const referenceAgeMs = order.updated_at ? Date.now() - new Date(order.updated_at).getTime() : Infinity;
+      const referenceIsFresh = referenceAgeMs < 2 * 60 * 1000;
+      if (order.payment_status === "pending" && order.paystack_reference && referenceIsFresh) {
+        await client.query("ROLLBACK");
+        return {
+          reference: order.paystack_reference,
+          amount: order.total,
+          awaitingWebhook: true,
+          message: "Payment already initiated. Waiting for confirmation.",
+        };
+      }
+
+      reference = `flash_${orderId}_${crypto.randomBytes(8).toString("hex")}`;
+      await client.query(
+        "UPDATE orders SET paystack_reference=$1, payment_status='pending', updated_at=NOW() WHERE id=$2",
+        [reference, orderId],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
     }
 
-    await pool.query(
-      "UPDATE orders SET paystack_reference=$1, payment_status='pending', updated_at=NOW() WHERE id=$2",
-      [paystackRes.data.reference, orderId],
-    );
+    const userResult = await pool.query("SELECT email FROM users WHERE id=$1", [
+      userId,
+    ]);
+    const email = userResult.rows[0]?.email;
+    const amountInCents = Math.round(parseFloat(order.total) * 100);
 
-    return {
-      authorizationUrl: paystackRes.data.authorization_url,
-      reference: paystackRes.data.reference,
-      amount: order.total,
-    };
+    try {
+      const paystackRes = await this.request("POST", "/transaction/initialize", {
+        email,
+        amount: amountInCents,
+        currency: "ZAR",
+        reference,
+        callback_url: `${callbackUrl}/payment/callback`,
+        metadata: {
+          orderId,
+          userId,
+          platform: "flash",
+        },
+      });
+
+      if (!paystackRes.status) {
+        throw new Error(paystackRes.message || "Paystack initialization failed");
+      }
+
+      return {
+        authorizationUrl: paystackRes.data.authorization_url,
+        reference: paystackRes.data.reference,
+        amount: order.total,
+      };
+    } catch (err) {
+      await pool.query(
+        "UPDATE orders SET payment_status='pending', paystack_reference=NULL, updated_at=NOW() WHERE id=$1 AND paystack_reference=$2",
+        [orderId, reference],
+      ).catch((e) => console.error("[Paystack] initializePayment cleanup revert failed:", e.message));
+      throw err;
+    }
   }
 
   // Generic (non-order) Paystack charge initialization — used for driver

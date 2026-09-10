@@ -56,7 +56,7 @@ function createTransporter() {
 }
 
 const transporter = createTransporter();
-const FROM_ADDRESS = process.env.EMAIL_FROM || 'Flash <makasanaivyson@gmail.com>';
+const FROM_ADDRESS = process.env.EMAIL_FROM || 'Flash <noreply@flashdelivery.co.za>';
 const APP_URL      = process.env.APP_URL    || 'http://localhost:3000';
 
 async function sendEmail({ to, subject, html, text }) {
@@ -250,7 +250,150 @@ async function sendSosAlertEmail({ alertId, orderId, orderNumber, triggeredByRol
   });
 }
 
+// ─── Store missed-order reliability (§2.12 audit) ──────────────────────────
+// Same reasoning as sendSosAlertEmail directly above: a live
+// io.to('admin') socket alert is real, but nothing if the panel isn't
+// open at that exact moment. A new order reaching pending_store_
+// acceptance previously had no admin-facing signal at all -- not even a
+// socket alert, let alone this durable fallback. Not fired on every
+// order (that would just become noise to ignore at real volume) -- only
+// once an order has actually been sitting long enough that it's at real
+// risk of being auto-cancelled, and again, distinctly, if that auto-
+// cancellation actually happens.
+const ESCALATION_STAGE_LABEL = {
+  acceptance:  'awaiting store acceptance',
+  preparation: 'marked ready for pickup',
+};
+
+async function sendOrderEscalationEmail({ id, order_number, total }, stage) {
+  const adminEmails = await getAdminEmails();
+  if (!adminEmails.length) {
+    console.warn('[Email] No admin accounts found — skipping order escalation notification');
+    return null;
+  }
+  const stageLabel = ESCALATION_STAGE_LABEL[stage] || stage;
+  const amount = parseFloat(total || 0).toFixed(2);
+
+  return sendEmail({
+    to:      adminEmails,
+    subject: `Action needed — order ${order_number} still ${stageLabel}`,
+    text:    `Order ${order_number} (R${amount}) has been ${stageLabel} for a while and will be automatically `
+      + `cancelled and refunded soon if nobody acts on it.\n\nHandle it now in the admin panel: order ID ${id}.`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px;border:2px solid #f59e0b">
+    <h2 style="color:#111827;margin-top:0">Action needed — order ${order_number}</h2>
+    <p style="color:#6b7280">This order has been <strong>${stageLabel}</strong> for a while now and will be automatically cancelled and refunded soon if nobody acts on it.</p>
+    <p style="color:#111827;font-size:20px;font-weight:800">R${amount}</p>
+    <p style="color:#9ca3af;font-size:12px;border-top:1px solid #f3f4f6;padding-top:16px;margin-bottom:0">
+      Order ID: ${id}
+    </p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
+async function sendOrderMissedEmail({ id, order_number, total }, stage) {
+  const adminEmails = await getAdminEmails();
+  if (!adminEmails.length) {
+    console.warn('[Email] No admin accounts found — skipping missed-order notification');
+    return null;
+  }
+  const stageLabel = ESCALATION_STAGE_LABEL[stage] || stage;
+  const amount = parseFloat(total || 0).toFixed(2);
+
+  return sendEmail({
+    to:      adminEmails,
+    subject: `Missed order — ${order_number} was auto-cancelled`,
+    text:    `Order ${order_number} (R${amount}) was automatically cancelled just now because it was never `
+      + `${stageLabel} in time. The customer has already been notified and refunded in full.\n\nOrder ID: ${id}.`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px;border:2px solid #C20012">
+    <h2 style="color:#111827;margin-top:0">Missed order — ${order_number}</h2>
+    <p style="color:#6b7280">This order was just automatically cancelled because it was never <strong>${stageLabel}</strong> in time. The customer has already been notified and refunded in full.</p>
+    <p style="color:#111827;font-size:20px;font-weight:800">R${amount} <span style="color:#6b7280;font-size:13px;font-weight:400">refunded</span></p>
+    <p style="color:#9ca3af;font-size:12px;border-top:1px solid #f3f4f6;padding-top:16px;margin-bottom:0">
+      Order ID: ${id}
+    </p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
+// ─── Marketing site leads (waitlist / contact / driver+seller applications) ─
+// Same notification shape as sendReturnAwaitingReviewEmail / sendSosAlertEmail
+// above — email to every real admin, since there is no other real-time
+// channel for these (no admin currently has the panel open watching for a
+// new public-site submission the way an order/return is watched).
+async function sendMarketingLeadEmail({ kind, email, role, name, subject, message, applicantType, city }) {
+  const adminEmails = await getAdminEmails();
+  if (!adminEmails.length) {
+    console.warn('[Email] No admin accounts found — skipping marketing lead notification');
+    return null;
+  }
+
+  let subjectLine, textBody, htmlBody;
+
+  if (kind === 'waitlist') {
+    subjectLine = `New early-access signup — ${email}`;
+    textBody = `${email} joined the FLASH early-access list as a ${role}.`;
+    htmlBody = `<p><strong>${escapeHtmlLite(email)}</strong> joined the FLASH early-access list as a <strong>${escapeHtmlLite(role)}</strong>.</p>`;
+  } else if (kind === 'contact') {
+    subjectLine = `New contact message — ${subject} (${name})`;
+    textBody = `From: ${name} <${email}>\nSubject: ${subject}\n\n${message}`;
+    htmlBody = `<p><strong>${escapeHtmlLite(name)}</strong> (${escapeHtmlLite(email)}) — subject: <strong>${escapeHtmlLite(subject)}</strong></p><p>${escapeHtmlLite(message).replace(/\n/g, '<br>')}</p>`;
+  } else if (kind === 'application') {
+    subjectLine = `New ${applicantType} application — ${name}`;
+    textBody = `${name} <${email}> applied to be a ${applicantType}${city ? ` (${city})` : ''}.\n\n${message}`;
+    htmlBody = `<p><strong>${escapeHtmlLite(name)}</strong> (${escapeHtmlLite(email)}) applied to be a <strong>${escapeHtmlLite(applicantType)}</strong>${city ? ` in ${escapeHtmlLite(city)}` : ''}.</p><p>${escapeHtmlLite(message).replace(/\n/g, '<br>')}</p>`;
+  } else {
+    return null;
+  }
+
+  return sendEmail({
+    to:      adminEmails,
+    subject: subjectLine,
+    text:    textBody,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="display:inline-block;background:#0a0a0a;border-radius:16px;padding:16px">
+        <span style="color:#fff;font-size:28px;font-weight:900;letter-spacing:4px">FLASH</span>
+      </div>
+    </div>
+    <h2 style="color:#111827;margin-top:0">${escapeHtmlLite(subjectLine)}</h2>
+    <div style="color:#374151">${htmlBody}</div>
+    <p style="color:#9ca3af;font-size:12px;border-top:1px solid #f3f4f6;padding-top:16px;margin-bottom:0">
+      From the flashdelivery.co.za marketing site — visible in the admin panel.
+    </p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
+// Minimal escaping — same purpose as adminPanel.js's own escapeHtml, kept
+// local here since these two files don't otherwise share helpers.
+function escapeHtmlLite(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 module.exports = {
   sendPasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
-  sendSosAlertEmail,
+  sendSosAlertEmail, sendOrderEscalationEmail, sendOrderMissedEmail, sendMarketingLeadEmail,
 };

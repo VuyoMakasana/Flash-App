@@ -190,6 +190,9 @@ const auth = {
 
   acceptTerms: () => request('/auth/user/accept-terms', { method: 'POST' }),
 
+  setDateOfBirth: (dateOfBirth) =>
+    request('/auth/user/date-of-birth', { method: 'POST', body: JSON.stringify({ date_of_birth: dateOfBirth }) }),
+
   resendVerification: (email) =>
     request('/auth/user/resend-verification', { method: 'POST', body: JSON.stringify({ email }) }),
 
@@ -206,6 +209,13 @@ const auth = {
 const products = {
   getAll:  (params = '') => request(`/inventory${params}`),
   getById: (id)          => request(`/inventory/${id}`),
+};
+
+// Multi-tenant Stage 7 — the customer-facing storefront's real, public
+// stores endpoints. Mounted as /api/stores on the backend.
+const stores = {
+  getAll:  (params = '') => request(`/stores${params}`),
+  getById: (id)          => request(`/stores/${id}`),
 };
 
 // ── Orders ────────────────────────────────────────────────────────────────
@@ -310,6 +320,8 @@ const returns = {
 const messages = {
   getMessages: (orderId)          => request(`/messages/${orderId}`),
   sendMessage: (orderId, content)  => request(`/messages/${orderId}`, { method: 'POST', body: JSON.stringify({ content }) }),
+  reportUser: (orderId, reason, messageId) => request(`/messages/${orderId}/report`, { method: 'POST', body: JSON.stringify({ reason, messageId }) }),
+  blockUser:  (orderId)            => request(`/messages/${orderId}/block`, { method: 'POST' }),
 };
 
 // ── SOS / safety ─────────────────────────────────────────────────────────
@@ -332,6 +344,7 @@ export { BASE_URL, getToken, saveTokens, clearTokens };
 export default {
   auth,
   products,
+  stores,
   orders,
   payments,
   drivers,

@@ -30,7 +30,7 @@ export default function DriverSettings() {
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Account',
-      'This will permanently delete your driver account, earnings history, and all personal data. This cannot be undone.',
+      'This will permanently delete your personal details, vehicle info, and uploaded documents. This cannot be undone. Your past earnings and delivery history are kept for accounting purposes but are no longer linked to your name or contact details.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -42,7 +42,7 @@ export default function DriverSettings() {
               await driverApi.driver.deleteAccount();
               await logout();
             } catch (e) {
-              Alert.alert('Error', e.message || 'Could not delete account. Contact makasanaivyson@gmail.com');
+              Alert.alert('Error', e.message || 'Could not delete account. Contact support@flashdelivery.co.za');
             } finally {
               setDeleting(false);
             }
@@ -123,7 +123,7 @@ export default function DriverSettings() {
         <Row
           icon="document-text-outline"
           label="Privacy Policy"
-          onPress={() => Linking.openURL('https://flash-website.netlify.app/privacy')}
+          onPress={() => Linking.openURL('https://flashdelivery.co.za/privacy')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>
@@ -131,7 +131,7 @@ export default function DriverSettings() {
         <Row
           icon="reader-outline"
           label="Terms & Conditions"
-          onPress={() => Linking.openURL('https://flash-website.netlify.app/terms')}
+          onPress={() => Linking.openURL('https://flashdelivery.co.za/terms')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>
@@ -139,7 +139,7 @@ export default function DriverSettings() {
         <Row
           icon="help-circle-outline"
           label="Help & Support"
-          onPress={() => Linking.openURL('mailto:makasanaivyson@gmail.com')}
+          onPress={() => Linking.openURL('mailto:support@flashdelivery.co.za')}
         >
           <Ionicons name="chevron-forward" size={16} color="#6b7280" />
         </Row>

@@ -56,20 +56,20 @@ module.exports = {
 
     // ── Phase 0 — this table and its own audit trail ─────────────────────
     admins:        'Phase 0 — the account itself. A "manage other admins" screen is a natural Phase 4 addition once there\'s a real second admin (Addendum 3 §4\'s role decision).',
-    admin_actions: 'Phase 0 — the audit log itself. AdminAction.getRecent() already exists to read it back; a real UI view showing it is a natural near-term addition.',
+    admin_actions: 'Phase 0 — real, browsable, read-only AdminJS resource, now built and verified live (production-readiness audit §2.13, full admin visibility). AdminAction.getRecent() remains the backend read path other code uses; this resource is the human-facing browse/search view over the same table.',
 
     // ── Phase 2 — financial and dispute visibility ──────────────────────
     payments:                'Phase 2 — real, browsable AdminJS resource (critical-flow/edge-case audit §2.7), per-transaction, not just dashboard totals.',
     payment_refunds:         'Phase 2 — real, browsable AdminJS resource (critical-flow/edge-case audit §2.7), per-refund, not just the aggregate reconciliation-check target (Addendum 1 §4.4).',
-    driver_commission_debts: 'Phase 2 — cash-order commission revenue line (Addendum 1 §4.3).',
+    driver_commission_debts: 'Phase 2 — cash-order commission revenue line (Addendum 1 §4.3); previously aggregate-only (a driver-page summary total). Now ALSO a real, browsable, read-only AdminJS resource in its own right (production-readiness audit §2.13) — per-order debt records (driver, order, amount, status, settled_at), not just the total, so a real dispute ("why do I owe this much?") can actually be reconstructed without raw DB access.',
     driver_wallet_ledger:    'Phase 2 — real AdminJS resource + inline summary on a driver\'s own page, now built and verified live.',
     driver_wallets:          'Phase 2 — real AdminJS resource + inline summary on a driver\'s own page, now built and verified live.',
-    driver_penalties:        'Phase 2 — cost-offset line (nets against payouts, per Addendum 1 §4.3).',
+    driver_penalties:        'Phase 2 — cost-offset line (nets against payouts, per Addendum 1 §4.3); previously aggregate-only (a driver-page count + total). Now ALSO a real, browsable, read-only AdminJS resource (§2.13) — the individual reason text for each penalty is now visible, not just a count.',
     driver_payout_requests:  'Phase 2 — real AdminJS resource, now built and verified live.',
     payout_transactions:     'Phase 2 — real AdminJS resource, real Paystack transfer trail, now built and verified live.',
-    driver_subscriptions:    'Phase 2 — subscription status/history (added in Addendum 3 §1, fixing the inconsistency where the revenue was counted without the record). Aggregate dashboard visibility (active subscriber count, cumulative revenue, cancelled-pending-expiry count, most recent cancellation timestamp) now built and verified live via Admin.getFinancials()\'s driverSubscriptionProduct section — not yet a row-level browsable AdminJS resource, which remains a real future Phase 2 item.',
-    premium_subscriptions:   'Phase 2 — same fix as driver_subscriptions, Addendum 3 §1. Same aggregate dashboard visibility now built and verified live (Admin.getFinancials()\'s premiumProduct section: active subscribers, revenue, discount cost absorbed, net margin, cancellation tracking) — row-level browsing remains a future Phase 2 item, same as driver_subscriptions.',
-    premium_subscription_payments: 'Phase 2 — new table (migrate.js v25), an append-only log of real, webhook-confirmed premium charges (one row per payment, including renewals) added specifically because premium_subscriptions.user_id is UNIQUE and upserts on renewal, so it alone can\'t answer "how much has this user paid in total." Summed directly into premiumProduct.revenue in the dashboard — same aggregate-only visibility as premium_subscriptions above, no row-level resource.',
+    driver_subscriptions:    'Phase 2 — subscription status/history (added in Addendum 3 §1, fixing the inconsistency where the revenue was counted without the record). Previously dashboard-aggregate-only (totals/counts via Admin.getFinancials()); now ALSO a real, browsable, read-only AdminJS resource (§2.13) — per-driver subscription status/history, not just platform-wide totals.',
+    premium_subscriptions:   'Phase 2 — same fix as driver_subscriptions, Addendum 3 §1. Same §2.13 promotion to a real, browsable, read-only AdminJS resource.',
+    premium_subscription_payments: 'Phase 2 — real append-only payment log (migrate.js v25) already queried directly by Admin.getStats() (cumulative Premium revenue) and the admin revenue-trend chart; premium_subscriptions itself can\'t be summed for revenue since renewals upsert the same row. Found missing from this registry during the production-readiness audit (§2.1/§2.14) despite already being real, live admin-visible data.',
     driver_documents:        'Phase 2/1 — document review via signed URLs; Admin.getDriverById already does this correctly, no UI yet.',
     messages:                'Phase 2 — order chat now shown inline on the order-detail screen alongside pickup/dropoff photos, now built and verified live.',
 
@@ -77,6 +77,8 @@ module.exports = {
     sos_alerts:       'Phase 3 — real AdminJS resource + SosAlert.getAll/acknowledge + an immediate SOS email (Addendum 2 §4) now built and verified live.',
     driver_ratings:   'Phase 3 — real AdminJS resource + a driver-rating-trend dashboard chart, now built and verified live.',
     flagged_accounts: 'Phase 3 — new table (migrate.js v20), a periodically-synced snapshot of users.flagged_for_cash_abuse/cash_refusal_count kept current by a real cron job (server.js) since users itself can\'t be a resource — real AdminJS resource now built and verified live.',
+    chat_reports: 'Production-readiness audit §2.7 (migrate.js v37) — real AdminJS resource with a resolve action (reviewed/actioned/dismissed + notes), same "human confirms before any consequence" pattern as sos_alerts\' acknowledge.',
+    user_blocks:  'Production-readiness audit §2.7 (migrate.js v37) — real AdminJS resource, read-only (a block is a fact, not something an admin edits); relevant to reconstructing why a driver/customer stopped being matched together.',
 
     // ── Phase 4 — rounding out ───────────────────────────────────────────
     app_ratings:          'Phase 4 (Addendum 3 §1 — was orphaned, now placed alongside content moderation).',
@@ -87,6 +89,18 @@ module.exports = {
     store_boosts:         'Phase 4 — founder\'s decision (final completion pass, §4): build the real effect. purchaseBoost now requires a real product_id, charges through Paystack (paystackService.initializeGenericCharge, activated by webhookController.handleBoostCharge on charge.success — no row exists until payment is confirmed), and an active boost genuinely ranks its product first in Inventory.getProducts(). Product-scoped rather than store-scoped because this codebase has no stores table (store_id is a free-text tag, always "flash_closet") — a store-level boost has nothing to rank above and could never produce an observable effect.',
     store_promotions:     'Phase 4 — founder\'s decision (final completion pass, §4): build the real effect. createPromotion never had a price/plan to charge for (a free discount config, not a purchase) — its discount_percent now actually reduces the price of flash_inventory items in Order.create() while a promotion is active.',
     browsing_events:      'Phase 4 — backs the Flash Fleet demand-cluster view (fleetIntelligenceService.js), zero new backend needed.',
+
+    // ── Multi-tenant foundation, Stage 1 (schema only, migrate.js v29-v32) ──
+    stores:                          'Multi-tenant Stage 1 (docs/audits/MULTI_TENANT_ARCHITECTURE_BLUEPRINT.md) — schema + seed only, no admin UI yet; a Store Admin Portal / internal store-management view is explicitly a later, separately-approved stage (FLASH_STORE_ADMIN_DESIGN.md).',
+    commission_rates:                'Multi-tenant Stage 1 — schema + seed only (global 10% launch rate). Rate management UI (global/store/promotional overrides) is a later stage, not yet approved.',
+    settlement_config:               'Multi-tenant Stage 1 — schema + seed only (7-day global cycle default). Settlement-cycle configuration UI is a later stage, not yet approved.',
+    store_settlements:               'Multi-tenant Stage 1 — schema only, zero rows yet (no settlement calculation logic wired in this stage). Settlement review/payout UI is a later stage.',
+    store_settlement_line_items:     'Multi-tenant Stage 1 — schema only, zero rows yet, same as store_settlements above.',
+
+    // ── Marketing site leads (migrate.js v36) ────────────────────────────
+    marketing_waitlist:           'Real AdminJS resource — early-access signups from the public marketing site, also triggers an admin email on each new signup.',
+    marketing_contact_messages:   'Real AdminJS resource — Contact page submissions from the public marketing site, also triggers an admin email.',
+    marketing_applications:      'Real AdminJS resource — driver/seller application form submissions from the public marketing site, also triggers an admin email.',
   },
 
   intentionallyExcluded: {
@@ -109,5 +123,9 @@ module.exports = {
     feed_post_products:   'Tagged-product metadata on a feed post, no independent moderation need beyond the post itself (feed_posts, Phase 4).',
     payflex_webhook_events: 'Legacy Payflex integration history, preserved only per the CRITICAL-3 FIX that removed Payflex entirely — no new rows are ever written, and there is no admin action possible on dead-integration history.',
     driver_locations:       'Raw location ping history, pruned after 30 days by the existing daily cron — no planned aggregate view. Live online/offline status and current position come from drivers.is_online/current_lat/current_lng directly, not this history table.',
+
+    // ── Multi-tenant Stage 2 — genuinely belong to the separate Store Admin Portal, never this panel ──
+    store_users:   'Multi-tenant Stage 2 (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §1/§3) — partner-store staff accounts. Never a resource in this internal panel, by design, not an oversight: the whole point of this design is that a store account is a fundamentally different trust domain from a Flash-internal admin, with no shared table, query, or UI surface. Managed (Stage 3+) by the separate Store Admin Portal frontend, not adminPanel.js.',
+    store_actions: 'Multi-tenant Stage 2 (§5.4) — the Store Admin Portal\'s own audit log, structurally separate from admin_actions for the same reason as store_users above. Reviewed (Stage 3+) inside the Store Admin Portal itself, never surfaced here.',
   },
 };

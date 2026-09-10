@@ -18,6 +18,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import api, { saveTokens, clearTokens } from '../services/api';
+import analytics from '../services/analytics';
 
 const FlashContext = createContext(null);
 
@@ -105,14 +106,15 @@ export const FlashProvider = ({ children }) => {
             image:       p.image_url   || 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=800',
             badge:       p.brand       || null,
             description: p.description || '',
-            // No default here: flash_inventory has no store_id column today (it's a
-            // single-store table), so the backend never actually returns one. A
-            // 'flash_closet' fallback previously masqueraded as a real per-product
-            // store id, which defeated HomeScreen's own `stores.length > 1` check
-            // meant to hide the shop-filter row until real multi-store data exists
-            // — it always evaluated to a fake 2-store list ['all', 'flash_closet']
-            // and rendered a redundant filter pill showing the raw slug.
+            // store_id/store_name are real now (Multi-tenant Stage 6, decision 4 —
+            // Inventory.getProducts() joins stores and returns both). Still only
+            // one seeded store exists today, so HomeScreen's `stores.length > 1`
+            // check still hides the shop-filter row — this just makes the wiring
+            // correct for whenever a real second store is onboarded, replacing the
+            // old 'flash_closet' fallback that masqueraded as a real per-product
+            // store id and rendered a redundant filter pill showing a raw slug.
             storeId:     p.store_id    || null,
+            storeName:   p.store_name  || null,
           }));
           setProducts(normalised);
         }
@@ -129,6 +131,9 @@ export const FlashProvider = ({ children }) => {
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   const _postLogin = useCallback(async (data) => {
+    // Shared by all four auth paths (password + Apple/Google, new + existing
+    // account) — the one place every successful login/signup passes through.
+    analytics.identify(data.user?.id);
     // Tokens → SecureStore (encrypted)
     await saveTokens(data.token, data.refreshToken);
     // User profile snapshot → AsyncStorage (non-sensitive)
@@ -148,24 +153,28 @@ export const FlashProvider = ({ children }) => {
   const login = useCallback(async (email, password) => {
     const data = await api.auth.login(email, password);
     await _postLogin(data);
+    analytics.userLoggedIn('password');
     return data;
   }, [_postLogin]);
 
   const register = useCallback(async (name, email, password, phone, dateOfBirth) => {
     const data = await api.auth.register(name, email, password, phone, dateOfBirth);
     await _postLogin(data);
+    analytics.userSignedUp('password');
     return data;
   }, [_postLogin]);
 
   const loginWithApple = useCallback(async (identityToken, fullName, email) => {
     const data = await api.auth.appleSignIn(identityToken, fullName, email);
     await _postLogin(data);
+    if (data.isNewUser) analytics.userSignedUp('apple'); else analytics.userLoggedIn('apple');
     return data;
   }, [_postLogin]);
 
   const loginWithGoogle = useCallback(async (idToken) => {
     const data = await api.auth.googleSignIn(idToken);
     await _postLogin(data);
+    if (data.isNewUser) analytics.userSignedUp('google'); else analytics.userLoggedIn('google');
     return data;
   }, [_postLogin]);
 
@@ -175,6 +184,16 @@ export const FlashProvider = ({ children }) => {
     setUser(updatedUser);
     await AsyncStorage.setItem(AS_KEYS.user, JSON.stringify(updatedUser));
   }, [user]);
+
+  // Apple App Store compliance audit: closes the OAuth age-gate bypass —
+  // unlike acceptTermsAndAuthenticate above, a failed request here must
+  // surface (invalid/under-18 dates are rejected server-side), so this
+  // deliberately doesn't swallow the error the way that one does.
+  const submitDateOfBirth = useCallback(async (dateOfBirth) => {
+    const data = await api.auth.setDateOfBirth(dateOfBirth);
+    setUser(data.user);
+    await AsyncStorage.setItem(AS_KEYS.user, JSON.stringify(data.user));
+  }, []);
 
   const logout = useCallback(async () => {
     // api.auth.logout() revokes the refresh token server-side (POST
@@ -324,6 +343,13 @@ export const FlashProvider = ({ children }) => {
     const data = await api.orders.create(orderData);
     setOrders(prev => [data.order, ...prev]);
     setCart([]);
+    analytics.orderPlaced({
+      orderId: data.order?.id,
+      orderValue: total,
+      itemCount: cart.reduce((sum, i) => sum + (i.quantity || 1), 0),
+      storeId: storeId || null,
+      deliveryType: timeSlot && timeSlot !== 'ASAP' ? 'scheduled' : 'immediate',
+    });
     return data.order;
   }, [cart, profile.address]);
 
@@ -368,6 +394,7 @@ export const FlashProvider = ({ children }) => {
     loginWithApple,
     loginWithGoogle,
     acceptTermsAndAuthenticate,
+    submitDateOfBirth,
     logout,
     handleSessionExpired,
   }), [
@@ -375,7 +402,7 @@ export const FlashProvider = ({ children }) => {
     cart, addToCart, updateCartQuantity, removeCartItem, clearCart,
     placeOrder, fetchOrders, orders, requestReturn, products,
     login, register, loginWithApple, loginWithGoogle,
-    acceptTermsAndAuthenticate, logout, handleSessionExpired, updateProfile,
+    acceptTermsAndAuthenticate, submitDateOfBirth, logout, handleSessionExpired, updateProfile,
   ]);
 
   return <FlashContext.Provider value={value}>{children}</FlashContext.Provider>;

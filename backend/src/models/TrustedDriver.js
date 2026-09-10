@@ -1,6 +1,7 @@
 'use strict';
 
 const BaseModel = require('./BaseModel');
+const { checkCommissionBlock } = require('../services/driverCommissionService');
 
 /**
  * TrustedDriver model
@@ -140,13 +141,14 @@ class TrustedDriver extends BaseModel {
         // undefined, so every call here threw and was silently swallowed
         // below. notificationService.js is the correctly-wired service used
         // everywhere else in the codebase.
-        const { sendPushNotification } = require('../services/notificationService');
-        await sendPushNotification({
+        const { sendPushNotification, reportPushFailure } = require('../services/notificationService');
+        const pushResult = await sendPushNotification({
           tokens: driverRecord.push_token,
           title: 'New Trust Request',
           body: 'A customer wants to add you as a trusted driver',
           data: { type: 'trust_request', requestId: row.id },
         });
+        reportPushFailure(pushResult, { requestId: row.id, driverId, userId, notificationType: 'trust_request' });
       } catch (pushErr) {
         console.warn('[TrustedDriver] Push notification failed:', pushErr.message);
       }
@@ -176,6 +178,22 @@ class TrustedDriver extends BaseModel {
   }
 
   static async respondToRequest(requestId, driverId, action, io) {
+    // Production-readiness audit §2.8 — a commission-debt-blocked driver
+    // was already correctly unable to accept new *orders* (driverController.
+    // acceptOrder's own checkCommissionBlock gate), but nothing stopped
+    // them accepting a new *trust* relationship while blocked — leaving a
+    // customer under the impression they have a "trusted" driver who
+    // currently cannot fulfill anything for them at all. Declining is
+    // always allowed regardless of debt (there's no reason to force that).
+    if (action === 'accept') {
+      const block = await checkCommissionBlock(driverId);
+      if (block.blocked) {
+        throw new Error(
+          `Outstanding commission debt of R${block.debtAmount.toFixed(2)} — pay this before accepting new trusted-driver requests.`,
+        );
+      }
+    }
+
     const newStatus = action === 'accept' ? 'accepted' : 'declined';
     const result = await this.query(
       `UPDATE trusted_drivers SET status=$1, updated_at=NOW()
@@ -212,13 +230,14 @@ class TrustedDriver extends BaseModel {
       );
       const pushToken = userResult.rows[0]?.push_token;
       if (pushToken) {
-        const { sendPushNotification } = require('../services/notificationService');
-        await sendPushNotification({
+        const { sendPushNotification, reportPushFailure } = require('../services/notificationService');
+        const pushResult = await sendPushNotification({
           tokens: pushToken,
           title: action === 'accept' ? 'Trust Request Accepted' : 'Trust Request Declined',
           body: message,
           data: { type: 'trust_response', driverId, status: newStatus },
         });
+        reportPushFailure(pushResult, { requestId, driverId, userId: row.user_id, notificationType: 'trust_response' });
       }
     } catch (pushErr) {
       console.warn('[TrustedDriver] Push notification failed:', pushErr.message);

@@ -184,6 +184,9 @@ const auth = {
   },
 
   acceptTerms: () => request('/auth/driver/accept-terms', { method: 'POST' }),
+
+  setDateOfBirth: (dateOfBirth) =>
+    request('/auth/driver/date-of-birth', { method: 'POST', body: JSON.stringify({ date_of_birth: dateOfBirth }) }),
 };
 
 // ── Orders ────────────────────────────────────────────────────────────────
@@ -307,6 +310,8 @@ const sos = {
 const messages = {
   getMessages: (orderId)          => request(`/messages/${orderId}`),
   sendMessage: (orderId, content) => request(`/messages/${orderId}`, { method: 'POST', body: JSON.stringify({ content }) }),
+  reportUser: (orderId, reason, messageId) => request(`/messages/${orderId}/report`, { method: 'POST', body: JSON.stringify({ reason, messageId }) }),
+  blockUser:  (orderId)            => request(`/messages/${orderId}/block`, { method: 'POST' }),
 };
 
 const driverApi = {

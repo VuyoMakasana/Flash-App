@@ -10,6 +10,10 @@ import { StatusBar } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { FlashProvider, useFlash } from './context/FlashContext';
 import api, { setSessionExpiredHandler } from './services/api';
+// Imported for its module-scope init side effect (mirrors the Sentry.init()
+// guard directly below) — analytics.js's own client-null guard means this
+// is a safe no-op until EXPO_PUBLIC_POSTHOG_API_KEY has a real value.
+import './services/analytics';
 import { View, ActivityIndicator, AppState } from 'react-native';
 import RatingGateModal from './components/RatingGateModal';
 
@@ -61,6 +65,8 @@ if (process.env.EXPO_PUBLIC_SENTRY_DSN) {
 import HomeScreen               from './screens/HomeScreen';
 import ProfileScreen            from './screens/ProfileScreen';
 import ProductScreen            from './screens/ProductScreen';
+import StoreDirectoryScreen     from './screens/StoreDirectoryScreen';
+import StoreScreen              from './screens/StoreScreen';
 import CartScreen               from './screens/CartScreen';
 import CheckoutScreen           from './screens/CheckoutScreen';
 import PaymentScreen            from './screens/PaymentScreen';
@@ -73,6 +79,7 @@ import SplashScreen             from './screens/SplashScreen';
 import LoginScreen              from './screens/LoginScreen';
 import SignUpScreen             from './screens/SignUpScreen';
 import TermsAndConditionsScreen from './screens/TermsAndConditionsScreen';
+import DateOfBirthGateScreen    from './screens/DateOfBirthGateScreen';
 import SavedCardsScreen         from './screens/SavedCardsScreen';
 import SizingScreen             from './screens/SizingScreen';
 import FeedScreen               from './screens/FeedScreen';
@@ -104,6 +111,8 @@ function ShopStack() {
     <Stack.Navigator screenOptions={headerStyles}>
       <Stack.Screen name="Home"        component={HomeScreen}        options={{ title: 'FLASH' }} />
       <Stack.Screen name="Product"     component={ProductScreen}     options={{ title: 'Product' }} />
+      <Stack.Screen name="StoreDirectory" component={StoreDirectoryScreen} options={{ title: 'Stores' }} />
+      <Stack.Screen name="Store"       component={StoreScreen}       options={{ title: 'Store' }} />
       <Stack.Screen name="Cart"        component={CartScreen}        options={{ title: 'Cart' }} />
       <Stack.Screen name="Checkout"    component={CheckoutScreen}    options={{ title: 'Checkout' }} />
       <Stack.Screen name="Payment"     component={PaymentScreen}     options={{ title: 'Payment' }} />
@@ -208,9 +217,28 @@ function TermsGateStack() {
   );
 }
 
+// Apple App Store compliance audit: rendered instead of the authenticated
+// tabs whenever a logged-in user has no date_of_birth on file — the only
+// way a real user account reaches this state today is Google/Apple Sign In,
+// which never collects it (see DateOfBirthGateScreen.js). Same one-route,
+// no-way-out-but-through shape as TermsGateStack above.
+function DateOfBirthGateStack() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="DateOfBirth" component={DateOfBirthGateScreen} />
+    </Stack.Navigator>
+  );
+}
+
 function AppNavigator() {
   const { isAuthenticated, loading, handleSessionExpired, user } = useFlash();
-  const needsTerms = isAuthenticated && !user?.terms_accepted;
+  // Checked ahead of needsTerms: a password-registered account always has a
+  // real date_of_birth from registration itself (dateOfBirthValidator), so
+  // this only ever fires for a Google/Apple Sign In account, which has
+  // neither confirmed yet — resolving date of birth first before terms
+  // keeps the two gates from fighting over which renders.
+  const needsDateOfBirth = isAuthenticated && !user?.date_of_birth;
+  const needsTerms = isAuthenticated && !needsDateOfBirth && !user?.terms_accepted;
 
   // Mandatory post-delivery rating (persistent, non-dismissible prompt —
   // not a hard navigation block: "Not now" always lets the rest of the app
@@ -219,7 +247,7 @@ function AppNavigator() {
   const [unratedOrder, setUnratedOrder] = React.useState(null);
 
   const checkUnratedOrder = React.useCallback(async () => {
-    if (!isAuthenticated || needsTerms) return;
+    if (!isAuthenticated || needsDateOfBirth || needsTerms) return;
     try {
       const data = await api.orders.getAll();
       const found = (data.orders || []).find(
@@ -229,7 +257,7 @@ function AppNavigator() {
     } catch (_e) {
       // Best-effort — never block the app on this check failing.
     }
-  }, [isAuthenticated, needsTerms]);
+  }, [isAuthenticated, needsDateOfBirth, needsTerms]);
 
   React.useEffect(() => { checkUnratedOrder(); }, [checkUnratedOrder]);
 
@@ -284,7 +312,9 @@ function AppNavigator() {
 
   return (
     <NavigationContainer>
-      {needsTerms ? (
+      {needsDateOfBirth ? (
+        <DateOfBirthGateStack />
+      ) : needsTerms ? (
         <TermsGateStack />
       ) : isAuthenticated ? (
         <Tab.Navigator
@@ -315,7 +345,7 @@ function AppNavigator() {
       )}
       <StatusBar style={isAuthenticated ? 'light' : 'dark'} />
       <RatingGateModal
-        visible={!!unratedOrder && !needsTerms}
+        visible={!!unratedOrder && !needsDateOfBirth && !needsTerms}
         order={unratedOrder}
         onDismiss={() => setUnratedOrder(null)}
         onRated={() => setUnratedOrder(null)}

@@ -1,12 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, ScrollView, Alert, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
+import analytics from '../services/analytics';
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
   const { user, profile, updateProfile, logout } = useFlash();
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Profile'); }, []));
+
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile.name || user?.name || '');
   const [phone, setPhone] = useState(profile.phone || user?.phone || '');
@@ -109,12 +113,12 @@ export default function ProfileScreen() {
             // ADDED: Privacy Policy link — POPIA legally requires this to be accessible in-app
           // Opens the real, live Privacy Policy directly rather than the
           // stale hardcoded text PrivacyPolicyScreen.js used to show.
-          { icon: 'shield-checkmark-outline', label: 'Privacy Policy',  onPress: () => Linking.openURL('https://flash-website.netlify.app/privacy') },
+          { icon: 'shield-checkmark-outline', label: 'Privacy Policy',  onPress: () => Linking.openURL('https://flashdelivery.co.za/privacy') },
           // H8 FIX: "Settings" was previously unreachable from anywhere in the
           // app — it's the only screen with a "Delete Account" entry point.
           { icon: 'settings-outline',         label: 'Settings',        onPress: () => navigation.navigate('Settings') },
           // Previously a real no-op (onPress: () => {}) — tapping did nothing at all.
-          { icon: 'help-circle-outline',      label: 'Help & Support',  onPress: () => Linking.openURL('mailto:makasanaivyson@gmail.com') },
+          { icon: 'help-circle-outline',      label: 'Help & Support',  onPress: () => Linking.openURL('mailto:support@flashdelivery.co.za') },
         ].map(item => (
           <Pressable key={item.label} style={styles.menuRow} onPress={item.onPress}>
             <Ionicons name={item.icon} size={20} color="#374151" />

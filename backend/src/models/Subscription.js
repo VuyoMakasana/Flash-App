@@ -41,11 +41,22 @@ class Subscription extends BaseModel {
 
   // Called by webhookController once Paystack confirms a driver_subscription
   // charge succeeded — this is the other half of purchaseDriverPlan() above.
-  static async activateDriverPlan(driverId, planId, paystackReference) {
+  //
+  // `client` is optional and only exists so this can also be called from
+  // inside another transaction (Driver.create()'s DRIVER_TEST_MODE path,
+  // which grants a plan atomically alongside the driver row itself) without
+  // losing rollback safety — if that outer transaction fails, this insert
+  // must fail with it, not survive as an orphaned subscription for a driver
+  // row that no longer exists. When omitted (the real webhookController
+  // call site, unchanged), this runs exactly as it always has, against the
+  // plain pool via `this.query`.
+  static async activateDriverPlan(driverId, planId, paystackReference, client = null) {
     const plan = PLANS[planId];
     if (!plan) throw new Error(`Unknown plan: ${planId}`);
 
-    await this.query(
+    const run = (sql, params) => (client ? client.query(sql, params) : this.query(sql, params));
+
+    await run(
       `UPDATE driver_subscriptions SET status='expired', updated_at=NOW() WHERE driver_id=$1 AND status='active'`,
       [driverId],
     );
@@ -53,7 +64,7 @@ class Subscription extends BaseModel {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + plan.days);
 
-    const sub = await this.query(
+    const sub = await run(
       `INSERT INTO driver_subscriptions
          (driver_id, plan_type, price, deliveries_limit, deliveries_used, starts_at, expires_at, status, paystack_reference)
        VALUES ($1,$2,$3,$4,0,NOW(),$5,'active',$6) RETURNING *`,

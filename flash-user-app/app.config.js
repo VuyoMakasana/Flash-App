@@ -41,8 +41,21 @@ module.exports = () => ({
       infoPlist: {
         NSCameraUsageDescription: 'Flash needs camera access to take photos of your documents.',
         NSPhotoLibraryUsageDescription: 'Flash needs access to your photo library so you can upload a profile photo.',
+        // Apple App Store compliance audit — NSLocationAlwaysUsageDescription
+        // (the deprecated pre-iOS-11 key) previously sat here, but this app
+        // never actually calls requestBackgroundPermissionsAsync() anywhere
+        // (confirmed by searching the whole app — every real call site,
+        // CheckoutScreen.js/AddressScreen.js, only ever calls
+        // requestForegroundPermissionsAsync()). Removed rather than
+        // "corrected" to the modern NSLocationAlwaysAndWhenInUseUsageDescription
+        // key, since the app doesn't request Always-authorization at all —
+        // an unused permission declaration is its own real review concern,
+        // not just a stale key name. If a real background-tracking use case
+        // is ever added for the customer app, add
+        // NSLocationAlwaysAndWhenInUseUsageDescription back with a real,
+        // specific purpose string at that point (the driver app's own pair,
+        // just above in that app's config, is the pattern to match).
         NSLocationWhenInUseUsageDescription: 'Flash uses your location to find nearby stores and track your delivery.',
-        NSLocationAlwaysUsageDescription: 'Flash uses your location to track your delivery in real-time.',
         ITSAppUsesNonExemptEncryption: false,
       },
     },
@@ -90,6 +103,11 @@ module.exports = () => ({
         },
       ],
       'expo-font',
+      // Required by posthog-react-native's Expo peer-dependency set (device
+      // locale is included in PostHog's default app-properties payload) —
+      // the installer couldn't auto-write this into a dynamic app.config.js
+      // either, same limitation as the @sentry/react-native entry above.
+      'expo-localization',
     ],
     extra: {
       eas: {

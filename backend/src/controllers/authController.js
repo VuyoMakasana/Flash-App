@@ -438,6 +438,40 @@ class AuthController {
     }
   }
 
+  // ── Set date of birth (post-OAuth-signup gate) ─────────────────────────────
+  // Apple App Store compliance audit: Google/Apple Sign In create a new
+  // account with no date_of_birth, bypassing the 18+ check password
+  // registration already enforces. dateOfBirthValidator (same validator,
+  // same 18+ rule) runs as route middleware before this ever executes, so
+  // reaching this method means a valid, 18+ date was already confirmed.
+  static async setDateOfBirthUser(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    try {
+      const user = await User.setDateOfBirth(req.userId, req.body.date_of_birth);
+      const { password_hash, ...safeUser } = user;
+      return res.json({ success: true, user: safeUser });
+    } catch (err) {
+      console.error('[Auth] setDateOfBirthUser:', err.message);
+      return res.status(500).json({ error: 'Failed to save date of birth' });
+    }
+  }
+
+  static async setDateOfBirthDriver(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    try {
+      const driver = await Driver.setDateOfBirth(req.userId, req.body.date_of_birth);
+      const { password_hash, ...safeDriver } = driver;
+      return res.json({ success: true, driver: safeDriver });
+    } catch (err) {
+      console.error('[Auth] setDateOfBirthDriver:', err.message);
+      return res.status(500).json({ error: 'Failed to save date of birth' });
+    }
+  }
+
   // ── Refresh token ──────────────────────────────────────────────────────────
   static async refreshToken(req, res) {
     const { refreshToken } = req.body;
@@ -580,7 +614,7 @@ class AuthController {
           rejected:            'Application not approved. Contact support.',
           // Previously missing — fell through to the generic "Account not
           // approved" message, indistinguishable from a brand-new applicant.
-          suspended:           'Account suspended. Contact makasanaivyson@gmail.com.',
+          suspended:           'Account suspended. Contact support@flashdelivery.co.za.',
         };
         return res.status(403).json({ error: msgs[driver.status] || 'Account not approved', status: driver.status });
       }

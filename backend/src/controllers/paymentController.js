@@ -15,9 +15,9 @@ const Payment           = require('../models/Payment');
 const Order             = require('../models/Order');
 const paystackService   = require('../services/paystackService');
 const db                = require('../config/database');
-const { updateOrderStatus, emitOrderUpdate, notifyOrderStatusChange } = require('../services/orderStateMachineService');
+const { updateOrderStatus, emitOrderUpdate, notifyOrderStatusChange, notifyAdminNewOrderPendingAcceptance } = require('../services/orderStateMachineService');
 const cashOtpService               = require('../services/cashOtpService');
-const { sendPushNotification } = require('../services/notificationService');
+const { sendPushNotification, reportPushFailure } = require('../services/notificationService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
 const { recordCashCommission, checkCommissionBlock } = require('../services/driverCommissionService');
 
@@ -136,6 +136,13 @@ class PaymentController {
       }
       return res.json({ ...result, scheduled: true, openAt });
     }
+
+    // §2.12 audit — same reasoning as the card webhook/reconciliation call
+    // sites for this exact transition: a new order reaching
+    // pending_store_acceptance previously had zero admin-facing signal.
+    // Only reached here when !scheduled (finalOrder.status is genuinely
+    // 'pending_store_acceptance', not 'scheduled_for_morning').
+    notifyAdminNewOrderPendingAcceptance(finalOrder, io);
 
     return res.json(result);
   }
@@ -360,6 +367,7 @@ class PaymentController {
         return res.status(409).json({ error: 'Delivery can only be confirmed after the order is marked delivered' });
       }
 
+      let commissionAmount;
       if (isCash) {
         await client.query(
           `UPDATE orders
@@ -367,7 +375,7 @@ class PaymentController {
            WHERE id = $1`,
           [orderId],
         );
-        await recordCashCommission(client, order.driver_id, orderId);
+        commissionAmount = await recordCashCommission(client, order.driver_id, orderId);
       }
 
       await client.query('COMMIT');
@@ -397,7 +405,7 @@ class PaymentController {
         status:         'completed',
         commission: {
           recorded: true,
-          amount:   20.00,
+          amount:   commissionAmount,
           blocked:  commissionStatus.blocked,
         },
       });
@@ -463,12 +471,13 @@ class PaymentController {
         const userResult = await db.query('SELECT push_token FROM users WHERE id=$1', [order.user_id]);
         const pushToken = userResult.rows[0]?.push_token;
         if (pushToken) {
-          await sendPushNotification({
+          const pushResult = await sendPushNotification({
             tokens: pushToken,
             title:  'Cash Confirmation Code',
             body:   'Open Flash to view your code and give it to your driver.',
             data:   { type: 'cash_otp_requested', orderId },
           });
+          reportPushFailure(pushResult, { orderId, userId: order.user_id, notificationType: 'cash_otp_requested' });
         }
       } catch (pushErr) {
         console.warn('[Payment] Cash OTP push notification failed:', pushErr.message);

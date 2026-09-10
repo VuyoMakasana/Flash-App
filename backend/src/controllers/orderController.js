@@ -9,6 +9,7 @@
 //   to 400 so the user app can surface a meaningful error message.
 
 const Order = require('../models/Order');
+const Store = require('../models/Store');
 const Rating = require('../models/Rating');
 const db = require('../config/database');
 const DriverWallet = require('../models/DriverWallet');
@@ -42,6 +43,7 @@ const CLIENT_ERROR_FRAGMENTS = [
   'is out of stock',
   'Order must have items',
   'Order total must be positive',
+  'more than one store',
 ];
 
 function isClientError(message) {
@@ -136,17 +138,14 @@ class OrderController {
         delivery_mode,
         time_slot,
         subtotal,
-        // Not client-supplied, same trust boundary as pickup_lat/pickup_lng
-        // just below -- there is no multi-vendor "stores" concept yet, so a
-        // client-sent store_id has nothing real to validate against. Was
-        // previously passed straight through from req.body with zero
-        // validation; harmless while orders.store_id was free-text VARCHAR
-        // and no real client ever populated it, but store_id is now a real
-        // UUID column (migration v27) -- an arbitrary client string would
-        // 500 the whole order-creation request instead of silently doing
-        // nothing. Explicit null until a real stores table + checkout
-        // store-selection step exists.
-        store_id: null,
+        // Multi-tenant Stage 3 — the real stores table now exists (Stage 1)
+        // and there is exactly one real store, so every new order is
+        // attributed to it. Never client-supplied — same trust boundary as
+        // pickup_lat/pickup_lng just below. Once a genuine second store
+        // exists, this single-store default becomes the place that needs a
+        // real checkout store-selection step (see Store.getDefaultStoreId's
+        // own comment) — not a hunt through this file for a hardcoded value.
+        store_id: await Store.getDefaultStoreId(),
         preferred_driver_id: resolvedPreferredDriverId,
         pickup_mall_id,
         dropoff_mall_id,
@@ -318,6 +317,25 @@ class OrderController {
         });
       }
 
+      // Production-readiness audit, §2.4 — the exact same class of bug as
+      // the 'completed'/OTP bypass above, undiscovered until now: both
+      // driver_arrived_store->picked_up and in_transit->delivered are real,
+      // ALLOWED_TRANSITIONS-valid targets this generic endpoint had no
+      // awareness are supposed to require a real photo first
+      // (submitPickupPhoto/submitDropoffPhoto, driverRoutes.js) — confirmed
+      // by reading the code, this endpoint let a driver reach either state
+      // directly with zero photo evidence, fully defeating the
+      // package-protection mechanism those two endpoints exist for. No
+      // return-order exception here (unlike 'completed' above) — a return
+      // order has no OTP participant on the receiving end, but still needs
+      // real proof it was picked up from the customer and dropped at
+      // Flash's own store.
+      if (['picked_up', 'delivered'].includes(normalizeState(status))) {
+        return res.status(409).json({
+          error: 'Use the pickup/drop-off photo capture to advance this order.',
+        });
+      }
+
       const updated = await updateOrderStatus(req.params.orderId, status, {
         actorId: req.userId,
         actorRole: 'driver',
@@ -334,66 +352,93 @@ class OrderController {
     const { orderId } = req.params;
 
     try {
-      const result = await db.query(
-        `SELECT * FROM orders WHERE id = $1 AND user_id = $2`,
-        [orderId, req.userId],
-      );
-      if (!result.rows.length) {
-        return res.status(404).json({ error: 'Order not found' });
-      }
-
-      const order = result.rows[0];
-      const state = normalizeState(order.status);
-
-      if (['picked_up', 'in_transit', 'delivered', 'completed'].includes(state)) {
-        return res.status(409).json({ error: 'Order cannot be cancelled at this stage' });
-      }
-
-      // Pre-pickup cancellation split — confirmed formula (see
-      // computeCancellationSplit above): 10% of item value to the store,
-      // 5% to the assigned driver, the remainder + full delivery fee back
-      // to the customer. Replaces the old 25%-of-delivery-fee penalty,
-      // which never actually issued a real refund for card orders — it
-      // only recorded a penalty amount nothing ever deducted from.
-      //
-      // driver_arrived_store gets its own, harsher-for-the-store tier
-      // (0%/8%/92%, see computeCancellationSplit) rather than reusing
-      // driver_assigned's numbers. This mode was previously named
-      // 'store_refund_no_delivery_refund' (32 chars) which exceeded
-      // order_cancellations.refund_mode's VARCHAR(30) and made every
-      // cancellation attempt at this stage throw and roll back with a bare
-      // 400 -- the customer could not cancel at all once the driver had
-      // arrived at the store. Renamed to fit, and given a real split and
-      // refund branch (see below) instead of silently refunding nothing.
-      // pending_store_acceptance/preparing added alongside the existing
-      // three: a customer cancelling before or during store preparation
-      // has no driver assigned yet either, same as waiting_for_driver --
-      // full refund is correct here for the same reason, not something
-      // these two new states get by accident. Found and fixed before ever
-      // shipping the new states: without this, a cancellation attempt
-      // during either would have fallen through every branch below
-      // (refundMode staying 'none'), silently refunding nothing.
-      let refundMode = 'none';
-      let split = null;
-      if (['payment_pending', 'paid', 'pending_store_acceptance', 'preparing', 'waiting_for_driver'].includes(state)) {
-        refundMode = 'full_refund';
-      } else if (state === 'driver_assigned') {
-        refundMode = 'pre_pickup_split';
-        split = computeCancellationSplit(order);
-      } else if (state === 'driver_arrived_store') {
-        refundMode = 'store_arrival_split';
-        split = computeCancellationSplit(order, { storePct: 0, driverPct: 0.08 });
-      }
-
       // Wallet reversal, the driver's split compensation (if any), the
       // order_cancellations record, and the order-status transition to
       // 'cancelled' all share a single transaction — a crash partway
       // through must never leave the driver compensated without a record
       // of why, or the order cancelled without the compensation it implies.
+      //
+      // CONCURRENCY FIX (§2.9 audit): the order is looked up via
+      // SELECT ... FOR UPDATE as the FIRST statement inside this
+      // transaction, and refundMode/split/the cancellable-stage guard are
+      // all computed from THIS fresh, locked read. Previously, that lookup
+      // was a plain unlocked SELECT taken *before* the transaction opened,
+      // and the driver's wallet was credited from that same stale
+      // snapshot -- so two concurrent cancelOrder calls for the same order
+      // (a client retry after its own 20s timeout while the first attempt
+      // was still running server-side -- the same reachable shape as the
+      // §2.8 initializePayment race, since this handler's own duration
+      // includes a live Paystack refund submission -- or simply two
+      // sessions) could both read 'driver_assigned' and both credit the
+      // driver's cancellation compensation, even though updateOrderStatus
+      // itself was already correctly idempotent on re-entry (it locks the
+      // row itself and returns early if the order is already in the
+      // target state, before ever running a side effect like restock).
+      // Locking here first means a second concurrent call blocks until the
+      // first commits, then sees the order already 'cancelled' and is
+      // rejected below before crediting anything -- which does mean a
+      // literal double-cancel now correctly fails instead of silently
+      // no-op-succeeding a second time (the previous behavior was an
+      // accident of the race, not a designed idempotent-success case).
       const client = await db.connect();
       let cancelledOrder;
+      let refundMode = 'none';
+      let split = null;
+      let order;
       try {
         await client.query('BEGIN');
+
+        const lockedResult = await client.query(
+          `SELECT * FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE`,
+          [orderId, req.userId],
+        );
+        if (!lockedResult.rows.length) {
+          throw new Error('Order not found');
+        }
+        order = lockedResult.rows[0];
+        const state = normalizeState(order.status);
+
+        if (['picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'].includes(state)) {
+          throw new Error(
+            state === 'cancelled'
+              ? 'Order has already been cancelled'
+              : 'Order cannot be cancelled at this stage',
+          );
+        }
+
+        // Pre-pickup cancellation split — confirmed formula (see
+        // computeCancellationSplit above): 10% of item value to the store,
+        // 5% to the assigned driver, the remainder + full delivery fee back
+        // to the customer. Replaces the old 25%-of-delivery-fee penalty,
+        // which never actually issued a real refund for card orders — it
+        // only recorded a penalty amount nothing ever deducted from.
+        //
+        // driver_arrived_store gets its own, harsher-for-the-store tier
+        // (0%/8%/92%, see computeCancellationSplit) rather than reusing
+        // driver_assigned's numbers. This mode was previously named
+        // 'store_refund_no_delivery_refund' (32 chars) which exceeded
+        // order_cancellations.refund_mode's VARCHAR(30) and made every
+        // cancellation attempt at this stage throw and roll back with a bare
+        // 400 -- the customer could not cancel at all once the driver had
+        // arrived at the store. Renamed to fit, and given a real split and
+        // refund branch (see below) instead of silently refunding nothing.
+        // pending_store_acceptance/preparing added alongside the existing
+        // three: a customer cancelling before or during store preparation
+        // has no driver assigned yet either, same as waiting_for_driver --
+        // full refund is correct here for the same reason, not something
+        // these two new states get by accident. Found and fixed before ever
+        // shipping the new states: without this, a cancellation attempt
+        // during either would have fallen through every branch below
+        // (refundMode staying 'none'), silently refunding nothing.
+        if (['payment_pending', 'paid', 'pending_store_acceptance', 'preparing', 'waiting_for_driver'].includes(state)) {
+          refundMode = 'full_refund';
+        } else if (state === 'driver_assigned') {
+          refundMode = 'pre_pickup_split';
+          split = computeCancellationSplit(order);
+        } else if (state === 'driver_arrived_store') {
+          refundMode = 'store_arrival_split';
+          split = computeCancellationSplit(order, { storePct: 0, driverPct: 0.08 });
+        }
 
         if (order.driver_id && ['assigned', 'held'].includes(order.delivery_payment_status || '') && !order.driver_paid) {
           const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
@@ -505,6 +550,12 @@ class OrderController {
         split,
       });
     } catch (err) {
+      if (err.message === 'Order not found') {
+        return res.status(404).json({ error: err.message });
+      }
+      if (err.message === 'Order cannot be cancelled at this stage' || err.message === 'Order has already been cancelled') {
+        return res.status(409).json({ error: err.message });
+      }
       return res.status(400).json({ error: err.message || 'Failed to cancel order' });
     }
   }

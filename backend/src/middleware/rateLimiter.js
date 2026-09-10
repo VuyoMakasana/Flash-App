@@ -71,6 +71,22 @@ const adminLimiter = rateLimit({
   ...storeOption,
 });
 
+// Store-account login (multi-tenant Stage 2) — 5 per 15 minutes, mirroring
+// adminLimiter's own brute-force protection for a privileged endpoint. A
+// dedicated instance, not shared with authLimiter/adminLimiter — a
+// credential-stuffing attempt against one store's login shouldn't be able to
+// exhaust the rate-limit budget for a different store's, or the internal
+// admin panel's, legitimate login attempts (FLASH_STORE_ADMIN_DESIGN.md §5.5).
+const storeAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many store login attempts, please try again later.' },
+  skipSuccessfulRequests: false,
+  ...storeOption,
+});
+
 // Create order — 5 per minute
 const orderLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -114,6 +130,34 @@ const otpLimiter = rateLimit({
   ...storeOption,
 });
 
+// Order chat — 20 per minute. Previously covered only by the blanket
+// 100/15min `/api/` limiter, shared with every other endpoint a user calls
+// -- a chat flood could burn a user's entire API budget for the whole app,
+// while still being a fairly loose ceiling for spam specifically. 20/min
+// is generous for real back-and-forth conversation (one every 3s sustained)
+// but stops a scripted flood.
+const messageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many messages sent. Please slow down.' },
+  ...storeOption,
+});
+
+// Chat report/block — 5 per hour. §2.7 audit: these should be rare, real
+// events, not something a legitimate user needs to do repeatedly in a short
+// window -- also raises the cost of using the report queue itself as a
+// harassment tool against a specific driver/customer.
+const reportLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many reports/blocks submitted. Please wait before trying again.' },
+  ...storeOption,
+});
+
 // Trusted driver requests — 3 per hour (HIGH-2)
 const trustRequestLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
@@ -128,9 +172,12 @@ module.exports = {
   limiter,
   authLimiter,
   adminLimiter,
+  storeAuthLimiter,
   orderLimiter,
   locationLimiter,
   otpLimiter,
   trustRequestLimiter,
   paymentLimiter,
+  messageLimiter,
+  reportLimiter,
 };

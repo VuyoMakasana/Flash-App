@@ -1,11 +1,46 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Alert, ActivityIndicator, Linking, AppState,
+  Alert, ActivityIndicator, Linking, AppState, Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import driverApi from '../../services/api';
+import analytics from '../../services/analytics';
+
+// Apple App Store compliance audit (queued section) — these plans unlock
+// in-app functionality (delivery slot count, priority matching, cash-order
+// access), not a physical good/service consumed outside the app. That's
+// Guideline 3.1.1's own textbook example ("unlock features or functionality
+// within your app... subscriptions... access to premium content"), not the
+// 3.1.3(e) physical-goods exemption the rest of Flash's payments correctly
+// rely on (a delivery itself, paid by the customer, IS a physical service
+// consumed outside the app — this screen's driver-side purchase is a
+// different transaction). Unlike Uber/DoorDash/Instacart, there's no
+// precedent for a paid, in-app-purchasable WORKER-side subscription tier —
+// their own driver/shopper tier programs are free and performance-based,
+// not something charged for.
+//
+// Purchasing here currently goes through Paystack entirely inside the app,
+// with no Apple IAP involved — on iOS, submitted as-is, this would very
+// likely be rejected under 3.1.1. Founder-approved fix: keep this screen's
+// status/cancel functionality fully intact on iOS (nothing here touches the
+// backend or Paystack itself, and Android is completely unaffected — the
+// Paystack purchase endpoint stays live for every other real caller), but
+// don't expose the purchase flow on iOS specifically. Deliberately doesn't
+// point drivers at an alternative purchase channel from within the app
+// either (e.g. "buy it on our website") — Guideline 3.1.3's own preamble
+// bars steering toward another purchase method from inside the app for any
+// storefront other than the U.S. one, and Flash's real storefront is South
+// Africa. A real StoreKit/Apple-IAP integration for iOS remains the
+// durable long-term fix if Flash ever wants iOS drivers to buy without
+// leaving the app — real scope (App Store Connect product setup, receipt
+// validation, reconciling two payment rails against one backend
+// subscription record), and Apple's own cut of IAP revenue is a real
+// trade-off against Paystack's lower fee — a deliberate future decision,
+// not done here.
+const IOS_PURCHASE_DISABLED = Platform.OS === 'ios';
 
 // How long to keep polling the backend after the driver returns to the app
 // before giving up and showing a manual "Check Again" state.
@@ -58,6 +93,9 @@ const PLANS = [
 
 export default function SubscriptionScreen() {
   const router = useRouter();
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Subscription'); }, []));
+
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState(null);
@@ -176,6 +214,12 @@ export default function SubscriptionScreen() {
   };
 
   const handlePurchase = async (planId) => {
+    // Defensive guard matching the hidden button below (see
+    // IOS_PURCHASE_DISABLED's own comment) — this function should be
+    // unreachable on iOS since the button that calls it isn't rendered
+    // there, but a real early return here means that stays true even if a
+    // future change to the render logic below slips.
+    if (IOS_PURCHASE_DISABLED) return;
     const plan = PLANS.find(p => p.id === planId);
     Alert.alert(
       `Buy ${plan.label} Plan`,
@@ -230,7 +274,9 @@ export default function SubscriptionScreen() {
       </View>
 
       <Text style={styles.subtitle}>
-        Buy a plan to unlock delivery slots and start earning
+        {IOS_PURCHASE_DISABLED
+          ? 'Delivery plans unlock delivery slots and start earning'
+          : 'Buy a plan to unlock delivery slots and start earning'}
       </Text>
 
       {/* Current plan */}
@@ -321,6 +367,13 @@ export default function SubscriptionScreen() {
                 <Ionicons name="checkmark-circle" size={16} color="#10b981" />
                 <Text style={styles.planBtnActiveText}>Current Plan</Text>
               </View>
+            ) : IOS_PURCHASE_DISABLED ? (
+              // See IOS_PURCHASE_DISABLED's own comment at the top of this
+              // file — no purchase button on iOS, and deliberately no
+              // "buy it elsewhere" call to action either.
+              <View style={[styles.planBtn, styles.planBtnUnavailable]}>
+                <Text style={styles.planBtnUnavailableText}>Not available in this app</Text>
+              </View>
             ) : (
               <TouchableOpacity
                 style={[styles.planBtn, { backgroundColor: plan.color }]}
@@ -381,5 +434,7 @@ const styles = StyleSheet.create({
   planBtnText: { color: '#fff', fontWeight: '800', fontSize: 15 },
   planBtnActive: { backgroundColor: '#0d2818', borderColor: '#10b981', borderWidth: 1 },
   planBtnActiveText: { color: '#10b981', fontWeight: '700', fontSize: 15 },
+  planBtnUnavailable: { backgroundColor: '#1a1a1a', borderColor: '#2a2a2a', borderWidth: 1 },
+  planBtnUnavailableText: { color: '#6b7280', fontWeight: '700', fontSize: 14 },
   footerNote: { color: '#4b5563', fontSize: 12, textAlign: 'center', marginHorizontal: 24, marginTop: 8, lineHeight: 18 },
 });

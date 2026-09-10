@@ -5,11 +5,18 @@ const BaseModel = require("./BaseModel");
 // endpoint should expose to an unauthenticated caller. Admin-only writes
 // (addProduct/updateStock) still return it via RETURNING * since that's an
 // admin action that legitimately needs to see what it just set.
-const PUBLIC_COLUMNS = `id, product_name, category, brand, price, sizes,
-  stock_by_size, image_url, description, is_active, created_at, updated_at`;
+// Table-qualified so getProducts (below) can safely add a JOIN to stores —
+// both tables have their own id/is_active/created_at columns, and an
+// unqualified list would become ambiguous the moment a second table is in
+// scope. getProduct further down has no join, so qualification is a no-op
+// there — same result set either way.
+const PUBLIC_COLUMNS = `flash_inventory.id, flash_inventory.product_name, flash_inventory.category,
+  flash_inventory.brand, flash_inventory.price, flash_inventory.sizes, flash_inventory.stock_by_size,
+  flash_inventory.image_url, flash_inventory.description, flash_inventory.is_active,
+  flash_inventory.created_at, flash_inventory.updated_at`;
 
 class Inventory extends BaseModel {
-  static async getProducts(category, page = 1, limit = 20) {
+  static async getProducts(category, page = 1, limit = 20, storeId = null) {
     const offset = (page - 1) * limit;
     // Final admin-panel completion pass, §4 — a real, active boost
     // (Boost.activateBoost, product_id-targeted) now actually ranks its
@@ -20,10 +27,30 @@ class Inventory extends BaseModel {
       SELECT 1 FROM store_boosts sb
       WHERE sb.product_id = flash_inventory.id AND sb.status = 'active' AND sb.expires_at > NOW()
     ) DESC`;
-    const query = category
-      ? `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true AND category=$3 ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`
-      : `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`;
-    const params = category ? [limit, offset, category] : [limit, offset];
+    // Multi-tenant Stage 6, decision 4 — thread store_id + a joined store
+    // name into the one public listing query flash-user-app actually reads.
+    // flash_inventory.store_id has been NOT NULL with a real FK to stores
+    // since migration v34, so this is a plain JOIN (not LEFT JOIN) — every
+    // row is guaranteed to have a matching store.
+    const columns = `${PUBLIC_COLUMNS}, flash_inventory.store_id, stores.name AS store_name`;
+
+    // Multi-tenant Stage 7 — optional storeId filter for the storefront's
+    // individual store page. Built as a param list rather than a fixed
+    // ternary so category and storeId can combine or each be omitted
+    // independently; omitting both reproduces the exact prior query.
+    const conditions = ['flash_inventory.is_active=true'];
+    const params = [limit, offset];
+    if (category) {
+      params.push(category);
+      conditions.push(`flash_inventory.category=$${params.length}`);
+    }
+    if (storeId) {
+      params.push(storeId);
+      conditions.push(`flash_inventory.store_id=$${params.length}`);
+    }
+
+    const query = `SELECT ${columns} FROM flash_inventory JOIN stores ON stores.id = flash_inventory.store_id
+      WHERE ${conditions.join(' AND ')} ORDER BY ${boostedFirst}, flash_inventory.created_at DESC LIMIT $1 OFFSET $2`;
     const result = await this.query(query, params);
     return result.rows;
   }
@@ -66,12 +93,38 @@ class Inventory extends BaseModel {
     return result.rows[0];
   }
 
+  // F-05 remediation — was a bare, non-transactional UPDATE with no lock,
+  // unlike Order.create()'s decrement of this same table. Wrapping it in a
+  // real transaction with SELECT...FOR UPDATE first makes this write
+  // correctly serialize against a concurrent customer checkout on the same
+  // product (matching the exact locking primitive already proven correct
+  // there) rather than racing it with no ordering guarantee at all.
+  //
+  // Residual limitation, not fixed by this change: this endpoint accepts a
+  // full replacement of stock_by_size, not a per-size delta. Locking
+  // guarantees the write is atomic and correctly ordered relative to a
+  // concurrent checkout, but if an admin's request was built from a stock
+  // count read before that checkout's decrement landed, applying their
+  // full (now-stale) object can still overwrite the decrement once this
+  // lock is acquired — the values themselves are stale, not the timing.
+  // Fully closing that needs either per-size delta semantics or optimistic
+  // concurrency (reject the write if the row changed since it was read),
+  // both real API/UI changes beyond this fix's scope — flagged, not solved
+  // silently, in the audit report this fix responds to.
   static async updateStock(productId, stockBySize) {
-    const result = await this.query(
-      `UPDATE flash_inventory SET stock_by_size=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
-      [JSON.stringify(stockBySize), productId],
-    );
-    return result.rows[0];
+    return await this.transaction(async (client) => {
+      const existing = await client.query(
+        `SELECT id FROM flash_inventory WHERE id = $1 FOR UPDATE`,
+        [productId],
+      );
+      if (!existing.rows.length) return null;
+
+      const result = await client.query(
+        `UPDATE flash_inventory SET stock_by_size=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+        [JSON.stringify(stockBySize), productId],
+      );
+      return result.rows[0];
+    });
   }
 
   static async deleteProduct(productId) {

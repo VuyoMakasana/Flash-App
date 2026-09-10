@@ -123,6 +123,25 @@ function validateDatabaseURL(url, scope = "database") {
   return true;
 }
 
+// Phase 0.5 remediation, founder-confirmed gap — the production Supabase
+// project ref was found sitting in every developer's local DATABASE_URL
+// with zero separation from a dev/staging instance (there isn't one yet).
+// This is deliberately keyed on the Supabase project ref, not the full
+// connection string — it survives password rotation (the credential can
+// change; the project ref can't, short of migrating to a whole new
+// Supabase project) and it's not a secret itself: it's derivable from any
+// connection string that already contains it, the same way a hostname is.
+// A future second production project (a read replica, a second region)
+// gets added to this list, not swapped in place of it.
+const KNOWN_PRODUCTION_DB_MARKERS = [
+  "ttupbbqbplrhhtuvaaar", // Supabase project ref -- the real Flash production database.
+];
+
+function isKnownProductionDatabaseUrl(url) {
+  if (!url) return false;
+  return KNOWN_PRODUCTION_DB_MARKERS.some((marker) => url.includes(marker));
+}
+
 module.exports = {
   isDev,
   isProd,
@@ -130,4 +149,5 @@ module.exports = {
   getOptional,
   validateNotPlaceholder,
   validateDatabaseURL,
+  isKnownProductionDatabaseUrl,
 };

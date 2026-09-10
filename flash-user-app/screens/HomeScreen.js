@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, Pressable,
   Image, TextInput, ScrollView, StatusBar,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
+import analytics from '../services/analytics';
 
 const CATEGORIES = ['All', 'Men', 'Women', 'Sports', 'Casual'];
 
@@ -15,15 +16,27 @@ export default function HomeScreen() {
   const [search, setSearch] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
   // Store filter for future multi-shop support — the row below only renders once
-  // `stores` (below) has more than one real entry. flash_inventory has no store_id
-  // column today, so every product's storeId is null and this stays hidden until
-  // the backend actually supports multiple stores.
+  // 2+ DISTINCT real stores exist (checked against distinctStoreIds.length below,
+  // not stores.length: `stores` always has the 'all' sentinel prepended, so with
+  // exactly one real store stores.length is already 2 — checking that directly
+  // would show this row today, a new customer-facing UX change decision 4
+  // explicitly said not to make). Only one store is seeded today, so this stays
+  // hidden until a real second store is onboarded.
   const [activeStore, setActiveStore] = useState('all');
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Home'); }, []));
 
   const cartCount = cart.reduce((sum, i) => sum + i.quantity, 0);
 
-  // Build unique store list from products — 'all' is always first
-  const stores = ['all', ...Array.from(new Set(products.map(p => p.storeId).filter(Boolean)))];
+  // Build unique store list from products — 'all' is always first. Keyed by
+  // storeId (stable, used for filtering) with storeName (real, human-readable)
+  // as the display label, falling back to the id if a product is ever missing
+  // a joined name.
+  const storeNameById = Object.fromEntries(
+    products.filter(p => p.storeId).map(p => [p.storeId, p.storeName || p.storeId]),
+  );
+  const distinctStoreIds = Object.keys(storeNameById);
+  const stores = ['all', ...distinctStoreIds];
 
   const filtered = products.filter(p => {
     const matchCat = activeCategory === 'All' || p.category === activeCategory;
@@ -70,8 +83,19 @@ export default function HomeScreen() {
         )}
       </View>
 
+      {/* Multi-tenant Stage 7 — real, always-visible entry point to the store
+          directory. Deliberately not gated behind distinctStoreIds.length,
+          unlike the filter row below: the directory itself is useful and
+          testable even at exactly one real store, which is the whole point
+          of building it now rather than waiting for a second store. */}
+      <Pressable style={styles.browseStoresRow} onPress={() => navigation.navigate('StoreDirectory')}>
+        <Ionicons name="storefront-outline" size={16} color="#374151" />
+        <Text style={styles.browseStoresText}>Browse Stores</Text>
+        <Ionicons name="chevron-forward" size={14} color="#9ca3af" />
+      </Pressable>
+
       {/* Store filter — only shows when there are multiple shops */}
-      {stores.length > 1 && (
+      {distinctStoreIds.length > 1 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cats} contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}>
           {stores.map(store => (
             <Pressable
@@ -80,7 +104,7 @@ export default function HomeScreen() {
               onPress={() => setActiveStore(store)}
             >
               <Text style={[styles.catText, activeStore === store && styles.catTextActive]}>
-                {store === 'all' ? 'All Shops' : store}
+                {store === 'all' ? 'All Shops' : storeNameById[store]}
               </Text>
             </Pressable>
           ))}
@@ -144,6 +168,8 @@ const styles = StyleSheet.create({
   badgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
   searchRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', marginHorizontal: 16, marginVertical: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 14, gap: 8, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, elevation: 1 },
   searchInput: { flex: 1, color: '#111827', fontSize: 15 },
+  browseStoresRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginHorizontal: 16, marginBottom: 8 },
+  browseStoresText: { color: '#374151', fontWeight: '700', fontSize: 13 },
   cats: { marginBottom: 8 },
   cat: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: '#e5e7eb' },
   catActive: { backgroundColor: '#0a0a0a' },

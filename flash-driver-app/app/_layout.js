@@ -7,10 +7,15 @@
 
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { View, ActivityIndicator, Text, ScrollView } from 'react-native';
 import { DriverProvider, useDriver } from '../context/DriverContext';
 import { setSessionExpiredHandler } from '../services/api';
+// Its own module-scope init (mirrors the Sentry.init() guard below) runs
+// the first time this is imported — analytics.js's own client-null guard
+// means this is a safe no-op until EXPO_PUBLIC_POSTHOG_API_KEY has a real
+// value.
+import analytics from '../services/analytics';
 
 // ── BACKGROUND LOCATION TASK REGISTRATION ───────────────────────────────────
 // This import MUST stay at module level and MUST appear before any component
@@ -104,6 +109,20 @@ function RootLayoutNav() {
   const router = useRouter();
   const segments = useSegments();
 
+  // Fires at most once per app session, the first time this driver's status
+  // is observed as 'approved' — a ref rather than derived render state,
+  // since `driver` gets refreshed from a real profile fetch on every cold
+  // start (DriverContext's hydrate()), so without a guard this would refire
+  // on every launch for an already-approved driver, not just the one real
+  // approval transition.
+  const approvedTrackedRef = useRef(false);
+  useEffect(() => {
+    if (driver?.status === 'approved' && !approvedTrackedRef.current) {
+      approvedTrackedRef.current = true;
+      analytics.driverApproved();
+    }
+  }, [driver?.status]);
+
   // H11 FIX: session-expiry recovery now runs via a direct callback that
   // api.js's request() invokes the instant it detects an expired/revoked
   // token — unconditionally, before it even throws. Previously this only
@@ -147,17 +166,27 @@ function RootLayoutNav() {
     const inAuth = segments[0] === 'auth';
     const inDriver = segments[0] === 'driver';
     const inTerms = segments[0] === 'auth' && segments[1] === 'terms';
+    const inDob = segments[0] === 'auth' && segments[1] === 'date-of-birth';
+
+    // Apple App Store compliance audit: Google/Apple Sign In create a
+    // driver row with no date_of_birth (only password registration collects
+    // it). Checked ahead of the terms gate below — a password-registered
+    // driver always has a real date_of_birth already, so this only ever
+    // fires for a social-sign-in account, which hasn't confirmed either yet.
+    const needsDob = isAuthenticated && driver && !driver.date_of_birth;
 
     if (!isAuthenticated && !inAuth) {
       router.replace('/auth/login');
-    } else if (isAuthenticated && driver && driver.terms_accepted !== true && !inTerms) {
+    } else if (needsDob && !inDob) {
+      router.replace('/auth/date-of-birth');
+    } else if (isAuthenticated && driver && !needsDob && driver.terms_accepted !== true && !inTerms) {
       // The driver app previously had no terms-acceptance mechanism at all —
       // a driver could register and start earning without ever seeing any
       // Terms & Conditions. Gated the same way the user app already gates
       // on FlashContext's terms_accepted, ahead of the approval/onboarding
       // check below so it applies regardless of document-review status.
       router.replace('/auth/terms');
-    } else if (isAuthenticated && driver && driver.terms_accepted === true) {
+    } else if (isAuthenticated && driver && !needsDob && driver.terms_accepted === true) {
       const status = driver?.status;
       if (status === 'approved' && inAuth) {
         router.replace('/driver/dashboard');
@@ -165,7 +194,7 @@ function RootLayoutNav() {
         router.replace('/auth/onboarding');
       }
     }
-  }, [isAuthenticated, loading, segments, driver?.status, driver?.terms_accepted, router]);
+  }, [isAuthenticated, loading, segments, driver?.status, driver?.terms_accepted, driver?.date_of_birth, router]);
 
   if (loading) {
     return (
@@ -182,6 +211,7 @@ function RootLayoutNav() {
         <Stack.Screen name="auth/login" />
         <Stack.Screen name="auth/register" />
         <Stack.Screen name="auth/terms" />
+        <Stack.Screen name="auth/date-of-birth" />
         <Stack.Screen name="auth/onboarding" />
         <Stack.Screen name="driver/dashboard" />
         <Stack.Screen name="driver/earnings" />

@@ -22,6 +22,21 @@ jest.mock("../../src/middleware/auth", () => ({
       return next();
     },
   requireApprovedDriver: (_req, _res, next) => next(),
+  authenticateStore: (req, _res, next) => {
+    req.storeUserId = req.headers["x-store-user-id"] || "store-user-1";
+    req.storeId = req.headers["x-store-id"] || "store-1";
+    req.storeRole = req.headers["x-store-role"] || "owner";
+    next();
+  },
+  requireStoreRole:
+    (...roles) =>
+    (req, res, next) => {
+      if (!roles.includes(req.storeRole)) {
+        return res.status(403).json({ error: "forbidden" });
+      }
+      return next();
+    },
+  requireOwnStore: (_req, _res, next) => next(),
 }));
 
 jest.mock("../../src/config/database", () => ({
@@ -110,26 +125,33 @@ describe("Production state machine API integration", () => {
   const ORDER_1_ID = "11111111-1111-1111-1111-111111111111";
 
   test("driver lifecycle update endpoint enforces state machine service", async () => {
+    // Uses driver_assigned->driver_arrived_store as the example transition
+    // (not picked_up/delivered -- production-readiness audit §2.4 closed a
+    // real bypass where this generic endpoint let a driver reach either of
+    // those two directly, skipping the pickup/dropoff photo requirement;
+    // see tests/unit/orderController.test.js for that behavior's own
+    // coverage). This test's actual point is unchanged: does the HTTP layer
+    // correctly wire through to updateOrderStatus with the right actor info.
     Order.getByIdWithDetails.mockResolvedValue({
       id: ORDER_1_ID,
       driver_id: "driver-1",
       status: "driver_assigned",
     });
-    updateOrderStatus.mockResolvedValue({ status: "picked_up" });
+    updateOrderStatus.mockResolvedValue({ status: "driver_arrived_store" });
 
     const res = await request(app)
       .put(`/api/orders/${ORDER_1_ID}/status`)
       .set("x-user-id", "driver-1")
       .set("x-user-role", "driver")
-      .send({ status: "picked_up" });
+      .send({ status: "driver_arrived_store" });
 
     expect(res.statusCode).toBe(200);
     expect(updateOrderStatus).toHaveBeenCalledWith(
       ORDER_1_ID,
-      "picked_up",
+      "driver_arrived_store",
       expect.objectContaining({ actorId: "driver-1", actorRole: "driver" }),
     );
-    expect(res.body).toEqual({ success: true, status: "picked_up" });
+    expect(res.body).toEqual({ success: true, status: "driver_arrived_store" });
   });
 
   test("cash OTP send + confirm completes order only after OTP verification", async () => {

@@ -20,7 +20,7 @@ const {
 const { autoAssignNearestDriver } = require('../services/autoMatchService');
 const PayoutService = require('../services/payoutService');
 const paystackService = require('../services/paystackService');
-const { saveDriverPushToken, sendPushNotification } = require('../services/notificationService');
+const { saveDriverPushToken, sendPushNotification, reportPushFailure } = require('../services/notificationService');
 const bcrypt = require('bcryptjs');
 const { isClosedNow } = require('../services/operatingHoursService');
 const {
@@ -530,7 +530,7 @@ class DriverController {
   static async getNearbyDrivers(req, res) {
     const { lat, lng } = req.query;
     try {
-      const drivers = await Driver.getNearby(lat, lng);
+      const drivers = await Driver.getNearby(lat, lng, 10, req.userId);
       res.json({ drivers });
     } catch (err) {
       console.error('[Driver] getNearbyDrivers error:', err.message);
@@ -652,7 +652,8 @@ class DriverController {
         tokens: driver.push_token,
         title:  'Payout details changed',
         body:   'Your bank account for payouts was just updated. If this wasn\'t you, contact support immediately.',
-      }).catch(() => {});
+      }).then((pushResult) => reportPushFailure(pushResult, { driverId: req.userId, notificationType: 'payout_destination_changed' }))
+        .catch(() => {});
 
       res.status(201).json({ success: true, recipient_code: recipientCode, account_name });
     } catch (err) {

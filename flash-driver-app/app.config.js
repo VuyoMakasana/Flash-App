@@ -129,9 +129,14 @@ module.exports = () => ({
           ios: {},
         },
       ],
+      // Required by posthog-react-native's Expo peer-dependency set (device
+      // locale is included in PostHog's default app-properties payload) —
+      // the installer couldn't auto-write this into a dynamic app.config.js
+      // either, same limitation as the entries above.
+      'expo-localization',
     ],
     extra: {
-      privacyPolicyUrl: 'https://flash-website.netlify.app/privacy',
+      privacyPolicyUrl: 'https://flashdelivery.co.za/privacy',
       eas: {
         projectId: '461d43ca-086d-4104-9a07-81897f2d7962',
       },
