@@ -7,7 +7,7 @@ const router  = express.Router();
 const { body } = require('express-validator');
 const AuthController = require('../controllers/authController');
 const { authLimiter } = require('../middleware/rateLimiter');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, requireRole } = require('../middleware/auth');
 
 // All auth routes get the strict rate limiter (10 per 15 min)
 router.use(authLimiter);
@@ -41,6 +41,18 @@ router.post('/user/login',
 router.post('/user/apple',  [body('identityToken').notEmpty()], AuthController.appleSignInUser);
 router.post('/user/google', [body('idToken').notEmpty()],       AuthController.googleSignInUser);
 router.post('/user/accept-terms', authenticate, AuthController.acceptTerms);
+
+// Apple App Store compliance audit finding: Google/Apple Sign In create a
+// new account with no date_of_birth at all, bypassing dateOfBirthValidator
+// entirely (it's only ever wired into the two routes above). The app gates
+// on this the same way it already gates on terms_accepted — reusing the
+// exact same validator so a date submitted here is held to the identical
+// 18+ standard as password registration, not a separate, potentially
+// looser check.
+router.post('/user/date-of-birth',
+  authenticate, requireRole('user'), [dateOfBirthValidator],
+  AuthController.setDateOfBirthUser
+);
 
 // ── Email Verification ─────────────────────────────────────────────────────
 // POST /api/auth/user/verify-email   { token: "..." }
@@ -78,6 +90,12 @@ router.post('/driver/login',
 router.post('/driver/apple',  [body('identityToken').notEmpty()], AuthController.appleSignInDriver);
 router.post('/driver/google', [body('idToken').notEmpty()],       AuthController.googleSignInDriver);
 router.post('/driver/accept-terms', authenticate, AuthController.acceptTermsDriver);
+
+// See the matching /user/date-of-birth route above for why this exists.
+router.post('/driver/date-of-birth',
+  authenticate, requireRole('driver'), [dateOfBirthValidator],
+  AuthController.setDateOfBirthDriver
+);
 
 // ── Token Management ──────────────────────────────────────────────────────
 router.post('/refresh', [body('refreshToken').notEmpty()], AuthController.refreshToken);

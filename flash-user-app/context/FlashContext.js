@@ -176,6 +176,16 @@ export const FlashProvider = ({ children }) => {
     await AsyncStorage.setItem(AS_KEYS.user, JSON.stringify(updatedUser));
   }, [user]);
 
+  // Apple App Store compliance audit: closes the OAuth age-gate bypass —
+  // unlike acceptTermsAndAuthenticate above, a failed request here must
+  // surface (invalid/under-18 dates are rejected server-side), so this
+  // deliberately doesn't swallow the error the way that one does.
+  const submitDateOfBirth = useCallback(async (dateOfBirth) => {
+    const data = await api.auth.setDateOfBirth(dateOfBirth);
+    setUser(data.user);
+    await AsyncStorage.setItem(AS_KEYS.user, JSON.stringify(data.user));
+  }, []);
+
   const logout = useCallback(async () => {
     // api.auth.logout() revokes the refresh token server-side (POST
     // /auth/logout) before clearing local tokens — previously this only
@@ -368,6 +378,7 @@ export const FlashProvider = ({ children }) => {
     loginWithApple,
     loginWithGoogle,
     acceptTermsAndAuthenticate,
+    submitDateOfBirth,
     logout,
     handleSessionExpired,
   }), [
@@ -375,7 +386,7 @@ export const FlashProvider = ({ children }) => {
     cart, addToCart, updateCartQuantity, removeCartItem, clearCart,
     placeOrder, fetchOrders, orders, requestReturn, products,
     login, register, loginWithApple, loginWithGoogle,
-    acceptTermsAndAuthenticate, logout, handleSessionExpired, updateProfile,
+    acceptTermsAndAuthenticate, submitDateOfBirth, logout, handleSessionExpired, updateProfile,
   ]);
 
   return <FlashContext.Provider value={value}>{children}</FlashContext.Provider>;

@@ -339,6 +339,143 @@ describe('Password reset flow', () => {
   });
 });
 
+// ─── Date of birth gate (Apple App Store compliance audit) ────────────────────
+//
+// Closes the OAuth age-gate bypass: Google/Apple Sign In create a row with
+// no date_of_birth, skipping dateOfBirthValidator entirely (it's only wired
+// into /user/register and /driver/register). These two new routes reuse
+// that exact same validator — mirrored here (it's declared inline in
+// authRoutes.js, not exported) the same way REGISTER_VALIDATORS/
+// LOGIN_VALIDATORS above already mirror the others for the same reason.
+
+const { body: bodyValidator } = require('express-validator');
+const DOB_VALIDATOR = bodyValidator('date_of_birth')
+  .isISO8601().withMessage('A valid date of birth is required')
+  .bail()
+  .custom((value) => {
+    const dob = new Date(value);
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+    const monthDiff = today.getMonth() - dob.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) age--;
+    if (age < 18) throw new Error('You must be at least 18 years old to register');
+    return true;
+  });
+
+describe('AuthController.setDateOfBirthUser', () => {
+  let req, res;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    req = { userId: 'u1', body: { date_of_birth: '2000-01-01' } };
+    res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  });
+
+  test('returns 400 for an invalid date', async () => {
+    req.body.date_of_birth = 'not-a-date';
+    await DOB_VALIDATOR.run(req);
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.setDateOfBirthUser(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 for a date under 18 years ago', async () => {
+    const under18 = new Date();
+    under18.setFullYear(under18.getFullYear() - 10);
+    req.body.date_of_birth = under18.toISOString().slice(0, 10);
+    await DOB_VALIDATOR.run(req);
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.setDateOfBirthUser(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  test('sets date of birth once and only once, never overwriting an existing value', async () => {
+    await DOB_VALIDATOR.run(req);
+    pool.query.mockResolvedValueOnce({
+      rows: [{ id: 'u1', email: 'u@example.com', date_of_birth: '2000-01-01', password_hash: 'x' }],
+    });
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.setDateOfBirthUser(req, res);
+
+    expect(res.status).not.toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, user: expect.objectContaining({ date_of_birth: '2000-01-01' }) }),
+    );
+    // password_hash must never leak into the response.
+    const response = res.json.mock.calls[0][0];
+    expect(response.user.password_hash).toBeUndefined();
+
+    // The one-time guard: only ever writes a row that currently has no DOB.
+    const updateCall = pool.query.mock.calls.find(
+      (c) => typeof c[0] === 'string' && /UPDATE users SET date_of_birth/i.test(c[0]),
+    );
+    expect(updateCall[0]).toMatch(/WHERE id = \$2 AND date_of_birth IS NULL/i);
+    expect(updateCall[1]).toEqual(['2000-01-01', 'u1']);
+  });
+
+  test('a double-submit after DOB is already set is idempotent, not an error', async () => {
+    await DOB_VALIDATOR.run(req);
+    // UPDATE ... WHERE date_of_birth IS NULL matches zero rows (already set).
+    pool.query
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ id: 'u1', date_of_birth: '1999-05-05', password_hash: 'x' }] }); // findById fallback
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.setDateOfBirthUser(req, res);
+
+    expect(res.status).not.toHaveBeenCalledWith(400);
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, user: expect.objectContaining({ date_of_birth: '1999-05-05' }) }),
+    );
+  });
+});
+
+describe('AuthController.setDateOfBirthDriver', () => {
+  let req, res;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    req = { userId: 'd1', body: { date_of_birth: '2000-01-01' } };
+    res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  });
+
+  test('returns 400 for a date under 18 years ago', async () => {
+    const under18 = new Date();
+    under18.setFullYear(under18.getFullYear() - 5);
+    req.body.date_of_birth = under18.toISOString().slice(0, 10);
+    await DOB_VALIDATOR.run(req);
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.setDateOfBirthDriver(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  test('sets date of birth with the same one-time guard as the user path', async () => {
+    await DOB_VALIDATOR.run(req);
+    pool.query.mockResolvedValueOnce({
+      rows: [{ id: 'd1', email: 'd@example.com', date_of_birth: '2000-01-01', password_hash: 'x' }],
+    });
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.setDateOfBirthDriver(req, res);
+
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ success: true, driver: expect.objectContaining({ date_of_birth: '2000-01-01' }) }),
+    );
+    const updateCall = pool.query.mock.calls.find(
+      (c) => typeof c[0] === 'string' && /UPDATE drivers SET date_of_birth/i.test(c[0]),
+    );
+    expect(updateCall[0]).toMatch(/WHERE id = \$2 AND date_of_birth IS NULL/i);
+  });
+});
+
 // ─── generateToken ────────────────────────────────────────────────────────────
 //
 // Runs last, deliberately: jest.resetModules() below invalidates every

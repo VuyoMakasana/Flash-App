@@ -184,6 +184,9 @@ const auth = {
   },
 
   acceptTerms: () => request('/auth/driver/accept-terms', { method: 'POST' }),
+
+  setDateOfBirth: (dateOfBirth) =>
+    request('/auth/driver/date-of-birth', { method: 'POST', body: JSON.stringify({ date_of_birth: dateOfBirth }) }),
 };
 
 // ── Orders ────────────────────────────────────────────────────────────────

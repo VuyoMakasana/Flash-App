@@ -127,6 +127,20 @@ class Driver extends BaseModel {
     });
   }
 
+  // Mirrors User.setDateOfBirth — see that method's comment for why the
+  // WHERE clause matters (Apple App Store compliance audit, OAuth age-gate
+  // bypass fix).
+  static async setDateOfBirth(driverId, dateOfBirth) {
+    const result = await this.query(
+      `UPDATE drivers SET date_of_birth = $1, updated_at = NOW()
+       WHERE id = $2 AND date_of_birth IS NULL
+       RETURNING *`,
+      [dateOfBirth, driverId]
+    );
+    if (result.rows[0]) return result.rows[0];
+    return await this.findById(driverId, this.tableName);
+  }
+
   // Mirrors User.deleteAccount's anonymization pattern (Apple/Google App
   // Store review requires an in-app self-service deletion path, an email
   // process alone doesn't satisfy it). Two extra guards a plain customer
