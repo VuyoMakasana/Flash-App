@@ -22,6 +22,29 @@ jest.mock("../../src/middleware/auth", () => ({
       return next();
     },
   requireApprovedDriver: (_req, _res, next) => next(),
+  // Admin Platform Phase 2/3 — this test's app wiring requires src/server.js,
+  // which now also mounts adminRoutes.js/store*Routes.js, both of which
+  // import these from this same mocked module. Real behavior isn't under
+  // test here (this suite tests orderStateMachineService wiring, not admin/
+  // store auth) — pass-through stubs, same minimal shape as
+  // requireApprovedDriver above.
+  requireAdminPasswordCurrent: (_req, _res, next) => next(),
+  authenticateStore: (req, _res, next) => {
+    req.storeUserId = req.headers["x-store-user-id"] || "store-user-1";
+    req.storeId = req.headers["x-store-id"] || "store-1";
+    req.storeRole = req.headers["x-store-role"] || "owner";
+    next();
+  },
+  requireStoreRole:
+    (...roles) =>
+    (req, res, next) => {
+      if (!roles.includes(req.storeRole)) {
+        return res.status(403).json({ error: "forbidden" });
+      }
+      return next();
+    },
+  requireOwnStore: (_req, _res, next) => next(),
+  requireStorePasswordCurrent: (_req, _res, next) => next(),
 }));
 
 jest.mock("../../src/config/database", () => ({
@@ -236,8 +259,23 @@ describe("Production state machine API integration", () => {
     // DriverWallet.reversePending/creditAvailable), so only the two real
     // client.query calls need mocking here.
     const mockClient = {
+      // Pre-existing off-by-one, found and fixed while verifying Admin
+      // Platform changes don't regress this suite: cancelOrder's real
+      // sequence of client.query calls is BEGIN, SELECT ... FOR UPDATE
+      // (added by the §2.9 concurrency fix — see cancelOrder's own comment
+      // block), INSERT order_cancellations RETURNING id, INSERT
+      // order_cancellation_store_shares (only when split.storeAmount > 0),
+      // COMMIT. This mock queue was missing the SELECT ... FOR UPDATE entry
+      // entirely, so every value after BEGIN was shifted one call early —
+      // the locked-order read got the "INSERT order_cancellations" mock
+      // value instead ({id: "cancellation-1"}, with no driver_id/status),
+      // silently defaulting refundMode to 'none' instead of exercising the
+      // real 10/5/85 split this test is named for. Not caused by any Admin
+      // Platform change (orderController.cancelOrder itself is untouched —
+      // confirmed via `git diff` against the pre-Admin-Platform commit).
       query: jest.fn()
         .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({ rows: [{ id: ORDER_2_ID, user_id: "user-1", driver_id: "driver-2", status: "driver_assigned", delivery_payment_status: "assigned", driver_paid: false, payment_method: "card", payment_status: "paid", driver_payout: 90, delivery_fee: 90, subtotal: 500 }] }) // SELECT ... FOR UPDATE
         .mockResolvedValueOnce({ rows: [{ id: "cancellation-1" }] }) // INSERT order_cancellations RETURNING id
         .mockResolvedValueOnce({}) // INSERT order_cancellation_store_shares
         .mockResolvedValueOnce({}), // COMMIT
