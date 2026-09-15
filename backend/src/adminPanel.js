@@ -1740,32 +1740,48 @@ function buildResources(db) {
 
                   const tempPassword = crypto.randomBytes(18).toString('base64url');
                   const passwordHash = await bcrypt.hash(tempPassword, 12);
-                  await client.query(
+                  // RETURNING id (not just relying on ON CONFLICT DO NOTHING
+                  // silently) — store_users.email is UNIQUE, and if it's
+                  // already taken (e.g. this owner_email was already used
+                  // for a different store), the insert is skipped but the
+                  // existing row's real password stays unchanged. Without
+                  // checking this, the welcome email below would confidently
+                  // tell someone a temporary password that doesn't actually
+                  // work anywhere — worse than not creating an account at
+                  // all. ownerAccountCreated gates the email and the
+                  // success message on whether a row genuinely was inserted.
+                  const insertResult = await client.query(
                     `INSERT INTO store_users (store_id, name, email, password_hash, role, force_password_reset)
                      VALUES ($1, $2, $3, $4, 'owner', true)
-                     ON CONFLICT (email) DO NOTHING`,
+                     ON CONFLICT (email) DO NOTHING
+                     RETURNING id`,
                     [storeId, ownerName, ownerEmail, passwordHash],
                   );
+                  const ownerAccountCreated = insertResult.rows.length > 0;
                   await client.query('COMMIT');
 
-                  sendStoreWelcomeEmail(ownerEmail, ownerName, tempPassword).catch((err) => {
-                    console.error('[AdminPanel] sendStoreWelcomeEmail error:', err.message);
-                  });
+                  if (ownerAccountCreated) {
+                    sendStoreWelcomeEmail(ownerEmail, ownerName, tempPassword).catch((err) => {
+                      console.error('[AdminPanel] sendStoreWelcomeEmail error:', err.message);
+                    });
+                  }
+
+                  AdminAction.log(currentAdmin.id, 'store_verify_onboarding', 'stores', storeId, { ownerEmail, ownerAccountCreated });
+                  record.set('onboarding_verified_by', currentAdmin.id);
+                  record.set('onboarding_verified_at', new Date().toISOString());
+                  record.set('is_active', true);
+                  return {
+                    record: record.toJSON(currentAdmin),
+                    notice: ownerAccountCreated
+                      ? { message: `Store verified and activated. A temporary password was emailed to ${ownerEmail}.`, type: 'success' }
+                      : { message: `Store verified and activated, but ${ownerEmail} is already used by another store account — no new login was created. Use a different owner_email and re-run this action, or create the account manually.`, type: 'error' },
+                  };
                 } catch (err) {
                   await client.query('ROLLBACK');
                   throw err;
                 } finally {
                   client.release();
                 }
-
-                AdminAction.log(currentAdmin.id, 'store_verify_onboarding', 'stores', storeId, { ownerEmail });
-                record.set('onboarding_verified_by', currentAdmin.id);
-                record.set('onboarding_verified_at', new Date().toISOString());
-                record.set('is_active', true);
-                return {
-                  record: record.toJSON(currentAdmin),
-                  notice: { message: `Store verified and activated. A temporary password was emailed to ${ownerEmail}.`, type: 'success' },
-                };
               },
             },
           },
