@@ -31,6 +31,8 @@ const SosAlert = require('./models/SosAlert');
 const ChatReport = require('./models/ChatReport');
 const Inventory = require('./models/Inventory');
 const Fleet = require('./models/Fleet');
+const crypto = require('crypto');
+const { sendStoreWelcomeEmail } = require('./services/emailService');
 const s3Service = require('./services/s3Service');
 const { clearCache } = require('./middleware/cache');
 const { withChronologicalDefaults, RESOURCE_TIMESTAMP_COLUMNS } = require('./config/adminResourceDefaults');
@@ -1695,22 +1697,75 @@ function buildResources(db) {
                 return request;
               },
             },
+            // Also closes the real gap this task found in its own Option C
+            // implementation: onboarding verifies the STORE, but a newly-
+            // verified store still had no way to get its first store_users
+            // row — storeStaffController.createStaff requires an already-
+            // authenticated store Owner token to invite anyone, which is
+            // exactly what doesn't exist yet for a brand-new store. This
+            // action creates that first Owner account too, in the same
+            // click as verification (never a separate, skippable step),
+            // using the owner_name/owner_email already collected on the
+            // plain generic form — a real, random, one-time temporary
+            // password (never displayed here, never logged — emailed
+            // directly via sendStoreWelcomeEmail, the same discipline as
+            // every other real credential in this codebase), with
+            // force_password_reset = true so it structurally cannot become
+            // permanent, same guarantee as the founder's own seeded account.
             verifyOnboarding: {
               actionType: 'record',
               component: false,
-              guard: 'Confirm you have verified this store off-system (business registration/ID document, a callback phone number, an address that checks out) before activating it. This cannot be un-done from this screen.',
+              guard: 'Confirm you have verified this store off-system (business registration/ID document, a callback phone number, an address that checks out) before activating it. This creates the store\'s first Owner account and emails them a temporary password. This cannot be un-done from this screen.',
               isAccessible: ({ record }) => !record.param('onboarding_verified_at'),
               handler: async (request, response, context) => {
                 const { record, currentAdmin } = context;
-                await pgPool.query(
-                  `UPDATE stores SET onboarding_verified_by = $1, onboarding_verified_at = NOW(), is_active = true, updated_at = NOW() WHERE id = $2`,
-                  [currentAdmin.id, record.id()],
-                );
-                AdminAction.log(currentAdmin.id, 'store_verify_onboarding', 'stores', record.id());
+                const storeId = record.id();
+                const ownerEmail = record.param('owner_email');
+                const ownerName = record.param('owner_name');
+
+                if (!ownerEmail || !ownerName) {
+                  return {
+                    record: record.toJSON(currentAdmin),
+                    notice: { message: 'Fill in owner_name and owner_email before verifying — the first Owner account is created from these.', type: 'error' },
+                  };
+                }
+
+                const client = await pgPool.connect();
+                try {
+                  await client.query('BEGIN');
+                  await client.query(
+                    `UPDATE stores SET onboarding_verified_by = $1, onboarding_verified_at = NOW(), is_active = true, updated_at = NOW() WHERE id = $2`,
+                    [currentAdmin.id, storeId],
+                  );
+
+                  const tempPassword = crypto.randomBytes(18).toString('base64url');
+                  const passwordHash = await bcrypt.hash(tempPassword, 12);
+                  await client.query(
+                    `INSERT INTO store_users (store_id, name, email, password_hash, role, force_password_reset)
+                     VALUES ($1, $2, $3, $4, 'owner', true)
+                     ON CONFLICT (email) DO NOTHING`,
+                    [storeId, ownerName, ownerEmail, passwordHash],
+                  );
+                  await client.query('COMMIT');
+
+                  sendStoreWelcomeEmail(ownerEmail, ownerName, tempPassword).catch((err) => {
+                    console.error('[AdminPanel] sendStoreWelcomeEmail error:', err.message);
+                  });
+                } catch (err) {
+                  await client.query('ROLLBACK');
+                  throw err;
+                } finally {
+                  client.release();
+                }
+
+                AdminAction.log(currentAdmin.id, 'store_verify_onboarding', 'stores', storeId, { ownerEmail });
                 record.set('onboarding_verified_by', currentAdmin.id);
                 record.set('onboarding_verified_at', new Date().toISOString());
                 record.set('is_active', true);
-                return { record: record.toJSON(currentAdmin), notice: { message: 'Store verified and activated.', type: 'success' } };
+                return {
+                  record: record.toJSON(currentAdmin),
+                  notice: { message: `Store verified and activated. A temporary password was emailed to ${ownerEmail}.`, type: 'success' },
+                };
               },
             },
           },

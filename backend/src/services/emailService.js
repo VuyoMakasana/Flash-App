@@ -195,6 +195,43 @@ async function sendStorePasswordResetEmail(toEmail, resetToken) {
   });
 }
 
+// ─── Store Owner Welcome (Admin Platform Phase 3, Option C onboarding) ─────
+// Sent exactly once, at the moment a Flash admin clicks "Verify & Activate
+// Onboarding" on a store's AdminJS record — the real completion of Option C
+// (docs/ADMIN_PLATFORM_PHASE1_STORE_IDENTITY_PROPOSAL.md): the first
+// store_users row for a newly-verified store gets a real, temporary
+// password (force_password_reset = true, same structural guarantee as the
+// founder's own seeded admin account), emailed here rather than ever
+// displayed/logged in plaintext anywhere else.
+async function sendStoreWelcomeEmail(toEmail, ownerName, tempPassword) {
+  return sendEmail({
+    to:      toEmail,
+    subject: 'Your Flash Store Portal account is ready',
+    text:    `Hi ${ownerName},\n\nYour store has been verified and your Flash Store Portal account is ready.\n\n`
+      + `Email: ${toEmail}\nTemporary password: ${tempPassword}\n\n`
+      + `You'll be asked to set a new password the first time you sign in. This temporary password cannot be reused after that.\n\n`
+      + `If you weren't expecting this, contact Flash support.`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="display:inline-block;background:#0a0a0a;border-radius:16px;padding:16px">
+        <span style="color:#fff;font-size:28px;font-weight:900;letter-spacing:4px">FLASH</span>
+      </div>
+    </div>
+    <h2 style="color:#111827;margin-top:0">Your Store Portal account is ready</h2>
+    <p style="color:#6b7280">Hi ${escapeHtmlLite(ownerName)}, your store has been verified. Sign in with the temporary credentials below — you'll be asked to set a new password immediately.</p>
+    <p style="color:#111827"><strong>Email:</strong> ${escapeHtmlLite(toEmail)}<br><strong>Temporary password:</strong> <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px">${escapeHtmlLite(tempPassword)}</code></p>
+    <p style="color:#9ca3af;font-size:13px">If you weren't expecting this, contact Flash support.</p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
 // ─── Email Verification ────────────────────────────────────────────────────
 
 async function sendEmailVerificationEmail(toEmail, verifyToken) {
@@ -468,6 +505,6 @@ function escapeHtmlLite(value) {
 }
 
 module.exports = {
-  sendPasswordResetEmail, sendAdminPasswordResetEmail, sendStorePasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
+  sendPasswordResetEmail, sendAdminPasswordResetEmail, sendStorePasswordResetEmail, sendStoreWelcomeEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
   sendSosAlertEmail, sendOrderEscalationEmail, sendOrderMissedEmail, sendMarketingLeadEmail,
 };
