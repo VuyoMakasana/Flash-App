@@ -121,6 +121,80 @@ async function sendPasswordResetEmail(toEmail, resetToken) {
   });
 }
 
+// ─── Admin Password Reset (Admin Platform Phase 2) ─────────────────────────
+// Deliberately its own function, not a reuse of sendPasswordResetEmail
+// above: that one links a `flash://reset-password` mobile deep link, which
+// has no meaning for a Flash-staff browser account. Admin Platform Phase 2
+// has no dedicated reset-password web page yet (AdminJS itself has no
+// built-in one) — this honestly gives the raw token and the real API
+// contract (POST /api/admin/reset-password) rather than a link that would
+// 404. A future admin-facing web page can start using a real link here
+// without any other change to this flow.
+async function sendAdminPasswordResetEmail(toEmail, resetToken) {
+  return sendEmail({
+    to:      toEmail,
+    subject: 'Reset your Flash Admin password',
+    text:    `A password reset was requested for your Flash Admin account.\n\nReset code:\n${resetToken}\n\n`
+      + `Submit it with a POST request to /api/admin/reset-password as { "token": "${resetToken}", "newPassword": "..." }.\n\n`
+      + `This code expires in 1 hour and can only be used once. If you did not request this, ignore this email — your account is safe.`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="display:inline-block;background:#0a0a0a;border-radius:16px;padding:16px">
+        <span style="color:#fff;font-size:28px;font-weight:900;letter-spacing:4px">FLASH</span>
+      </div>
+    </div>
+    <h2 style="color:#111827;margin-top:0">Reset your Flash Admin password</h2>
+    <p style="color:#6b7280">A password reset was requested for your Flash Admin account. Use the code below with the admin reset-password endpoint.</p>
+    <div style="text-align:center;margin:24px 0">
+      <code style="display:inline-block;background:#f3f4f6;color:#111827;padding:14px 20px;border-radius:12px;font-weight:700;font-size:15px;word-break:break-all">${resetToken}</code>
+    </div>
+    <p style="color:#9ca3af;font-size:13px">This code expires in <strong>1 hour</strong> and can only be used once. If you did not request this, ignore this email — your account is safe.</p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
+// ─── Store Password Reset (Admin Platform Phase 3) ─────────────────────────
+// Same shape/reasoning as sendAdminPasswordResetEmail above — the store
+// portal frontend (flash-store-portal) has its own login page but no
+// dedicated reset-password page yet, so this gives the raw token plus the
+// real API contract (POST /api/store-auth/reset-password).
+async function sendStorePasswordResetEmail(toEmail, resetToken) {
+  return sendEmail({
+    to:      toEmail,
+    subject: 'Reset your Flash store account password',
+    text:    `A password reset was requested for your Flash store account.\n\nReset code:\n${resetToken}\n\n`
+      + `Submit it with a POST request to /api/store-auth/reset-password as { "token": "${resetToken}", "newPassword": "..." }.\n\n`
+      + `This code expires in 1 hour and can only be used once. If you did not request this, ignore this email — your account is safe.`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="display:inline-block;background:#0a0a0a;border-radius:16px;padding:16px">
+        <span style="color:#fff;font-size:28px;font-weight:900;letter-spacing:4px">FLASH</span>
+      </div>
+    </div>
+    <h2 style="color:#111827;margin-top:0">Reset your store account password</h2>
+    <p style="color:#6b7280">A password reset was requested for your Flash store account. Use the code below to set a new password.</p>
+    <div style="text-align:center;margin:24px 0">
+      <code style="display:inline-block;background:#f3f4f6;color:#111827;padding:14px 20px;border-radius:12px;font-weight:700;font-size:15px;word-break:break-all">${resetToken}</code>
+    </div>
+    <p style="color:#9ca3af;font-size:13px">This code expires in <strong>1 hour</strong> and can only be used once. If you did not request this, ignore this email — your account is safe.</p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
 // ─── Email Verification ────────────────────────────────────────────────────
 
 async function sendEmailVerificationEmail(toEmail, verifyToken) {
@@ -394,6 +468,6 @@ function escapeHtmlLite(value) {
 }
 
 module.exports = {
-  sendPasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
+  sendPasswordResetEmail, sendAdminPasswordResetEmail, sendStorePasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
   sendSosAlertEmail, sendOrderEscalationEmail, sendOrderMissedEmail, sendMarketingLeadEmail,
 };

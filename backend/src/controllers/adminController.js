@@ -2,9 +2,12 @@ const Admin = require("../models/Admin");
 const AdminAction = require("../models/AdminAction");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const { v4: uuidv4 } = require("uuid");
 const pool = require("../config/database");
 const { getRequired } = require("../config/env");
+const { sendAdminPasswordResetEmail } = require("../services/emailService");
+const { validationResult } = require("express-validator");
 
 class AdminController {
   // ADMIN PANEL PHASE 0 (docs/audits/ADMIN_PANEL_AUDIT_AND_VISION.md):
@@ -47,10 +50,142 @@ class AdminController {
         jwtSecret,
         { expiresIn: "8h" },
       );
-      res.json({ token, admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role } });
+      res.json({
+        token,
+        admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role },
+        // Admin Platform Phase 2: lets a consuming client prompt immediately,
+        // but this is a UX nicety only — the real enforcement is server-side
+        // (requireAdminPasswordCurrent, middleware/auth.js), not this flag.
+        forcePasswordReset: !!admin.force_password_reset,
+      });
     } catch (err) {
       console.error("[Admin Auth] Login error:", err.message);
       res.status(500).json({ error: "Login failed" });
+    }
+  }
+
+  // ── Change password (authenticated) ────────────────────────────────────────
+  // Admin Platform Phase 2. Requires the current password (never trusts an
+  // authenticated session alone to change it — same standard every real
+  // password-change flow needs, matching the task's explicit ask). Setting
+  // password_changed_at invalidates every other currently-issued token for
+  // this admin on its next use (middleware/auth.js) — including, by
+  // default, the very token this request itself used, which is why a fresh
+  // replacement token is minted and returned below so this session isn't
+  // logged out by its own successful request.
+  static async changePassword(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { currentPassword, newPassword } = req.body;
+
+    try {
+      // authenticate() (middleware/auth.js) only sets req.userId/req.userRole
+      // from the JWT — no email claim to look up by, so this looks up the
+      // real current row (and its live password_hash) by id directly.
+      const currentResult = await pool.query("SELECT * FROM admins WHERE id = $1", [req.userId]);
+      const current = currentResult.rows[0];
+      if (!current) return res.status(404).json({ error: "Admin not found" });
+
+      const isValid = await bcrypt.compare(currentPassword, current.password_hash);
+      if (!isValid) return res.status(401).json({ error: "Current password is incorrect" });
+
+      const hash = await bcrypt.hash(newPassword, 12);
+      await pool.query(
+        `UPDATE admins SET password_hash = $1, password_changed_at = NOW(), force_password_reset = false, updated_at = NOW() WHERE id = $2`,
+        [hash, req.userId],
+      );
+
+      const jwtSecret = getRequired("ADMIN_JWT_SECRET", "admin-auth");
+      const token = jwt.sign(
+        { id: current.id, role: current.role, jti: uuidv4() },
+        jwtSecret,
+        { expiresIn: "8h" },
+      );
+
+      AdminAction.log(req.userId, "admin_password_change", "admins", req.userId);
+      return res.json({ success: true, message: "Password updated.", token });
+    } catch (err) {
+      console.error("[Admin Auth] changePassword:", err.message);
+      return res.status(500).json({ error: "Password change failed" });
+    }
+  }
+
+  // ── Forgot password ────────────────────────────────────────────────────────
+  // Same "never reveal whether the account exists" contract as
+  // authController.js's forgotPassword (user/driver) — always returns
+  // { success: true } regardless of whether the email matches a real admin.
+  static async forgotPassword(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { email } = req.body;
+
+    try {
+      const admin = await Admin.findByEmail(email);
+      if (!admin) return res.json({ success: true });
+
+      await pool.query(`DELETE FROM admin_password_tokens WHERE admin_id = $1`, [admin.id]);
+
+      const token = crypto.randomBytes(48).toString("hex");
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour, matches authController.js
+
+      await pool.query(
+        `INSERT INTO admin_password_tokens (admin_id, token, expires_at) VALUES ($1, $2, $3)`,
+        [admin.id, token, expiresAt],
+      );
+
+      // Not awaited — same hang-risk fix as authController.js's forgotPassword.
+      sendAdminPasswordResetEmail(admin.email, token).catch((err) => {
+        console.error("[Admin Auth] sendAdminPasswordResetEmail error:", err.message);
+      });
+
+      return res.json({ success: true });
+    } catch (err) {
+      console.error("[Admin Auth] forgotPassword:", err.message);
+      return res.status(500).json({ error: "Failed to send reset email" });
+    }
+  }
+
+  // ── Reset password (token-based, unauthenticated) ──────────────────────────
+  static async resetPassword(req, res) {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+
+    const { token, newPassword } = req.body;
+
+    try {
+      const result = await pool.query(
+        `SELECT * FROM admin_password_tokens WHERE token = $1 AND used_at IS NULL AND expires_at > NOW()`,
+        [token],
+      );
+      if (!result.rows.length) {
+        return res.status(400).json({ error: "Invalid or expired reset link. Please request a new one." });
+      }
+      const row = result.rows[0];
+      const hash = await bcrypt.hash(newPassword, 12);
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `UPDATE admins SET password_hash = $1, password_changed_at = NOW(), force_password_reset = false, updated_at = NOW() WHERE id = $2`,
+          [hash, row.admin_id],
+        );
+        await client.query(`UPDATE admin_password_tokens SET used_at = NOW() WHERE id = $1`, [row.id]);
+        await client.query("COMMIT");
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
+      }
+
+      AdminAction.log(row.admin_id, "admin_password_reset", "admins", row.admin_id);
+      return res.json({ success: true, message: "Password updated. Please log in with your new password." });
+    } catch (err) {
+      console.error("[Admin Auth] resetPassword:", err.message);
+      return res.status(500).json({ error: "Password reset failed" });
     }
   }
 

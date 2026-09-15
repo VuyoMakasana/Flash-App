@@ -10,6 +10,7 @@
 
 const Order = require('../models/Order');
 const Rating = require('../models/Rating');
+const Store = require('../models/Store');
 const db = require('../config/database');
 const DriverWallet = require('../models/DriverWallet');
 const {
@@ -136,17 +137,18 @@ class OrderController {
         delivery_mode,
         time_slot,
         subtotal,
-        // Not client-supplied, same trust boundary as pickup_lat/pickup_lng
-        // just below -- there is no multi-vendor "stores" concept yet, so a
-        // client-sent store_id has nothing real to validate against. Was
-        // previously passed straight through from req.body with zero
-        // validation; harmless while orders.store_id was free-text VARCHAR
-        // and no real client ever populated it, but store_id is now a real
-        // UUID column (migration v27) -- an arbitrary client string would
-        // 500 the whole order-creation request instead of silently doing
-        // nothing. Explicit null until a real stores table + checkout
-        // store-selection step exists.
-        store_id: null,
+        // ADMIN PLATFORM PHASE 3: a real `stores` table now exists
+        // (migrate.js v36) — still never client-supplied, same trust
+        // boundary as pickup_lat/pickup_lng just below, just resolved
+        // server-side now instead of hardcoded null. Store.getDefaultStoreId()
+        // is deliberately named "default, not only" (see its own comment):
+        // Flash has exactly one real, active store today and no checkout
+        // store-selection step yet, so every order is attributed to that one
+        // real store — this is what makes the Store Admin Portal's Orders
+        // screen (storeOrderController.js) receive real orders at all. A
+        // real multi-store checkout-selection step is future work; this
+        // call site is exactly where it would plug in later.
+        store_id: await Store.getDefaultStoreId(),
         preferred_driver_id: resolvedPreferredDriverId,
         pickup_mall_id,
         dropoff_mall_id,

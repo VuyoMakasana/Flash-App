@@ -94,6 +94,9 @@ module.exports = {
     marketing_waitlist:           'Real AdminJS resource — early-access signups from the public marketing site, also triggers an admin email on each new signup.',
     marketing_contact_messages:   'Real AdminJS resource — Contact page submissions from the public marketing site, also triggers an admin email.',
     marketing_applications:      'Real AdminJS resource — driver/seller application form submissions from the public marketing site, also triggers an admin email.',
+
+    // ── Admin Platform Phase 3 — multi-tenant Store Admin foundation ─────
+    stores: 'Admin Platform Phase 3 (docs/audits/MULTI_TENANT_ARCHITECTURE_BLUEPRINT.md, docs/ADMIN_PLATFORM_PHASE1_STORE_IDENTITY_PROPOSAL.md Option C) — real, browsable AdminJS resource. This IS the manual Flash-staff-verified onboarding surface: a new store row + a "Verify & Activate Onboarding" action that records onboarding_verified_by/_at (never client-editable), the exact mechanism Phase 1 proposed to close the "who verified this store is real" gap.',
   },
 
   intentionallyExcluded: {
@@ -102,6 +105,10 @@ module.exports = {
     revoked_tokens:  'Internal auth-flow infrastructure (JWT revocation list) — no business-visibility need.',
     email_tokens:    'Internal auth-flow infrastructure (email verification/reset tokens) — no business-visibility need.',
     webhook_events:  'Internal Paystack webhook-idempotency ledger (unique constraint on paystack_event_id) — infrastructure only, no content to view.',
+    admin_password_tokens: 'Admin Platform Phase 2 — internal auth-flow infrastructure (admin password-reset tokens), same reasoning as email_tokens above — no business-visibility need.',
+    store_password_tokens: 'Admin Platform Phase 3 — internal auth-flow infrastructure (store_users password-reset tokens), same reasoning as email_tokens/admin_password_tokens above.',
+    store_users:  'Admin Platform Phase 3 (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §1/§3) — partner-store staff accounts. Never a resource in this internal panel, by design, not an oversight: a store account is a fundamentally different trust domain from a Flash-internal admin, with no shared table, query, or UI surface. Managed by the separate Store Admin Portal (storeStaffController.js), never adminPanel.js.',
+    store_actions: 'Admin Platform Phase 3 (§5.4) — the Store Admin Portal\'s own audit log, structurally separate from admin_actions for the same reason as store_users above. Reviewed inside the Store Admin Portal itself, never surfaced here.',
 
     // ── Dead/legacy tables that need no view because nothing writes to them ──
     saved_cards: 'DEAD TABLE, found new during this pass — superseded by payment_methods (migrate.js\'s own one-time data migration copies rows FROM saved_cards INTO payment_methods). No controller or model reads or writes saved_cards anymore.',

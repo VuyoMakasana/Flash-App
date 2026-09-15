@@ -67,6 +67,10 @@ const RESOURCE_TIMESTAMP_COLUMNS = {
   // driver_wallets above.
   driver_subscriptions: 'updated_at',
   premium_subscriptions: 'updated_at',
+  // Admin Platform Phase 3 — real onboarding events (one row per store,
+  // created once at manual-onboarding time) — created_at is the meaningful
+  // "when" column, same shape as drivers/admin_actions above.
+  stores: 'created_at',
 };
 
 // Applied via the same options object every resource already builds, not a

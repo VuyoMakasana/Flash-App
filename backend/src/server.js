@@ -90,6 +90,11 @@ const messagesRoutes = require("./routes/messageRoutes");
 const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
 const sosRoutes = require("./routes/sosRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
+const storeAuthRoutes = require("./routes/storeAuthRoutes");
+const storeOrderRoutes = require("./routes/storeOrderRoutes");
+const storeInventoryRoutes = require("./routes/storeInventoryRoutes");
+const storeStaffRoutes = require("./routes/storeStaffRoutes");
+const storeAnalyticsRoutes = require("./routes/storeAnalyticsRoutes");
 
 function createApp() {
   const app = express();
@@ -198,6 +203,15 @@ function createApp() {
   app.use("/api/messages", messagesRoutes);
   app.use("/api/trusted-drivers", trustedDriverRoutes);
   app.use("/api/sos", sosRoutes);
+  // Admin Platform Phase 3 — Store Admin Portal API, a genuinely separate
+  // auth/tenant domain from everything above (STORE_JWT_SECRET, store_users,
+  // never admins/users/drivers — see middleware/auth.js's authenticateStore
+  // and docs/audits/FLASH_STORE_ADMIN_DESIGN.md §3).
+  app.use("/api/store-auth", storeAuthRoutes);
+  app.use("/api/store-orders", storeOrderRoutes);
+  app.use("/api/store-inventory", storeInventoryRoutes);
+  app.use("/api/store-staff", storeStaffRoutes);
+  app.use("/api/store-analytics", storeAnalyticsRoutes);
 // Public marketing-site forms (waitlist, contact, driver/seller applications)
 // — no auth, same as flash-website-rebuild's original standalone backend;
 // mounted at /api directly since the frontend already calls /api/waitlist,

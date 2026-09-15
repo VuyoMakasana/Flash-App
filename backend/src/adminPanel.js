@@ -1654,6 +1654,68 @@ function buildResources(db) {
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.marketing_applications),
       },
+      {
+        // Admin Platform Phase 3 (docs/ADMIN_PLATFORM_PHASE1_STORE_IDENTITY_
+        // PROPOSAL.md, Option C — founder-approved): manual, Flash-staff-
+        // verified store onboarding via this existing AdminJS panel, zero
+        // new integrations. A Flash admin fills in the store's real details
+        // (name/address/coordinates/owner contact) via the plain generic
+        // form below AFTER doing the actual off-system verification (ID or
+        // business-registration document, a callback phone number, an
+        // address that can be cross-checked) — this panel has no way to
+        // verify that step itself, by design; a human does it before ever
+        // touching this screen. The new row starts INACTIVE (forced by the
+        // `new` hook below, regardless of what's submitted) and invisible
+        // to the Store Admin Portal's own login (StoreAuthController checks
+        // storeUser.is_active, not stores.is_active directly, but an
+        // inactive store has no real staff accounts pointing at it yet in
+        // practice) until the separate "Verify & Activate Onboarding"
+        // action below is deliberately clicked — a second, explicit step,
+        // not a single form submit, so creating the row and vouching for it
+        // are never the same click. onboarding_verified_by/_at (the audit
+        // pair Phase 1's proposal introduces) are hidden from every form —
+        // they can only ever be set by that action, using the real
+        // currentAdmin.id, never typed in by anyone.
+        resource: db.table('stores'),
+        options: withChronologicalDefaults({
+          titleProperty: 'name',
+          listProperties: ['name', 'owner_name', 'owner_email', 'is_active', 'onboarding_verified_at', 'created_at'],
+          properties: {
+            name: { isTitle: true },
+            service_area_bounds: { isVisible: { list: false, show: true, edit: true, new: true, filter: false } },
+            onboarding_verified_by: { isVisible: { list: false, show: true, edit: false, new: false, filter: false } },
+            onboarding_verified_at: { isVisible: { list: true, show: true, edit: false, new: false, filter: true } },
+          },
+          actions: {
+            new: {
+              // Forced server-side regardless of what the form submits —
+              // never trust a client-suppliable is_active=true on creation.
+              before: async (request) => {
+                if (request.payload) request.payload.is_active = false;
+                return request;
+              },
+            },
+            verifyOnboarding: {
+              actionType: 'record',
+              component: false,
+              guard: 'Confirm you have verified this store off-system (business registration/ID document, a callback phone number, an address that checks out) before activating it. This cannot be un-done from this screen.',
+              isAccessible: ({ record }) => !record.param('onboarding_verified_at'),
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                await pgPool.query(
+                  `UPDATE stores SET onboarding_verified_by = $1, onboarding_verified_at = NOW(), is_active = true, updated_at = NOW() WHERE id = $2`,
+                  [currentAdmin.id, record.id()],
+                );
+                AdminAction.log(currentAdmin.id, 'store_verify_onboarding', 'stores', record.id());
+                record.set('onboarding_verified_by', currentAdmin.id);
+                record.set('onboarding_verified_at', new Date().toISOString());
+                record.set('is_active', true);
+                return { record: record.toJSON(currentAdmin), notice: { message: 'Store verified and activated.', type: 'success' } };
+              },
+            },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.stores),
+      },
   ];
 }
 
@@ -1899,22 +1961,53 @@ async function mountAdminPanel(app) {
     return { id: adminRow.id, email: adminRow.email, name: adminRow.name, role: adminRow.role };
   };
 
-  // PROTOTYPE NOTE: reusing ADMIN_JWT_SECRET as the session-cookie signing
-  // secret for now, to avoid asking for yet another env var before this has
-  // even been looked at in a browser. Worth its own dedicated secret once
-  // Phase 1 is fully built out, not before.
+  // ADMIN PLATFORM PHASE 2: this used to reuse ADMIN_JWT_SECRET as the
+  // session-cookie signing secret (flagged as a PROTOTYPE NOTE in Phase 0 —
+  // docs/ADMIN_PLATFORM_PHASE0_ARCHITECTURE_NOTES.md §2.2 — as exactly the
+  // kind of thing to fix "once Phase 1 is fully built out"). A leaked
+  // session-cookie secret and a leaked JWT-signing secret are different
+  // failure modes (one forges AdminJS's server-rendered UI session, the
+  // other forges JSON API bearer tokens) — sharing one secret between them
+  // means compromising either surface compromises both. ADMIN_SESSION_SECRET
+  // is a new, independent, optional env var; falling back to ADMIN_JWT_SECRET
+  // when it's unset keeps every existing deployment working exactly as
+  // before with no required config change, matching this codebase's own
+  // convention (e.g. PAYMENT_METHOD_ENCRYPTION_KEY vs JWT_SECRET) of secrets
+  // that are independent BY DESIGN, not by accident.
+  const sessionSecret = process.env.ADMIN_SESSION_SECRET || process.env.ADMIN_JWT_SECRET;
+
   const router = buildAuthenticatedRouter(
     admin,
     {
-      cookiePassword: process.env.ADMIN_JWT_SECRET,
+      cookiePassword: sessionSecret,
       authenticate,
       maxRetries: 5,
     },
     null,
     {
-      secret: process.env.ADMIN_JWT_SECRET,
+      secret: sessionSecret,
       resave: false,
       saveUninitialized: false,
+      // ADMIN PLATFORM PHASE 2: previously unset, which left express-session's
+      // own cookie defaults in effect — no explicit httpOnly (defaults to
+      // true, but never actually verified here before), no `secure` flag at
+      // all (a session cookie would happily ride over plain HTTP), and no
+      // maxAge (a "browser session" cookie that persists until the browser
+      // process closes, not until any real server-enforced expiry — no
+      // matching timeout to the JWT surface's real 8h expiry). All three
+      // set explicitly now: httpOnly blocks any XSS-borne JS from reading
+      // the cookie; secure is conditional on NODE_ENV, the same convention
+      // server.js's own `trust proxy` production-only guard already uses,
+      // since forcing `secure` in local dev (plain http://localhost) would
+      // silently break the panel's own login there; sameSite: 'lax' allows
+      // the panel's own same-site login form POST while still blocking
+      // cross-site cookie use; maxAge matches the JSON API JWT's own 8h.
+      cookie: {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 8 * 60 * 60 * 1000,
+      },
     },
   );
 

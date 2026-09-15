@@ -14,7 +14,7 @@
  */
 
 const jwt  = require('jsonwebtoken');
-const { getRequired } = require('../config/env');
+const { getRequired, getOptional } = require('../config/env');
 const pool = require('../config/database');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,9 +104,55 @@ module.exports = function setupSocket(io) {
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Authentication required'));
 
+    let decoded;
+    // ADMIN PLATFORM PHASE 3: store-portal accounts are signed with their
+    // own, fully disjoint STORE_JWT_SECRET (middleware/auth.js's
+    // authenticateStore), never JWT_SECRET — this socket auth previously
+    // only ever tried JWT_SECRET, which meant a real store_users token
+    // could never open a socket connection at all (same pre-existing gap
+    // this file already has for ADMIN_JWT_SECRET admin tokens, out of
+    // scope to fix here — but the Store Admin Portal's own real-time Orders
+        // screen is a direct requirement of this phase, so the store path
+    // specifically needs to actually work, not just look wired up).
+    // Same JsonWebTokenError-only retry discipline as middleware/auth.js's
+    // authenticate(): a genuine TokenExpiredError from the first attempt is
+    // never masked by a second attempt against a different secret.
+    let verifiedWithStoreSecret = false;
     try {
-      const decoded = jwt.verify(token, jwtSecret);
+      decoded = jwt.verify(token, jwtSecret);
+    } catch (err) {
+      if (err.name === 'JsonWebTokenError') {
+        const storeJwtSecret = getOptional('STORE_JWT_SECRET', 'socket');
+        if (storeJwtSecret) {
+          try {
+            decoded = jwt.verify(token, storeJwtSecret);
+            verifiedWithStoreSecret = true;
+          } catch (storeErr) {
+            return next(new Error('Invalid token'));
+          }
+        } else {
+          return next(new Error('Invalid token'));
+        }
+      } else {
+        return next(new Error('Invalid token'));
+      }
+    }
 
+    // Same cross-check middleware/auth.js applies for admin tokens: a
+    // token claiming role 'store'-ish (its actual claim is one of the six
+    // store roles, checked via storeId below, not a literal 'store'
+    // string) has no legitimate reason to have verified against
+    // JWT_SECRET, and a token verified against STORE_JWT_SECRET has no
+    // legitimate reason to lack a storeId claim — authenticateStore's own
+    // mint (storeAuthController.js) always sets one.
+    if (verifiedWithStoreSecret && !decoded.storeId) {
+      return next(new Error('Invalid token'));
+    }
+    if (!verifiedWithStoreSecret && decoded.storeId) {
+      return next(new Error('Invalid token'));
+    }
+
+    try {
       if (decoded.jti) {
         const { rows } = await pool.query(
           `SELECT 1 FROM revoked_tokens WHERE jti = $1`,
@@ -118,6 +164,7 @@ module.exports = function setupSocket(io) {
       socket.userId     = decoded.id;
       socket.userRole   = decoded.role;
       socket.userStatus = decoded.status || null;
+      socket.storeId    = verifiedWithStoreSecret ? decoded.storeId : null;
 
       next();
     } catch (err) {
@@ -134,6 +181,14 @@ module.exports = function setupSocket(io) {
     // room existed, so every admin broadcast was reaching zero sockets.
     if (socket.userRole === 'admin') socket.join('admin');
 
+    // ADMIN PLATFORM PHASE 3 — every store-portal socket auto-joins its own
+    // store's room, the real-time delivery mechanism for
+    // orderStateMachineService.js's emitOrderUpdate `store:<id>` emit.
+    // socket.storeId is only ever set above when the token verified against
+    // STORE_JWT_SECRET, so this can never be spoofed by a user/driver/admin
+    // token claiming a storeId in some other field.
+    if (socket.storeId) socket.join(`store:${socket.storeId}`);
+
     // HIGH-9 FIX: Periodically re-verify the JWT so a token that has expired
     // since connection time is detected and the socket is cleanly terminated.
     // Runs every 14 minutes — just before the 15-minute access token expiry.
@@ -146,7 +201,15 @@ module.exports = function setupSocket(io) {
           clearInterval(tokenCheckInterval);
           return;
         }
-        jwt.verify(token, jwtSecret);
+        // ADMIN PLATFORM PHASE 3: a store socket's token was verified against
+        // STORE_JWT_SECRET at connection time (socket.storeId is only ever
+        // set in that case, see the auth middleware above) — re-verifying it
+        // against JWT_SECRET here would always fail and wrongly disconnect
+        // every store-portal session every 14 minutes.
+        const secretForThisSocket = socket.storeId
+          ? getOptional('STORE_JWT_SECRET', 'socket')
+          : jwtSecret;
+        jwt.verify(token, secretForThisSocket);
       } catch {
         socket.emit('auth_expired');
         socket.disconnect(true);

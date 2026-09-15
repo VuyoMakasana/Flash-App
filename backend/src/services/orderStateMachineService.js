@@ -91,7 +91,7 @@ function logTransition(orderId, fromState, toState, actorRole, actorId) {
 // Split out so callers that join an existing transaction (externalClient) can
 // defer this until after their own COMMIT succeeds, instead of it firing
 // inside a transaction that might still roll back.
-function emitOrderUpdate(io, orderId, userId, status) {
+function emitOrderUpdate(io, orderId, userId, status, storeId = null) {
   if (!io) return;
   io.to(`order:${orderId}`).emit('order_update', {
     orderId,
@@ -100,6 +100,16 @@ function emitOrderUpdate(io, orderId, userId, status) {
   });
   if (userId) {
     io.to(`user:${userId}`).emit('order_update', { orderId, status });
+  }
+  // Admin Platform Phase 3 — the Store Admin Portal's own real-time Orders
+  // screen. Same room-per-tenant pattern as `order:<id>`/`user:<id>` above,
+  // just scoped to whichever store this order belongs to (orders.store_id,
+  // populated by orderController.createOrder via Store.getDefaultStoreId()
+  // once a real `stores` row exists). storeId is optional and null for
+  // every pre-multi-tenant order (nothing to notify), so this is fully
+  // additive — it changes nothing about the two emits above.
+  if (storeId) {
+    io.to(`store:${storeId}`).emit('order_update', { orderId, status });
   }
 }
 
@@ -275,7 +285,7 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
     // responsibility — they must only fire after the caller's own COMMIT
     // succeeds (see emitOrderUpdate / notifyOrderStatusChange above).
     if (!externalClient) {
-      emitOrderUpdate(io, orderId, updatedOrder.user_id, updatedOrder.status);
+      emitOrderUpdate(io, orderId, updatedOrder.user_id, updatedOrder.status, updatedOrder.store_id);
       await notifyOrderStatusChange(updatedOrder, targetState);
       if (targetState === 'completed') {
         await notifyReturnAwaitingReview(updatedOrder);
@@ -467,7 +477,7 @@ async function requeueOrderForDriverSearch(orderId, context = {}, externalClient
     // Same rule as updateOrderStatus: when joining a caller's transaction,
     // the caller emits after its own COMMIT succeeds, not us.
     if (!externalClient) {
-      emitOrderUpdate(io, orderId, updatedOrder.user_id, updatedOrder.status);
+      emitOrderUpdate(io, orderId, updatedOrder.user_id, updatedOrder.status, updatedOrder.store_id);
     }
 
     return updatedOrder;
@@ -543,7 +553,7 @@ async function rejectPendingAcceptance(orderId, context = {}) {
     client.release();
   }
 
-  emitOrderUpdate(io, orderId, cancelledOrder.user_id, cancelledOrder.status);
+  emitOrderUpdate(io, orderId, cancelledOrder.user_id, cancelledOrder.status, cancelledOrder.store_id);
   await notifyOrderStatusChange(cancelledOrder, 'cancelled');
 
   // Same isCardPaid gate as orderController.cancelOrder's own refund call --

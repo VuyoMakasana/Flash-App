@@ -1071,6 +1071,74 @@ async function migrate() {
     throw err;
   } finally {
     client33.release();
+  }
+
+  // ── v34 ─────────────────────────────────────────────────────────────────────────────────
+  // Admin platform Phase 2: admin-account password-reset/change support.
+  // See migrateV34's own comment for detail.
+  const client34 = await pool.connect();
+  try {
+    await migrateV34(client34);
+  } catch (err) {
+    console.error('Migration v34 failed:', err.message);
+    throw err;
+  } finally {
+    client34.release();
+  }
+
+  // ── v35 ─────────────────────────────────────────────────────────────────────────────────
+  const client35 = await pool.connect();
+  try {
+    await migrateV35(client35);
+  } catch (err) {
+    console.error('Migration v35 failed:', err.message);
+    throw err;
+  } finally {
+    client35.release();
+  }
+
+  // ── v36 ─────────────────────────────────────────────────────────────────────────────────
+  const client36 = await pool.connect();
+  try {
+    await migrateV36(client36);
+  } catch (err) {
+    console.error('Migration v36 failed:', err.message);
+    throw err;
+  } finally {
+    client36.release();
+  }
+
+  // ── v37 ─────────────────────────────────────────────────────────────────────────────────
+  const client37 = await pool.connect();
+  try {
+    await migrateV37(client37);
+  } catch (err) {
+    console.error('Migration v37 failed:', err.message);
+    throw err;
+  } finally {
+    client37.release();
+  }
+
+  // ── v38 ─────────────────────────────────────────────────────────────────────────────────
+  const client38 = await pool.connect();
+  try {
+    await migrateV38(client38);
+  } catch (err) {
+    console.error('Migration v38 failed:', err.message);
+    throw err;
+  } finally {
+    client38.release();
+  }
+
+  // ── v39 ─────────────────────────────────────────────────────────────────────────────────
+  const client39 = await pool.connect();
+  try {
+    await migrateV39(client39);
+  } catch (err) {
+    console.error('Migration v39 failed:', err.message);
+    throw err;
+  } finally {
+    client39.release();
     await pool.end();
   }
 
@@ -2083,4 +2151,319 @@ async function migrateV33(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33 };
+// ─── v34: admin-platform Phase 2 — password reset/change for admins ─────────
+// docs/ADMIN_PLATFORM_PHASE0_ARCHITECTURE_NOTES.md §2.1 confirmed `admins`
+// (v18) has no forced-reset flag, no password-change-invalidation timestamp,
+// and no token table of its own (email_tokens.user_id is a hard FK to
+// `users`, not reusable for an admins.id — confirmed by reading its v5
+// definition directly). Both additions here are purely additive; no
+// existing admins row, column, or query is touched.
+//
+// force_password_reset: set true only when Flash staff seeds an account with
+// a temporary password (adminController.js's login/change-password/reset-
+// password all clear it back to false once a real password is set) — lets a
+// seeded temporary credential be *structurally* prevented from becoming
+// permanent, not just a documentation reminder.
+//
+// password_changed_at: the actual session-invalidation mechanism for
+// change-password/reset-password ("invalidate other active sessions" per
+// the Phase 2 task). Admin JWTs (8h, no refresh-token table the way user/
+// driver have) can't be bulk-revoked by enumerating issued `jti`s — nothing
+// persists those. Comparing each token's own `iat` claim against this
+// column at verify time (middleware/auth.js) achieves the same real effect
+// without a new revocation-list table: any token issued before the most
+// recent password change is rejected on its very next use, regardless of
+// its 8h expiry. NULL (never changed) never rejects anything.
+//
+// admin_password_tokens: the reset-token table, same shape as email_tokens
+// but FK'd to admins(id) instead of users(id) and with no `type` column —
+// admins are never self-registered (Phase 0 §2.1: real rows are created by
+// Flash directly), so there is no email-verification token type to
+// distinguish from password_reset the way users/drivers need.
+async function migrateV34(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE admins ADD COLUMN IF NOT EXISTS force_password_reset BOOLEAN NOT NULL DEFAULT false`);
+    await client.query(`ALTER TABLE admins ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_password_tokens (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        admin_id   UUID NOT NULL REFERENCES admins(id) ON DELETE CASCADE,
+        token      VARCHAR(128) NOT NULL UNIQUE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at    TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_admin_password_tokens_admin_id ON admin_password_tokens(admin_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v34 completed: admins.force_password_reset/password_changed_at + admin_password_tokens table');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v34 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v35: seed the founder's real Flash Admin account ───────────────────────
+// Admin-platform Phase 2, founder-approved. Replaces the never-populated
+// ADMIN_EMAIL/ADMIN_PASSWORD_HASH env-var identity (stale even in
+// .env.example — see docs/ADMIN_PLATFORM_PHASE0_ARCHITECTURE_NOTES.md §5.1)
+// with a real, individual `admins` row for makasanaivyson@gmail.com, the
+// same real-account model every other admin already uses (v18).
+//
+// The hash below is bcrypt, cost 12 (matching this codebase's convention
+// everywhere else — adminController.js, authController.js) — never the
+// plaintext, which was never written to any file, commit, or log; it was
+// piped directly from a throwaway, git-ignored, immediately-deleted local
+// script straight into bcrypt.hash() and discarded. A bcrypt hash is
+// designed to be safely stored exactly like this — the same way every
+// other password_hash column in this schema already is.
+//
+// force_password_reset = true: this is a real, temporary credential. Every
+// admin JSON-API route except /change-password and /logout refuses to
+// serve a request from this account until it's changed (adminController.js
+// blockIfForcePasswordReset), so the temporary password can be used for
+// exactly one thing — setting a real one — and nothing else.
+//
+// ON CONFLICT (email) DO NOTHING: idempotent like every other migration in
+// this file, and specifically also safe to re-run *after* the founder has
+// already changed the password — re-running this migration must never
+// silently reset a real, already-rotated credential back to the temporary
+// one.
+async function migrateV35(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(
+      `INSERT INTO admins (name, email, password_hash, role, force_password_reset)
+       VALUES ($1, $2, $3, 'admin', true)
+       ON CONFLICT (email) DO NOTHING`,
+      [
+        'Vuyo',
+        'makasanaivyson@gmail.com',
+        '$2a$12$Ek9kLwumPYaEPmfUIWRHv.AnAMdMzqPIj99f9zIJ9/1yMRR962Pti',
+      ],
+    );
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v35 completed: founder Flash Admin account seeded (temporary password, force_password_reset=true)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v35 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v36: Admin Platform Phase 3 — the real `stores` table ───────────────────
+// Phase 0 (docs/ADMIN_PLATFORM_PHASE0_ARCHITECTURE_NOTES.md §3) confirmed no
+// `stores` table exists anywhere on this line — Flash is single-store at the
+// schema level today. Column shape matches the real, prior-art design this
+// task was told to reuse (`MULTI_TENANT_ARCHITECTURE_BLUEPRINT.md` §2,
+// `FLASH_STORE_ADMIN_DESIGN.md` §3.2), built and reasoned through on
+// production-readiness-audit but never merged — adapted here, re-verified,
+// not copied blindly. Two columns beyond that prior design:
+// onboarding_verified_by/_at — the audit pair the founder-approved Phase 1
+// proposal (docs/ADMIN_PLATFORM_PHASE1_STORE_IDENTITY_PROPOSAL.md, Option A/C)
+// specifically introduces, so every store's provenance ("which Flash admin
+// verified this store off-system, and when") is queryable later, not just
+// asserted. Nullable — the one seeded row below (Flash's own store) has no
+// separate "Flash verified Flash" step to record.
+//
+// Seeds exactly one row: Flash's own real store, same real address/
+// coordinates/service-area bounds as geoBoundary.js's FLASH_STORE_LOCATION/
+// NMB_BOUNDS (confirmed against the prior-art migration that seeded this
+// exact data before) — only inserted if the table is genuinely empty, so
+// this migration stays safely re-runnable.
+async function migrateV36(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS stores (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name VARCHAR(200) NOT NULL,
+        address TEXT,
+        lat DOUBLE PRECISION,
+        lng DOUBLE PRECISION,
+        service_area_bounds JSONB,
+        owner_name VARCHAR(200),
+        owner_email VARCHAR(255),
+        owner_phone VARCHAR(20),
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        onboarding_verified_by UUID REFERENCES admins(id),
+        onboarding_verified_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    const existing = await client.query(`SELECT id FROM stores LIMIT 1`);
+    if (existing.rows.length === 0) {
+      await client.query(
+        `INSERT INTO stores (name, address, lat, lng, service_area_bounds, is_active)
+         VALUES ($1, $2, $3, $4, $5::jsonb, true)`,
+        [
+          'Flash Closet',
+          '12B Mkele Street, Kwazakhele, 6205',
+          -33.8842210,
+          25.5853185,
+          JSON.stringify({ minLat: -34.03, maxLat: -33.76, minLng: 25.55, maxLng: 25.68 }),
+        ],
+      );
+    }
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v36 completed: stores table created, seeded with Flash\'s own real store row');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v36 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v37: Admin Platform Phase 3 — store_users + store_actions ───────────────
+// A genuinely separate auth/audit domain from `admins`/`admin_actions`
+// (FLASH_STORE_ADMIN_DESIGN.md §2/§3.2 — the founder's own explicit
+// correction: partner-store staff must never share a table, secret, or query
+// shape with Flash's internal team). No rows seeded here — a real
+// store_users row is only ever created deliberately, either by the manual
+// Flash-staff-verified onboarding flow (Phase 1 Option C) or, thereafter, by
+// an Owner inviting staff under their own store.
+async function migrateV37(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_users (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id UUID NOT NULL REFERENCES stores(id),
+        name VARCHAR(200) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(20) NOT NULL CHECK (role IN (
+          'owner', 'store_manager', 'inventory_staff', 'sales_staff', 'finance', 'marketing'
+        )),
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        force_password_reset BOOLEAN NOT NULL DEFAULT false,
+        password_changed_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_users_store_id ON store_users(store_id)`);
+
+    // store_password_tokens: same shape as admin_password_tokens (v34) —
+    // store_users' own independent forgot/reset-password flow. Deliberately
+    // its own table, not a shared one with admin_password_tokens, matching
+    // this whole domain's "never a shared query shape" rule.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_password_tokens (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_user_id UUID NOT NULL REFERENCES store_users(id) ON DELETE CASCADE,
+        token      VARCHAR(128) NOT NULL UNIQUE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at    TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_password_tokens_store_user_id ON store_password_tokens(store_user_id)`);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_actions (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_user_id UUID NOT NULL REFERENCES store_users(id) ON DELETE CASCADE,
+        store_id      UUID NOT NULL REFERENCES stores(id),
+        action_type   VARCHAR(50) NOT NULL,
+        target_table  VARCHAR(50),
+        target_id     UUID,
+        metadata      JSONB,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_actions_store_user_id ON store_actions(store_user_id, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_actions_store_id ON store_actions(store_id, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v37 completed: store_users + store_password_tokens + store_actions tables created');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v37 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v38: Admin Platform Phase 3 — flash_inventory.store_id ──────────────────
+// flash_inventory had no store_id at all. The internal Flash Admin Panel's
+// own "Add Product"/"Edit Product" AdminJS forms (adminPanel.js) do a raw
+// INSERT/UPDATE straight against this table via the SQL adapter, with no
+// knowledge of store_id — making the new column NOT NULL with no DB-level
+// default would either surface it as a confusing required field on that
+// form, or break "Add Product" outright the moment its INSERT omits it. The
+// column gets a real DEFAULT pointing at the one real seeded store (looked
+// up live, never guessed/hardcoded), so every existing caller (the internal
+// panel, the platform-wide /api/inventory REST endpoints) keeps working
+// completely unchanged. Every new store-portal-created product still gets a
+// real, explicit store_id from the authenticated store user's own token
+// (storeInventoryController.js) — the default only exists for callers that
+// were never store-aware.
+async function migrateV38(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE flash_inventory ADD COLUMN IF NOT EXISTS store_id UUID`);
+
+    const defaultStore = await client.query(`SELECT id FROM stores WHERE is_active = true LIMIT 1`);
+    if (!defaultStore.rows.length) {
+      throw new Error('No active store found to backfill flash_inventory.store_id');
+    }
+    const defaultStoreId = defaultStore.rows[0].id;
+    // Defense in depth: defaultStoreId comes from gen_random_uuid() in the
+    // DB itself, never user input, but this value gets string-interpolated
+    // into a DDL statement below (ALTER COLUMN ... SET DEFAULT does not
+    // accept a bind parameter) — validate its shape before that happens.
+    if (!/^[0-9a-f-]{36}$/i.test(defaultStoreId)) {
+      throw new Error(`Unexpected non-UUID store id: ${defaultStoreId}`);
+    }
+
+    await client.query(`UPDATE flash_inventory SET store_id = $1 WHERE store_id IS NULL`, [defaultStoreId]);
+    await client.query(`ALTER TABLE flash_inventory ALTER COLUMN store_id SET NOT NULL`);
+    await client.query(`ALTER TABLE flash_inventory ALTER COLUMN store_id SET DEFAULT '${defaultStoreId}'`);
+
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE flash_inventory ADD CONSTRAINT flash_inventory_store_id_fkey FOREIGN KEY (store_id) REFERENCES stores(id);
+      EXCEPTION WHEN duplicate_object THEN null;
+      END $$;
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_flash_inventory_store_id ON flash_inventory(store_id)`);
+
+    await client.query('COMMIT');
+    console.log(`Flash database migration v38 completed: flash_inventory.store_id added (FK+index), all existing products backfilled to the real seeded store (${defaultStoreId})`);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v38 failed:', err.message);
+    throw err;
+  }
+}
+
+// ─── v39: Admin Platform Phase 3 — orders.store_id gets a real index ────────
+// storeOrderController.js's every query filters `WHERE o.store_id = $1` —
+// orders.store_id has existed since v27 (type-fixed to UUID) but was never
+// actually populated or queried by store_id until now, so it never needed
+// an index before. Purely additive; matches the same chronological/
+// store-scoped indexing discipline already required by
+// MULTI_TENANT_ARCHITECTURE_BLUEPRINT.md §7.
+async function migrateV39(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_store_id ON orders(store_id, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v39 completed: orders(store_id, created_at) index');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v39 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39 };
