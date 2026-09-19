@@ -90,6 +90,11 @@ module.exports = () => ({
         },
       ],
       'expo-font',
+      // Required by posthog-react-native's Expo peer-dependency set (device
+      // locale is included in PostHog's default app-properties payload) —
+      // the installer couldn't auto-write this into a dynamic app.config.js
+      // either, same limitation as the @sentry/react-native entry above.
+      'expo-localization',
     ],
     extra: {
       eas: {

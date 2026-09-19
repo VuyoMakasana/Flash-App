@@ -21,6 +21,8 @@ export default function ChatScreen() {
   const [loading, setLoading]     = useState(true);
   const [sending, setSending]     = useState(false);
   const [connected, setConnected] = useState(false);
+  const [closed,    setClosed]    = useState(false);
+  const [blocked,   setBlocked]   = useState(false);
   const listRef                   = useRef(null);
   const socketRef                 = useRef(null);
 
@@ -33,6 +35,8 @@ export default function ChatScreen() {
       try {
         const data = await api.messages.getMessages(orderId);
         setMessages(data.messages || []);
+        setClosed(!!data.closed);
+        setBlocked(!!data.blocked);
       } catch (e) {
         Alert.alert('Error', 'Could not load messages');
       } finally {
@@ -109,12 +113,84 @@ export default function ChatScreen() {
     } catch (e) {
       // Remove temp message on failure
       setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
-      Alert.alert('Failed', 'Message not sent. Please try again.');
-      setInput(text); // restore input
+      if (e.message?.includes("can't message this")) {
+        setBlocked(true);
+      } else if (e.message?.includes('conversation has closed')) {
+        setClosed(true);
+        Alert.alert('Conversation Closed', e.message);
+      } else {
+        Alert.alert('Failed', 'Message not sent. Please try again.');
+        setInput(text); // restore input
+      }
     } finally {
       setSending(false);
     }
   }, [input, sending, orderId, user]);
+
+  // §2.7 audit — report/block the driver for this order. Reporting never
+  // suspends anyone automatically (an admin reviews it); blocking only
+  // affects future pairing, not this order already in progress.
+  const REPORT_REASONS = [
+    'Inappropriate messages',
+    'Threatening or abusive behavior',
+    'Spam or unwanted contact',
+    'Other',
+  ];
+
+  const submitReport = async (reason) => {
+    try {
+      await api.messages.reportUser(orderId, reason);
+      Alert.alert('Report submitted', 'Thanks for letting us know — our team will review this.');
+    } catch (e) {
+      Alert.alert('Could not submit report', e.message || 'Please try again.');
+    }
+  };
+
+  const handleReport = () => {
+    Alert.alert(
+      'Report driver',
+      'What happened?',
+      [
+        ...REPORT_REASONS.map((reason) => ({ text: reason, onPress: () => submitReport(reason) })),
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
+
+  const handleBlock = () => {
+    Alert.alert(
+      'Block this driver?',
+      "Messaging and calling with this driver will stop immediately, and you won't be paired with them again on future orders. Your current delivery will still complete normally.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Block',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.messages.blockUser(orderId);
+              setBlocked(true);
+              Alert.alert('Driver blocked', "Messaging with this driver has stopped, and you won't be matched with them again.");
+            } catch (e) {
+              Alert.alert('Could not block driver', e.message || 'Please try again.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleMoreOptions = () => {
+    Alert.alert(
+      'More options',
+      null,
+      [
+        { text: 'Report driver', onPress: handleReport },
+        { text: 'Block driver', style: 'destructive', onPress: handleBlock },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    );
+  };
 
   const renderMessage = ({ item: msg }) => {
     const isMe = msg.sender_role === 'user';
@@ -156,6 +232,9 @@ export default function ChatScreen() {
         <Text style={s.headerText}>
           {connected ? 'Connected — messages are live' : 'Connecting...'}
         </Text>
+        <Pressable style={s.moreBtn} onPress={handleMoreOptions} hitSlop={10}>
+          <Ionicons name="ellipsis-horizontal" size={18} color="#6b7280" />
+        </Pressable>
       </View>
 
       {/* Messages list */}
@@ -177,29 +256,41 @@ export default function ChatScreen() {
       )}
 
       {/* Input bar */}
-      <View style={s.inputBar}>
-        <TextInput
-          style={s.textInput}
-          placeholder="Message your driver..."
-          placeholderTextColor="#9ca3af"
-          value={input}
-          onChangeText={setInput}
-          multiline
-          maxLength={500}
-          onSubmitEditing={handleSend}
-          returnKeyType="send"
-        />
-        <Pressable
-          style={[s.sendBtn, (!input.trim() || sending) && s.sendBtnDisabled]}
-          onPress={handleSend}
-          disabled={!input.trim() || sending}
-        >
-          {sending
-            ? <ActivityIndicator size="small" color="#fff" />
-            : <Ionicons name="send" size={18} color="#fff" />
-          }
-        </Pressable>
-      </View>
+      {blocked ? (
+        <View style={s.closedBar}>
+          <Ionicons name="ban-outline" size={16} color="#9ca3af" />
+          <Text style={s.closedText}>You can't message this driver.</Text>
+        </View>
+      ) : closed ? (
+        <View style={s.closedBar}>
+          <Ionicons name="lock-closed-outline" size={16} color="#9ca3af" />
+          <Text style={s.closedText}>This conversation has closed for this order.</Text>
+        </View>
+      ) : (
+        <View style={s.inputBar}>
+          <TextInput
+            style={s.textInput}
+            placeholder="Message your driver..."
+            placeholderTextColor="#9ca3af"
+            value={input}
+            onChangeText={setInput}
+            multiline
+            maxLength={500}
+            onSubmitEditing={handleSend}
+            returnKeyType="send"
+          />
+          <Pressable
+            style={[s.sendBtn, (!input.trim() || sending) && s.sendBtnDisabled]}
+            onPress={handleSend}
+            disabled={!input.trim() || sending}
+          >
+            {sending
+              ? <ActivityIndicator size="small" color="#fff" />
+              : <Ionicons name="send" size={18} color="#fff" />
+            }
+          </Pressable>
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -209,7 +300,8 @@ const s = StyleSheet.create({
   center:    { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header:    { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, paddingHorizontal: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
   dot:       { width: 8, height: 8, borderRadius: 4 },
-  headerText:{ color: '#6b7280', fontSize: 12, fontWeight: '500' },
+  headerText:{ color: '#6b7280', fontSize: 12, fontWeight: '500', flex: 1 },
+  moreBtn:   { padding: 4 },
   list:      { padding: 16, gap: 8, paddingBottom: 8 },
   msgRow:    { flexDirection: 'row' },
   msgRowMe:  { justifyContent: 'flex-end' },
@@ -229,6 +321,8 @@ const s = StyleSheet.create({
   emptyTitle:{ fontSize: 16, fontWeight: '600', color: '#374151' },
   emptyText: { fontSize: 13, color: '#9ca3af' },
   inputBar:  { flexDirection: 'row', alignItems: 'flex-end', gap: 10, padding: 12, paddingHorizontal: 16, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#f3f4f6' },
+  closedBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 16, backgroundColor: '#f9fafb', borderTopWidth: 1, borderTopColor: '#f3f4f6' },
+  closedText:{ fontSize: 13, color: '#9ca3af', fontWeight: '500' },
   textInput: { flex: 1, maxHeight: 100, borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, color: '#111827', backgroundColor: '#f9fafb' },
   sendBtn:   { width: 44, height: 44, borderRadius: 22, backgroundColor: '#0a0a0a', alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { backgroundColor: '#d1d5db' },

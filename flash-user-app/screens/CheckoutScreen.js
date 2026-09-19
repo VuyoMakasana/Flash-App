@@ -6,9 +6,10 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
 import api from '../services/api';
+import analytics from '../services/analytics';
 
 const TIME_SLOTS = ['ASAP', '10:00 - 12:00', '12:00 - 14:00', '17:00 - 19:00'];
 
@@ -28,6 +29,8 @@ export default function CheckoutScreen() {
   const [realDrivers, setRealDrivers]       = useState([]);
   const [selectedDriverId, setSelectedDriverId] = useState(null);
   const [name, setName] = useState(profile.name || '');
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Checkout'); }, []));
   const [phone, setPhone] = useState(profile.phone || '');
   const [email, setEmail] = useState(profile.email || '');
   const [address, setAddress] = useState(profile.address || '');
@@ -81,9 +84,10 @@ export default function CheckoutScreen() {
 
   // ── Fetch saved addresses so the delivery-address field can be picked
   // instead of retyped every time (Home/Work/Other, per AddressScreen.js).
-  // The typed/selected text is still just a label sent to the driver -
-  // dropoff_lat/dropoff_lng always come from the device's live GPS position
-  // below, unchanged, since this app has no address-to-coordinate geocoding.
+  // The typed/selected text is the label sent to the driver; the actual
+  // dropoff_lat/dropoff_lng resolution (selected address's own geocoded
+  // coordinates when available, live GPS as fallback) happens in
+  // handleProceedToPayment below.
   useEffect(() => {
     const loadSavedAddresses = async () => {
       try {

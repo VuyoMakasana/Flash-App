@@ -1001,6 +1001,76 @@ async function migrate() {
     throw err;
   } finally {
     client29.release();
+  }
+
+  // ── v30 ─────────────────────────────────────────────────────────────────────────────────
+  // Note (security-fixes reconciliation, 2026-09-15): numbered v37 on the
+  // unmerged production-readiness-audit line, where v30-v36 were multi-tenant
+  // Store Admin schema migrations (stores, store_users, store-scoped
+  // inventory/staff/images) that are deliberately NOT part of this
+  // reconciliation -- see docs/audits/SECURITY_REMEDIATION_LOG.md, Phase 0.
+  // Renumbered to the next free slot on this line (v30) since the tables
+  // this migration creates (user_blocks, chat_reports) have no dependency
+  // on any multi-tenant schema.
+  const client30 = await pool.connect();
+  try {
+    await migrateV30(client30);
+  } catch (err) {
+    console.error('Migration v30 failed:', err.message);
+    throw err;
+  } finally {
+    client30.release();
+  }
+
+  // ── v31 ─────────────────────────────────────────────────────────────────────────────────
+  // Note (security-fixes reconciliation): numbered v38 on the unmerged
+  // production-readiness-audit line (v31-v37 there were multi-tenant Store
+  // Admin migrations, deliberately excluded here -- see
+  // docs/audits/SECURITY_REMEDIATION_LOG.md, Phase 0). Renumbered to v31,
+  // the next free slot on this line; purely additive indexes, no schema
+  // dependency on anything excluded.
+  const client31 = await pool.connect();
+  try {
+    await migrateV31(client31);
+  } catch (err) {
+    console.error('Migration v31 failed:', err.message);
+    throw err;
+  } finally {
+    client31.release();
+  }
+
+  // ── v32 ─────────────────────────────────────────────────────────────────────────────────
+  // Note (security-fixes reconciliation): numbered v39 on the unmerged
+  // production-readiness-audit line (v32-v38 there were multi-tenant Store
+  // Admin migrations, deliberately excluded here -- see
+  // docs/audits/SECURITY_REMEDIATION_LOG.md, Phase 0). Renumbered to v32,
+  // the next free slot on this line; purely additive columns/indexes on
+  // orders, no schema dependency on anything excluded.
+  const client32 = await pool.connect();
+  try {
+    await migrateV32(client32);
+  } catch (err) {
+    console.error('Migration v32 failed:', err.message);
+    throw err;
+  } finally {
+    client32.release();
+  }
+
+  // ── v33 ─────────────────────────────────────────────────────────────────────────────────
+  // Note (security-fixes reconciliation): numbered v40 on the unmerged
+  // production-readiness-audit line (v33-v39 there were multi-tenant Store
+  // Admin migrations, deliberately excluded here -- see
+  // docs/audits/SECURITY_REMEDIATION_LOG.md, Phase 0). Renumbered to v33,
+  // the next free slot on this line; purely additive indexes on existing
+  // platform tables, no schema dependency on anything excluded.
+  const client33 = await pool.connect();
+  try {
+    await migrateV33(client33);
+  } catch (err) {
+    console.error('Migration v33 failed:', err.message);
+    throw err;
+  } finally {
+    client33.release();
     await pool.end();
   }
 
@@ -1789,4 +1859,228 @@ async function migrateV29(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29 };
+// ─── v30: chat block/report — §2.7 production-readiness audit ────────────────
+// Section 2.2 deferred "blocking/reporting" as a real design decision rather
+// than a chat-only bolt-on; §2.7 is where that design was approved and built.
+// Two small, purpose-built tables rather than overloading trusted_drivers
+// (which already means the opposite thing -- a customer requesting a
+// preferred driver again; a 'blocked' status there would conflate two
+// opposite concepts under one UNIQUE(user_id, driver_id) constraint).
+//
+// user_blocks: one-directional "don't pair us again" record. Symmetric --
+// either party can block the other. Enforced going forward (autoMatchService.js
+// fleet auto-assignment, Driver.getNearby() pick-a-driver mode) AND
+// immediately against any currently-active order between the two parties
+// (Message.sendMessage -- a block ends chat right away, not just future
+// matching; see UserBlock.isBlockedPair). Indexed for the exact three real
+// query shapes this table gets, not the columns alone -- see below.
+//
+// chat_reports: a real, admin-reviewed queue -- reporting never
+// auto-suspends anyone (same "a human confirms before any consequence"
+// principle as the driver-fraud work in §2.4), just creates a real,
+// investigatable record. message_id is nullable and ON DELETE SET NULL
+// (not CASCADE) so a report survives even if the underlying message is
+// ever removed -- the report itself is the durable record, not the message.
+async function migrateV30(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE TABLE IF NOT EXISTS user_blocks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      blocker_id UUID NOT NULL,
+      blocker_role VARCHAR(10) NOT NULL CHECK (blocker_role IN ('user','driver')),
+      blocked_id UUID NOT NULL,
+      blocked_role VARCHAR(10) NOT NULL CHECK (blocked_role IN ('user','driver')),
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(blocker_id, blocked_id)
+    )`);
+    // The UNIQUE(blocker_id, blocked_id) constraint above already gives a
+    // composite index covering UserBlock.isBlockedPair's exact-pair lookup
+    // in both directions (each OR-branch is a direct hit on this same
+    // index, just with swapped literal params) -- no separate index needed
+    // for that query. These two are for the *other* real query shape,
+    // UserBlock.getBlockedDriverIdsForUser: "all of this person's blocks in
+    // one specific direction" -- composite on (id, opposite_role) rather
+    // than a single-column index, so the role filter is answered by the
+    // same index lookup instead of a separate heap recheck. Every block is
+    // always user<->driver (never user-user or driver-driver, enforced by
+    // UserBlock.blockOtherPartyInOrder always setting opposite roles), so
+    // these two indexes are exactly the two directions ever queried.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON user_blocks(blocker_id, blocked_role)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_id, blocker_role)`);
+
+    await client.query(`CREATE TABLE IF NOT EXISTS chat_reports (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+      reporter_id UUID NOT NULL,
+      reporter_role VARCHAR(10) NOT NULL CHECK (reporter_role IN ('user','driver')),
+      reported_id UUID NOT NULL,
+      reported_role VARCHAR(10) NOT NULL CHECK (reported_role IN ('user','driver')),
+      message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+      reason TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','reviewed','actioned','dismissed')),
+      admin_notes TEXT,
+      reviewed_by UUID REFERENCES admins(id),
+      reviewed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+    // Covers the three real admin-side lookups: the pending queue (status +
+    // recency, one composite index answers both the filter and the sort),
+    // "every report against this person" (reported_id), and "every report
+    // this person has filed" (reporter_id) -- the latter matters for
+    // spotting a bad-faith serial reporter, the same "admin can reconstruct
+    // what happened" principle as §2.4/§2.13.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_order ON chat_reports(order_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_status ON chat_reports(status, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_reported ON chat_reports(reported_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_chat_reports_reporter ON chat_reports(reporter_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v30 completed: user_blocks + chat_reports tables (chat block/report, §2.7)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v30 failed:', err.message);
+    throw err;
+  }
+}
+// §2.11 audit (traffic-scaling path) — the three §2.10 stuck-order timeout
+// crons (cancelAbandonedPaymentPendingOrders, cancelStalePreparingOrders,
+// recoverStuckPaidOrders, orderStateMachineService.js) each query
+// `WHERE status = <one literal> AND updated_at < NOW() - interval`.
+// Before this, orders only had status and updated_at indexed separately
+// (idx_orders_status, idx_orders_updated_at) — usable individually, but
+// not as efficient as one composite index scan, and neither is as
+// selective on its own once the table has real long-term volume (most
+// orders are completed/cancelled at any given time; only a small,
+// fast-draining fraction ever sit in payment_pending/preparing/paid). A
+// single non-partial composite index (not three narrow partial ones, the
+// pattern used for idx_orders_stuck_delivery_check/idx_orders_driver_
+// connection_check) serves all three crons' different status literals at
+// once, and is reusable by any future staleness-detection query too —
+// the same complementary shape as the existing idx_orders_status_created
+// (status, created_at DESC), just keyed on updated_at instead. Verified
+// with real EXPLAIN ANALYZE against 80,000 synthetic orders (realistic
+// long-term volume, only ~0.1% in each transient status — see
+// docs/audits/SECTION_2.11_TRAFFIC_SCALING_AUDIT.md): all three cron
+// queries use this index, sub-millisecond, not a sequential scan.
+async function migrateV31(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_status_updated ON orders(status, updated_at)`);
+
+    // Second, independently-discovered fix bundled into the same migration:
+    // orders.parent_order_id (self-referential FK to orders.id, written once
+    // by Return.js when creating a return's reverse-delivery order, never
+    // read back anywhere -- the return<->original-order relationship is
+    // actually looked up via return_requests.order_id/return_order_id
+    // instead) had NO supporting index. Postgres does not automatically
+    // index foreign key columns, and every DELETE (or key-changing UPDATE,
+    // though orders.id is a UUID PK and is never updated in practice) of an
+    // orders row requires checking whether any OTHER row's parent_order_id
+    // points at it -- without an index, that check is a full sequential
+    // scan of the entire orders table, once PER ROW deleted. No live
+    // application code path deletes from orders today (confirmed by
+    // grepping the whole backend), so this wasn't biting real traffic, but
+    // it will bite the next bulk-cleanup/data-retention script that ever
+    // needs to delete order rows -- confirmed directly, not theoretically:
+    // a routine synthetic-data cleanup during this section's own scale
+    // verification stalled for 12+ minutes deleting ~71,000 rows and had
+    // to be cancelled, and pg_stat_activity showed the exact query it was
+    // stuck on was Postgres's own internal parent_order_id FK-integrity
+    // check. Trivial, purely additive, zero behavior change to add.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_parent_order_id ON orders(parent_order_id) WHERE parent_order_id IS NOT NULL`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v31 completed: orders(status, updated_at) + orders(parent_order_id) indexes (§2.11, scale + FK-check fixes)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v31 failed:', err.message);
+    throw err;
+  }
+}
+
+// §2.12 audit (store missed-order reliability) — a new order reaching
+// pending_store_acceptance had ZERO proactive admin-facing signal: no
+// io.to('admin') socket alert (every other real admin alert in this
+// codebase -- SOS, stuck-delivery, driver-connection-lost, refund-failed
+// -- has one; this transition never did), and no email fallback either
+// (emailService.js already has the exact proven pattern for "don't rely
+// solely on a live socket connection", sendSosAlertEmail/
+// sendReturnAwaitingReviewEmail -- nothing equivalent existed here). Worse,
+// when the 15-minute store-acceptance-timeout cron (or the 30-minute
+// stale-preparing one, §2.10) actually auto-cancelled a genuinely missed
+// order -- a real lost sale -- that also produced nothing but a
+// console.log, breaking the "admin can reconstruct what happened"
+// principle already enforced everywhere else in this audit.
+//
+// These two idempotent escalation-flag columns (same shape as
+// stuck_delivery_flagged_at/driver_connection_flagged_at) back a new,
+// founder-confirmed design: an immediate socket alert on entry to
+// pending_store_acceptance, a one-time escalation email if it's still
+// unaccepted after 5 minutes (leaving a real 10-minute buffer before the
+// 15-minute auto-cancel), the same shape for preparing at 20/30 minutes,
+// and a distinct "you just missed this order" email when the timeout
+// actually fires. See orderStateMachineService.js's
+// escalateStuckPendingAcceptanceOrders/escalateStuckPreparingOrders.
+async function migrateV32(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS acceptance_escalated_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS preparation_escalated_at TIMESTAMPTZ`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_acceptance_escalation_check ON orders(status, updated_at) WHERE acceptance_escalated_at IS NULL`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_preparation_escalation_check ON orders(status, updated_at) WHERE preparation_escalated_at IS NULL`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v32 completed: orders.acceptance_escalated_at + preparation_escalated_at (§2.12, store missed-order reliability)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v32 failed:', err.message);
+    throw err;
+  }
+}
+
+// §2.13 audit (full admin visibility) — driver_commission_debts and
+// driver_penalties (real money owed to Flash by drivers, and the actual
+// record of why a driver was penalized/auto-suspended) were previously
+// visible only as an aggregate total on a driver's page — no per-row
+// browse, so an admin investigating a real dispute had no path to the
+// individual records without raw DB access. admin_actions (the admin
+// panel's own audit log) and driver_subscriptions/premium_subscriptions
+// (real recurring revenue, previously dashboard-aggregate-only) had the
+// same gap. All five are being promoted to real, read-only, browsable
+// AdminJS resources (adminPanel.js) — each needs a plain index on its own
+// "when did this happen" column (RESOURCE_TIMESTAMP_COLUMNS,
+// adminResourceDefaults.js) for the resource's default most-recent-first
+// sort to stay a real index scan instead of a full-table sort as these
+// tables grow, matching this audit's own §2.11 scale standard. The
+// existing indexes on these five tables (driver_id/status/admin_id-scoped
+// composites) don't cover a *global*, unscoped "most recent overall"
+// sort — confirmed by checking each table's actual index list, not
+// assumed.
+async function migrateV33(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_commission_debts_created_at ON driver_commission_debts(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_penalties_created_at ON driver_penalties(created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_admin_actions_created_at ON admin_actions(created_at DESC)`);
+    // driver_subscriptions/premium_subscriptions renew via UPSERT on the
+    // same row (confirmed directly -- Admin.getFinancials()'s own comment:
+    // "premium_subscriptions itself can't be [summed for revenue] since
+    // renewals upsert the same row"), so updated_at (last real change --
+    // a renewal or a cancellation), not created_at (this row's original,
+    // one-time insert), is the column that actually answers "when did
+    // something happen here" -- same reasoning already applied to
+    // driver_wallets in RESOURCE_TIMESTAMP_COLUMNS.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_subscriptions_updated_at ON driver_subscriptions(updated_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_premium_subscriptions_updated_at ON premium_subscriptions(updated_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v33 completed: chronological-sort indexes for the five new §2.13 admin resources');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v33 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33 };

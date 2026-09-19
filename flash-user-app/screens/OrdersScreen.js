@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
+import analytics from '../services/analytics';
 
 const STATUS_COLOR = {
   created: '#f59e0b',
@@ -26,6 +27,8 @@ export default function OrdersScreen() {
   // before fetchOrders()'s response actually arrived. This tracks the
   // fetch itself instead.
   const [ordersLoading, setOrdersLoading] = useState(true);
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Orders'); }, []));
 
   useEffect(() => {
     (async () => {

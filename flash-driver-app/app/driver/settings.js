@@ -30,7 +30,7 @@ export default function DriverSettings() {
   const handleDeleteAccount = () => {
     Alert.alert(
       'Delete Account',
-      'This will permanently delete your driver account, earnings history, and all personal data. This cannot be undone.',
+      'This will permanently delete your personal details, vehicle info, and uploaded documents. This cannot be undone. Your past earnings and delivery history are kept for accounting purposes but are no longer linked to your name or contact details.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -42,7 +42,7 @@ export default function DriverSettings() {
               await driverApi.driver.deleteAccount();
               await logout();
             } catch (e) {
-              Alert.alert('Error', e.message || 'Could not delete account. Contact makasanaivyson@gmail.com');
+              Alert.alert('Error', e.message || 'Could not delete account. Contact support@flashdelivery.co.za');
             } finally {
               setDeleting(false);
             }

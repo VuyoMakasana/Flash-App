@@ -77,7 +77,7 @@ describe('PaymentController.confirmCashReceived', () => {
   test('records commission on successful cash confirmation', async () => {
     cashOtpService.verifyOtp.mockResolvedValue(true);
     commissionService.checkCommissionBlock.mockResolvedValue({ blocked: false, debtAmount: 0, unpaidDeliveries: 0 });
-    commissionService.recordCashCommission.mockResolvedValue();
+    commissionService.recordCashCommission.mockResolvedValue(20);
     updateOrderStatus.mockResolvedValue();
 
     const client = mockClient();
@@ -106,6 +106,9 @@ describe('PaymentController.confirmCashReceived', () => {
     const body = res.json.mock.calls[0][0];
     expect(body.success).toBe(true);
     expect(body.commission.recorded).toBe(true);
+    // The controller reports back whatever recordCashCommission actually
+    // computed and recorded for this order, not a hardcoded value.
+    expect(body.commission.amount).toBe(20);
   });
 
   test('rolls back transaction when OTP verification fails', async () => {

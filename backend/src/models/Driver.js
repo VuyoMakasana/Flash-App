@@ -2,7 +2,9 @@ const BaseModel = require("./BaseModel");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const s3Service = require("../services/s3Service");
-const { PLANS, REQUIRED_DRIVER_DOCS } = require("../utils/constants");
+const { REQUIRED_DRIVER_DOCS } = require("../utils/constants");
+const UserBlock = require("./UserBlock");
+const Subscription = require("./Subscription");
 
 
 
@@ -85,12 +87,17 @@ class Driver extends BaseModel {
         );
       }
 
-      const plan = PLANS.monthly;
-      await client.query(
-        `INSERT INTO driver_subscriptions (driver_id, plan_type, price, deliveries_limit, expires_at, status, paystack_reference)
-         VALUES ($1,'monthly',$2,$3,NOW() + INTERVAL '30 days','active',$4)`,
-        [driver.id, plan.price, plan.deliveries, "TEST_MODE_GRANT"],
-      );
+      // Routed through the real activation path (Subscription.js's own
+      // comment on it: "the other half of purchaseDriverPlan()... called by
+      // webhookController once Paystack confirms a charge succeeded") rather
+      // than a duplicate raw INSERT, so a test-mode grant can never silently
+      // drift from what a real, paid activation actually does (expiry math
+      // via PLANS[planId].days, not a hardcoded interval; correctly expires
+      // any prior active row first). Passed `client` so this insert commits
+      // or rolls back atomically with the driver row above it — a test-mode
+      // driver can never end up existing without its subscription, or vice
+      // versa, even if something later in this transaction fails.
+      await Subscription.activateDriverPlan(driver.id, "monthly", "TEST_MODE_GRANT", client);
 
       return driver;
     });
@@ -306,73 +313,90 @@ class Driver extends BaseModel {
     }
 
     if (io && orderId) {
+      const orderRow = await this.query(
+        "SELECT user_id, dropoff_lat, dropoff_lng, is_cash_delivery, status FROM orders WHERE id=$1",
+        [orderId],
+      );
+      const order = orderRow.rows[0] || null;
+
+      // §2.3 audit — previously the customer only ever learned an ETA via
+      // the one-time milestone toasts below (15/10/5/2 min, "arrived"),
+      // never a persistent figure they could check anytime. Same
+      // status gate as those toasts (only meaningful once the driver has
+      // something to travel toward), computed on every ping rather than
+      // only at milestone crossings, so the tracking screen can show a
+      // continuously-updated "ETA: 8 min" instead of relying solely on
+      // a transient banner at four fixed thresholds.
+      let eta = null;
+      if (order && ["in_transit", "driver_arrived_store"].includes(order.status)) {
+        const distKm = this.calculateDistance(lat, lng, order.dropoff_lat, order.dropoff_lng);
+        if (distKm !== null) {
+          eta = { distanceKm: Number(distKm.toFixed(2)), estimatedMins: this.estimateMinutes(distKm) };
+        }
+      }
+
       io.to(`order:${orderId}`).emit("driver_location", {
         driverId,
         orderId,
         lat,
         lng,
         timestamp: new Date().toISOString(),
+        eta,
       });
 
-      await this.sendArrivalNotifications(driverId, orderId, lat, lng, io);
+      if (order) {
+        await this.sendArrivalNotifications(order, orderId, lat, lng, io);
+      }
     }
   }
 
-  static async sendArrivalNotifications(driverId, orderId, lat, lng, io) {
-    const orderRow = await this.query(
-      "SELECT user_id, dropoff_lat, dropoff_lng, is_cash_delivery, status FROM orders WHERE id=$1",
-      [orderId],
+  static async sendArrivalNotifications(order, orderId, lat, lng, io) {
+    const distKm = this.calculateDistance(
+      lat,
+      lng,
+      order.dropoff_lat,
+      order.dropoff_lng,
     );
+    const mins = this.estimateMinutes(distKm);
 
-    if (orderRow.rows.length) {
-      const order = orderRow.rows[0];
-      const distKm = this.calculateDistance(
-        lat,
-        lng,
-        order.dropoff_lat,
-        order.dropoff_lng,
-      );
-      const mins = this.estimateMinutes(distKm);
+    if (distKm !== null && ["in_transit", "driver_arrived_store"].includes(order.status)) {
+      let milestone = null;
+      if (distKm <= 0.15) {
+        milestone = {
+          key: "arrived",
+          message: "Your driver has arrived!",
+        };
+      } else if (mins <= 2) {
+        milestone = { key: "2min", message: "Driver is 2 minutes away!" };
+      } else if (mins <= 5) {
+        milestone = { key: "5min", message: "Driver is 5 minutes away" };
+      } else if (mins <= 10) {
+        milestone = {
+          key: "10min",
+          message: "Driver is about 10 minutes away",
+        };
+      } else if (mins <= 15) {
+        milestone = {
+          key: "15min",
+          message: "Driver is about 15 minutes away",
+        };
+      }
 
-      if (distKm !== null && ["in_transit", "driver_arrived_store"].includes(order.status)) {
-        let milestone = null;
-        if (distKm <= 0.15) {
-          milestone = {
-            key: "arrived",
-            message: "Your driver has arrived!",
-          };
-        } else if (mins <= 2) {
-          milestone = { key: "2min", message: "Driver is 2 minutes away!" };
-        } else if (mins <= 5) {
-          milestone = { key: "5min", message: "Driver is 5 minutes away" };
-        } else if (mins <= 10) {
-          milestone = {
-            key: "10min",
-            message: "Driver is about 10 minutes away",
-          };
-        } else if (mins <= 15) {
-          milestone = {
-            key: "15min",
-            message: "Driver is about 15 minutes away",
-          };
-        }
+      if (milestone) {
+        io.to(`user:${order.user_id}`).emit("arrival_update", {
+          orderId,
+          milestone: milestone.key,
+          message: milestone.message,
+          distanceKm: distKm.toFixed(2),
+          estimatedMins: mins,
+        });
 
-        if (milestone) {
-          io.to(`user:${order.user_id}`).emit("arrival_update", {
+        if (order.is_cash_delivery && milestone.key === "5min") {
+          io.to(`user:${order.user_id}`).emit("cash_reminder", {
             orderId,
-            milestone: milestone.key,
-            message: milestone.message,
-            distanceKm: distKm.toFixed(2),
-            estimatedMins: mins,
+            message:
+              "Please have your cash ready — driver is almost there!",
           });
-
-          if (order.is_cash_delivery && milestone.key === "5min") {
-            io.to(`user:${order.user_id}`).emit("cash_reminder", {
-              orderId,
-              message:
-                "Please have your cash ready — driver is almost there!",
-            });
-          }
         }
       }
     }
@@ -488,7 +512,7 @@ class Driver extends BaseModel {
       `SELECT o.id, o.order_number, o.status, o.delivery_mode, o.time_slot,
               o.total, o.driver_payout, o.pickup_address, o.dropoff_address,
               o.pickup_lat, o.pickup_lng, o.dropoff_lat, o.dropoff_lng,
-              o.is_cash_delivery, o.created_at, o.is_return_order,
+              o.is_cash_delivery, o.created_at, o.is_return_order, o.user_id,
               u.name as customer_name, u.phone as customer_phone,
               CASE WHEN o.is_return_order THEN (
                 SELECT COUNT(*) FROM return_request_items rri
@@ -506,10 +530,29 @@ class Driver extends BaseModel {
       [driverId],
     );
 
-    return result.rows[0] || null;
+    const order = result.rows[0];
+    // §2.7 audit — same immediate call-cutoff-on-block reasoning as
+    // Order.getByIdWithDetails, mirrored for the driver's own view of the
+    // customer's phone number.
+    if (order?.user_id && (await UserBlock.isBlockedPair(driverId, order.user_id))) {
+      order.customer_phone = null;
+    }
+    return order || null;
   }
 
-  static async getNearby(lat, lng, limit = 10) {
+  // §2.7 audit — userId (optional, defaults to excluding nothing) lets a
+  // customer's own chat blocks (user_blocks) filter their pick-a-driver
+  // results in both directions -- a driver they blocked, or one who
+  // blocked them, never shows up here. Same reasoning as
+  // autoMatchService.js's equivalent exclusion for fleet mode: blocked ids
+  // are fetched once (a single indexed lookup bounded by this one
+  // customer's own block count, never the whole user_blocks table) and
+  // excluded via a plain array filter, not a per-candidate-driver
+  // correlated subquery -- keeps this query's cost independent of how
+  // large user_blocks grows as the platform scales.
+  static async getNearby(lat, lng, limit = 10, userId = null) {
+    const blockedDriverIds = userId ? await UserBlock.getBlockedDriverIdsForUser(userId) : [];
+
     if (!lat || !lng) {
       const result = await this.query(
         `
@@ -523,9 +566,10 @@ class Driver extends BaseModel {
                ) as is_busy
         FROM drivers
         WHERE is_online = true AND status = 'approved'
+          AND NOT (id = ANY($2::uuid[]))
         ORDER BY rating DESC LIMIT $1
       `,
-        [limit],
+        [limit, blockedDriverIds],
       );
       return result.rows.map((d) => ({ ...d, estimated_fee: 35 }));
     }
@@ -546,6 +590,7 @@ class Driver extends BaseModel {
       FROM drivers d
       WHERE d.is_online = true AND d.status = 'approved'
         AND d.current_lat IS NOT NULL AND d.current_lng IS NOT NULL
+        AND NOT (d.id = ANY($4::uuid[]))
       ORDER BY distance_km ASC
       LIMIT $3
     `;
@@ -553,6 +598,7 @@ class Driver extends BaseModel {
       parseFloat(lat),
       parseFloat(lng),
       limit,
+      blockedDriverIds,
     ]);
     return result.rows.map((d) => ({
       ...d,

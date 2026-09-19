@@ -5,7 +5,9 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import driverApi from '../../services/api';
+import analytics from '../../services/analytics';
 
 // How long to keep polling the backend after the driver returns to the app
 // before giving up and showing a manual "Check Again" state.
@@ -58,6 +60,9 @@ const PLANS = [
 
 export default function SubscriptionScreen() {
   const router = useRouter();
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Subscription'); }, []));
+
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState(null);

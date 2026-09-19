@@ -211,33 +211,37 @@ describe("Production state machine API integration", () => {
   test("customer cancellation after assignment applies the confirmed 10/5/85 split", async () => {
     // Item value (subtotal) 500, delivery fee 90 →
     //   store 10% = 50, driver 5% = 25, customer = 425 (items) + 90 (delivery, in full) = 515.
-    db.query.mockResolvedValueOnce({
-      rows: [
-        {
-          id: ORDER_2_ID,
-          user_id: "user-1",
-          driver_id: "driver-2",
-          status: "driver_assigned",
-          delivery_payment_status: "assigned",
-          driver_paid: false,
-          payment_method: "card",
-          payment_status: "paid",
-          driver_payout: 90,
-          delivery_fee: 90,
-          subtotal: 500,
-        },
-      ],
-    });
-
-    // The pre-pickup split writes the order_cancellations row (RETURNING id)
-    // and the order_cancellation_store_shares row inside the same
-    // transaction as the wallet credit and status update — both of those
-    // are mocked at the service/model boundary (updateOrderStatus,
-    // DriverWallet.reversePending/creditAvailable), so only the two real
-    // client.query calls need mocking here.
+    //
+    // STALE-MOCK FIX: the §2.9 concurrency fix (65e26ed) moved the order
+    // lookup to `SELECT ... FOR UPDATE` as the FIRST statement inside the
+    // transaction (on the connected client), replacing what used to be a
+    // separate, unlocked `db.query()` read taken before the transaction
+    // opened. This test's mock was never updated to match — it kept
+    // stubbing a standalone `db.query()` call the real code no longer
+    // makes, while `mockClient.query`'s sequence still assumed the order
+    // lookup wasn't one of its calls at all. The real second call on the
+    // client (right after BEGIN) IS that locked SELECT, so the order row
+    // belongs there now, not on a separate `db.query` mock.
     const mockClient = {
       query: jest.fn()
         .mockResolvedValueOnce({}) // BEGIN
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: ORDER_2_ID,
+              user_id: "user-1",
+              driver_id: "driver-2",
+              status: "driver_assigned",
+              delivery_payment_status: "assigned",
+              driver_paid: false,
+              payment_method: "card",
+              payment_status: "paid",
+              driver_payout: 90,
+              delivery_fee: 90,
+              subtotal: 500,
+            },
+          ],
+        }) // SELECT ... FOR UPDATE (the order lookup, now inside the transaction)
         .mockResolvedValueOnce({ rows: [{ id: "cancellation-1" }] }) // INSERT order_cancellations RETURNING id
         .mockResolvedValueOnce({}) // INSERT order_cancellation_store_shares
         .mockResolvedValueOnce({}), // COMMIT

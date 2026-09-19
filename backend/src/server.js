@@ -482,6 +482,31 @@ cron.schedule('30 1 * * *', async () => {
               [order.driver_id]
             );
             console.warn(`[Cron] Driver ${order.driver_id} auto-suspended after 5 cancellations`);
+
+            // §2.4 audit — previously only a console.warn, leaving no
+            // admin-visible record of why/when a system auto-suspension
+            // happened. An admin looking at a suspended driver's own detail
+            // page (which already sums driver_penalties for that driver,
+            // adminPanel.js) had no way to see this without digging through
+            // server logs — real friction for dispute resolution ("why was
+            // I suspended?"). amount=0 since this isn't a financial penalty,
+            // just a real, dated, reasoned row. Best-effort and isolated in
+            // its own catch — this is a record of an action that already
+            // happened; a failure to write it must never block the customer
+            // notification/reassignment steps still to come below.
+            try {
+              await pool.query(
+                `INSERT INTO driver_penalties (driver_id, order_id, amount, reason, status)
+                 VALUES ($1, $2, 0, $3, 'applied')`,
+                [
+                  order.driver_id,
+                  order.id,
+                  `Auto-suspended by system: cancel_count reached ${driverCheck.rows[0].cancel_count} after order ${order.id} was stuck in ${order.status} for over 45 minutes.`,
+                ],
+              );
+            } catch (penaltyErr) {
+              console.warn(`[Cron] Failed to record auto-suspension penalty row for driver ${order.driver_id}:`, penaltyErr.message);
+            }
           }
 
           // Notify user with a friendlier message than the generic order_update.
@@ -621,19 +646,50 @@ cron.schedule('30 1 * * *', async () => {
           const pool2 = require('./config/database');
           const ioInstance = _io;
 
-          await pool2.query(
-            `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
- VALUES ($1, 'system', 'no_driver_available_timeout', 'full_refund')`,
-[order.id]
-          );
+          // §2.9 audit fix: the order_cancellations record and the status
+          // transition now share one transaction (matching every other
+          // real cancellation path in this codebase -- orderController.
+          // cancelOrder, rejectPendingAcceptance) instead of the INSERT
+          // committing on its own, ahead of and independent from
+          // updateOrderStatus's own transition. Previously, if
+          // updateOrderStatus then threw (e.g. the order was no longer in
+          // a cancellable state by the time this ran -- a driver accepted
+          // it in the same window this query already missed), the INSERT
+          // stayed committed regardless: a phantom cancellation record for
+          // an order that was never actually cancelled by this attempt.
+          const client = await pool2.connect();
+          try {
+            await client.query('BEGIN');
 
-          await updateOrderStatus(order.id, 'cancelled', {
-            actorId: 'system',
-            actorRole: 'system',
-            io: ioInstance,
-          });
+            await client.query(
+              `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
+               VALUES ($1, 'system', 'no_driver_available_timeout', 'full_refund')`,
+              [order.id],
+            );
 
-          if (['card', 'payflex'].includes(order.payment_method) && order.payment_status === 'paid') {
+            await updateOrderStatus(order.id, 'cancelled', {
+              actorId: 'system',
+              actorRole: 'system',
+              io: ioInstance,
+              externalClient: client,
+            });
+
+            await client.query('COMMIT');
+          } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+          } finally {
+            client.release();
+          }
+
+          // Payflex was fully removed as a payment method (paymentController.js,
+          // CRITICAL-3 fix) -- refundOrderPayment itself immediately rejects
+          // any payment_method other than 'card', so the old `['card',
+          // 'payflex'].includes(...)` check here implied a capability that
+          // no longer exists. Cash orders never reach this branch at all
+          // (order.payment_status would never be 'paid' pre-delivery), so
+          // this is just the one real case: a paid card order.
+          if (order.payment_method === 'card' && order.payment_status === 'paid') {
             await RefundService.refundOrderPayment(
               order.id,
               order.user_id,
@@ -696,6 +752,77 @@ cron.schedule('30 1 * * *', async () => {
       }
     } catch (e) {
       console.warn('[Cron] Store-acceptance timeout error:', e.message);
+    }
+  });
+
+  // PAYMENT-NEVER-INITIATED AUTO-CANCEL: Runs every 15 minutes.
+  // §2.10 audit (stuck-order state machine) — a customer who abandons
+  // checkout before ever calling initializePayment leaves that order, and
+  // the real flash_inventory stock Order.create() already decremented for
+  // it, stuck at payment_pending forever with nothing else to catch it.
+  // See orderStateMachineService.cancelAbandonedPaymentPendingOrders for
+  // the real logic and reasoning — kept there, not here, so it's
+  // independently unit-testable like paymentReconciliationJob.js's
+  // functions already are.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { cancelAbandonedPaymentPendingOrders } = require('./services/orderStateMachineService');
+      await cancelAbandonedPaymentPendingOrders({ io: _io });
+    } catch (e) {
+      console.warn('[Cron] Payment-never-initiated auto-cancel error:', e.message);
+    }
+  });
+
+  // STALE-PREPARING AUTO-CANCEL: Runs every 15 minutes.
+  // §2.10 audit — a store accepting an order (-> 'preparing') but never
+  // calling markReadyForPickup left it with no timeout at all, unlike
+  // pending_store_acceptance and waiting_for_driver. See
+  // orderStateMachineService.cancelStalePreparingOrders.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { cancelStalePreparingOrders } = require('./services/orderStateMachineService');
+      await cancelStalePreparingOrders({ io: _io });
+    } catch (e) {
+      console.warn('[Cron] Stale-preparing auto-cancel error:', e.message);
+    }
+  });
+
+  // STUCK-AT-PAID RETRY: Runs every 15 minutes.
+  // §2.10 audit — the paid -> pending_store_acceptance transition fires
+  // automatically right after payment confirms, but both real call sites
+  // swallow a failure to make that transition, and nothing else ever
+  // scanned for an order stuck at status='paid'. See
+  // orderStateMachineService.recoverStuckPaidOrders.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { recoverStuckPaidOrders } = require('./services/orderStateMachineService');
+      await recoverStuckPaidOrders({ io: _io });
+    } catch (e) {
+      console.warn('[Cron] Stuck-at-paid detection error:', e.message);
+    }
+  });
+
+  // ORDER-ACCEPTANCE ESCALATION: Runs every 5 minutes.
+  // §2.12 audit (store missed-order reliability) — a real, growing risk of
+  // an order sitting unaccepted with nothing telling anyone until the
+  // 15-minute auto-cancel silently refunds it. Runs at 5-minute cadence
+  // (not 15, like the timeout crons above) specifically so an order that
+  // crosses the 5-minute escalation threshold gets a real chance to be
+  // caught before the 15-minute cutoff, not just once right at the edge.
+  // See orderStateMachineService.escalateStuckPendingAcceptanceOrders /
+  // escalateStuckPreparingOrders for the real logic.
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const { escalateStuckPendingAcceptanceOrders } = require('./services/orderStateMachineService');
+      await escalateStuckPendingAcceptanceOrders();
+    } catch (e) {
+      console.warn('[Cron] Order-acceptance escalation error:', e.message);
+    }
+    try {
+      const { escalateStuckPreparingOrders } = require('./services/orderStateMachineService');
+      await escalateStuckPreparingOrders();
+    } catch (e) {
+      console.warn('[Cron] Order-preparation escalation error:', e.message);
     }
   });
 

@@ -1,12 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { View, Text, TextInput, Pressable, StyleSheet, ScrollView, Alert, ActivityIndicator, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
+import analytics from '../services/analytics';
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
   const { user, profile, updateProfile, logout } = useFlash();
+
+  useFocusEffect(useCallback(() => { analytics.screenViewed('Profile'); }, []));
+
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(profile.name || user?.name || '');
   const [phone, setPhone] = useState(profile.phone || user?.phone || '');

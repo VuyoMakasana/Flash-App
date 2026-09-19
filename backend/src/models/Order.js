@@ -11,6 +11,7 @@
 const BaseModel = require('./BaseModel');
 const { randomBytes } = require('crypto');
 const { calculateDistance } = require('../utils/helpers');
+const UserBlock = require('./UserBlock');
 
 // H-4 FIX: delivery fee used to be picked by the client (matching
 // pickup_mall_id/dropoff_mall_id, both client-supplied with no malls table
@@ -292,6 +293,46 @@ class Order extends BaseModel {
     });
   }
 
+  // Reverses exactly what create()'s FOR UPDATE-locked decrement removed
+  // for this order's flash_inventory items — called whenever an order is
+  // genuinely no longer going to be fulfilled (cancelled via the state
+  // machine, or a payment that never succeeded in the first place). Must
+  // run inside the caller's own transaction/client so the restock and the
+  // status/payment change that triggers it commit or roll back together.
+  //
+  // Mirrors create()'s own decrement condition exactly: only order_items
+  // with a real product_id AND a size were ever decremented (external/
+  // partner items and sizeless flash_inventory items were not touched at
+  // create() time either), so restocking anything else would restore
+  // stock that was never actually taken. A flash_inventory row that no
+  // longer exists (product deleted since the order was placed) has
+  // nothing real to restock into — logged, not silently swallowed, so a
+  // genuine "where did this stock go" question has a trail.
+  static async restockItems(orderId, client) {
+    const itemsResult = await client.query(
+      `SELECT product_id, size, quantity FROM order_items WHERE order_id = $1 AND product_id IS NOT NULL AND size IS NOT NULL`,
+      [orderId],
+    );
+
+    for (const item of itemsResult.rows) {
+      const invResult = await client.query(
+        `SELECT stock_by_size FROM flash_inventory WHERE id = $1 FOR UPDATE`,
+        [item.product_id],
+      );
+      if (!invResult.rows.length) {
+        console.warn(`[Order] restockItems: product ${item.product_id} no longer exists, skipping restock for order ${orderId}`);
+        continue;
+      }
+      const stock    = invResult.rows[0].stock_by_size || {};
+      const current  = parseInt(stock[item.size] || 0, 10);
+      const restored = { ...stock, [item.size]: current + item.quantity };
+      await client.query(
+        `UPDATE flash_inventory SET stock_by_size = $1, updated_at = NOW() WHERE id = $2`,
+        [JSON.stringify(restored), item.product_id],
+      );
+    }
+  }
+
   static async updateStatus(orderId, status, driverId = null) {
     const updates = { status, updated_at: new Date() };
     if (driverId) updates.driver_id = driverId;
@@ -338,6 +379,16 @@ class Order extends BaseModel {
     const order = result.rows[0];
     if (userId   && order.user_id   !== userId)   return null;
     if (driverId && order.driver_id !== driverId) return null;
+
+    // §2.7 audit — a block cuts off calling on this order immediately too,
+    // not just chat. There's no masked-calling layer yet (deferred to the
+    // pre-launch checklist, §2.2), so this can't erase a number the other
+    // party may have already noted down before blocking -- but it stops
+    // the app itself from displaying/re-serving it going forward, and the
+    // mobile Call button hides itself once phone is missing.
+    if (order.driver_id && (await UserBlock.isBlockedPair(order.user_id, order.driver_id))) {
+      order.driver_phone = null;
+    }
     return order;
   }
 
@@ -362,6 +413,20 @@ class Order extends BaseModel {
       LIMIT $2 OFFSET $3
     `;
     const result = await this.query(sql, [userId, limit, offset]);
+
+    // §2.7 audit — same phone redaction as getByIdWithDetails, batched: one
+    // query for all of this customer's blocked driver ids (bounded by
+    // their own block count, not this page's size or the platform's total
+    // order/block volume), then a plain in-memory Set lookup per row --
+    // never a per-row query, regardless of how many distinct drivers
+    // appear across this page of orders.
+    const blockedDriverIds = new Set(await UserBlock.getBlockedDriverIdsForUser(userId));
+    if (blockedDriverIds.size) {
+      result.rows.forEach((row) => {
+        if (blockedDriverIds.has(row.driver_id)) row.driver_phone = null;
+      });
+    }
+
     return result.rows;
   }
 
