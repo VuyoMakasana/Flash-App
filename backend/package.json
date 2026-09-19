@@ -4,6 +4,7 @@
   "description": "Flash delivery platform backend",
   "main": "server.js",
   "scripts": {
+    "postinstall": "node scripts/patch-adminjs-sql.js",
     "start": "node server.js",
     "start:prod": "pm2 start ecosystem.config.js",
     "stop:prod": "pm2 stop flash-backend",

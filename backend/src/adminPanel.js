@@ -1758,9 +1758,17 @@ async function mountAdminPanel(app) {
   );
 
   const dbName = new URL(process.env.DATABASE_URL).pathname.replace(/^\//, '');
+  // Explicit `schema: 'public'` (previously unset, silently falling back to
+  // a runtime `current_schema()` query) — Supabase always ships several
+  // non-public schemas (auth, storage, realtime) alongside ours, any of
+  // which could contain a same-named table. This scopes table/column
+  // discovery to public regardless of what current_schema() would resolve
+  // to. Doesn't cover every cross-schema collision on its own — see
+  // scripts/patch-adminjs-sql.js for the other half of this fix.
   const db = await new Adapter('postgresql', {
     connectionString: process.env.DATABASE_URL,
     database: dbName,
+    schema: 'public',
   }).init();
 
   // §2.13 audit (full admin visibility) — captured once so the startup log
