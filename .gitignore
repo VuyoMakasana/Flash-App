@@ -34,3 +34,10 @@ backend/logs/
 # ── Build output ──────────────────────────────────────────────────────────
 dist/
 build/
+
+# ── flash-store-portal ──────────────────────────────────────────────────────
+# Real source lives on the separate admin-platform branch, not here. What
+# shows up here is stray local build clutter (a dist/ build, node_modules/,
+# and a .env with only a non-secret local API base URL) from local testing —
+# ignored wholesale so it can never be accidentally committed, .env included.
+flash-store-portal/
