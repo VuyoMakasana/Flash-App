@@ -95,6 +95,11 @@ const storeOrderRoutes = require("./routes/storeOrderRoutes");
 const storeInventoryRoutes = require("./routes/storeInventoryRoutes");
 const storeStaffRoutes = require("./routes/storeStaffRoutes");
 const storeAnalyticsRoutes = require("./routes/storeAnalyticsRoutes");
+// Storefront port (from the multi-tenant-stageN line) — the customer-facing
+// public store directory, a different trust boundary from the Store Admin
+// Portal block below (no auth, no STORE_JWT_SECRET; same public/customer
+// domain as inventoryRoutes just above).
+const storefrontRoutes = require("./routes/storefrontRoutes");
 
 function createApp() {
   const app = express();
@@ -200,6 +205,7 @@ function createApp() {
   app.use("/api/returns", returnsRoutes);
   app.use("/api/fleet", fleetRoutes);
   app.use("/api/inventory", inventoryRoutes);
+  app.use("/api/stores", storefrontRoutes);
   app.use("/api/messages", messagesRoutes);
   app.use("/api/trusted-drivers", trustedDriverRoutes);
   app.use("/api/sos", sosRoutes);

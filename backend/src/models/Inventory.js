@@ -5,11 +5,25 @@ const BaseModel = require("./BaseModel");
 // endpoint should expose to an unauthenticated caller. Admin-only writes
 // (addProduct/updateStock) still return it via RETURNING * since that's an
 // admin action that legitimately needs to see what it just set.
-const PUBLIC_COLUMNS = `id, product_name, category, brand, price, sizes,
-  stock_by_size, image_url, description, is_active, created_at, updated_at`;
+// Table-qualified so getProducts (below) can safely add a JOIN to stores —
+// both tables have their own id/is_active/created_at columns, and an
+// unqualified list would become ambiguous the moment a second table is in
+// scope. getProduct further down has no join, so qualification is a no-op
+// there — same result set either way.
+const PUBLIC_COLUMNS = `flash_inventory.id, flash_inventory.product_name, flash_inventory.category,
+  flash_inventory.brand, flash_inventory.price, flash_inventory.sizes, flash_inventory.stock_by_size,
+  flash_inventory.image_url, flash_inventory.description, flash_inventory.is_active,
+  flash_inventory.created_at, flash_inventory.updated_at`;
 
 class Inventory extends BaseModel {
-  static async getProducts(category, page = 1, limit = 20) {
+  // Storefront port, Piece 4 — thread store_id + a joined store name into
+  // the one public listing query flash-user-app actually reads, plus an
+  // optional storeId filter for the storefront's per-store page. Ported
+  // from multi-tenant-stage7-customer-storefront's own getProducts;
+  // flash_inventory.store_id has been NOT NULL with a real FK to stores
+  // since migration v38, so this is a plain JOIN (not LEFT JOIN) — every
+  // row is guaranteed to have a matching store.
+  static async getProducts(category, page = 1, limit = 20, storeId = null) {
     const offset = (page - 1) * limit;
     // Final admin-panel completion pass, §4 — a real, active boost
     // (Boost.activateBoost, product_id-targeted) now actually ranks its
@@ -20,10 +34,24 @@ class Inventory extends BaseModel {
       SELECT 1 FROM store_boosts sb
       WHERE sb.product_id = flash_inventory.id AND sb.status = 'active' AND sb.expires_at > NOW()
     ) DESC`;
-    const query = category
-      ? `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true AND category=$3 ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`
-      : `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`;
-    const params = category ? [limit, offset, category] : [limit, offset];
+    const columns = `${PUBLIC_COLUMNS}, flash_inventory.store_id, stores.name AS store_name`;
+
+    // Built as a param list rather than a fixed ternary so category and
+    // storeId can combine or each be omitted independently; omitting both
+    // reproduces the exact prior query (aside from the added columns).
+    const conditions = ['flash_inventory.is_active=true'];
+    const params = [limit, offset];
+    if (category) {
+      params.push(category);
+      conditions.push(`flash_inventory.category=$${params.length}`);
+    }
+    if (storeId) {
+      params.push(storeId);
+      conditions.push(`flash_inventory.store_id=$${params.length}`);
+    }
+
+    const query = `SELECT ${columns} FROM flash_inventory JOIN stores ON stores.id = flash_inventory.store_id
+      WHERE ${conditions.join(' AND ')} ORDER BY ${boostedFirst}, flash_inventory.created_at DESC LIMIT $1 OFFSET $2`;
     const result = await this.query(query, params);
     return result.rows;
   }

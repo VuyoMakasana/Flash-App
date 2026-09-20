@@ -1139,6 +1139,17 @@ async function migrate() {
     throw err;
   } finally {
     client39.release();
+  }
+
+  // ── v40 ─────────────────────────────────────────────────────────────────────────────────
+  const client40 = await pool.connect();
+  try {
+    await migrateV40(client40);
+  } catch (err) {
+    console.error('Migration v40 failed:', err.message);
+    throw err;
+  } finally {
+    client40.release();
     await pool.end();
   }
 
@@ -2466,4 +2477,35 @@ async function migrateV39(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39 };
+// ─── v40: storefront port — stores.logo_url/banner_url/description ──────────
+// Ported from the multi-tenant-stageN line's own v35, applied here on top of
+// admin-platform's real stores table (which already has its own extra
+// onboarding_verified_by/_at columns that line never had — the two schemas
+// are otherwise identical). Nullable, additive only -- no existing store row
+// is affected, nothing destructive. All three columns are what
+// StorefrontController's public Store.listActive/findPublicById methods
+// (ported in this same change) actually select via PUBLIC_COLUMNS.
+// Correction, not the original plan: the storefront-implementation
+// comparison this port is based on named only logo_url/banner_url as the
+// gap — re-checking the real source migration directly (the ground rule for
+// this whole port) shows it adds `description` too, and admin-platform's own
+// v36 stores table confirmed does not have it either. Adding all three here
+// rather than silently under-porting one column the very next piece
+// (Store.js) depends on.
+async function migrateV40(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS logo_url TEXT`);
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS banner_url TEXT`);
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS description TEXT`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v40 completed: stores.logo_url/banner_url/description added (nullable, additive) — storefront port');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v40 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40 };
