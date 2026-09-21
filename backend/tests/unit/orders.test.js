@@ -11,44 +11,19 @@ jest.mock('../../src/config/database');
 const pool = require('../../src/config/database');
 
 // ─── Price validation ─────────────────────────────────────────────────────────
-
-describe('Order price validation', () => {
-  test('uses server-side price for known inventory items', async () => {
-    // Simulate the validation loop from Order.create
-    const inventoryPrice = 299.99;
-    const clientPrice    = 0.01; // attacker's price
-
-    const serverPrice = inventoryPrice; // inventory lookup wins
-    expect(serverPrice).toBe(299.99);
-    expect(serverPrice).not.toBe(clientPrice);
-  });
-
-  test('rejects external items with zero or negative price', () => {
-    const validateExternalPrice = (price) => {
-      const p = parseFloat(price || 0);
-      if (p <= 0) throw new Error('External item price must be greater than zero');
-      return p;
-    };
-
-    expect(() => validateExternalPrice(0)).toThrow(/greater than zero/);
-    expect(() => validateExternalPrice(-5)).toThrow(/greater than zero/);
-    expect(() => validateExternalPrice('0.01')).not.toThrow();
-    expect(() => validateExternalPrice(150)).not.toThrow();
-  });
-
-  test('subtotal is computed from server prices, not client subtotal', () => {
-    const items = [
-      { serverPrice: 299.99, quantity: 1 },
-      { serverPrice: 149.50, quantity: 2 },
-    ];
-
-    const computedSubtotal = items.reduce((sum, i) => sum + i.serverPrice * i.quantity, 0);
-    const clientSubtotal   = 1.00; // attacker's value
-
-    expect(computedSubtotal).toBeCloseTo(598.99, 2);
-    expect(computedSubtotal).not.toBe(clientSubtotal);
-  });
-});
+//
+// Coverage-remediation Phase 1 (2026-09-21): this used to be a 'describe'
+// block here that asserted hardcoded literals (e.g.
+// `expect(serverPrice).toBe(299.99)`) without ever importing or calling
+// Order.create -- it proved nothing about the real code, just restated the
+// intended behavior as a comment dressed up as a test. Real coverage of
+// Order.create's actual price/stock/quantity validation -- server price
+// overriding a client-supplied one, external-item price validation,
+// oversell rejection, malformed quantities, and a real concurrent-checkout
+// race against a real Postgres FOR UPDATE lock -- now lives in
+// tests/integration/orderCreation.test.js, against the real (isolated,
+// non-production) test database, since a mocked pool can't prove the
+// locking guarantee that test suite exists to prove.
 
 // ─── IDOR protection ──────────────────────────────────────────────────────────
 
