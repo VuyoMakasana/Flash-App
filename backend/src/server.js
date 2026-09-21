@@ -427,130 +427,17 @@ cron.schedule('30 1 * * *', async () => {
   });
   // WHY: Drivers can accept an order and go offline with no consequence. Orders would
   // stay stuck in driver_assigned forever with no customer alert and no resolution.
+  // Coverage-remediation Phase 3 — this used to be ~130 lines inline here,
+  // untestable without a running server/cron. Moved to
+  // driverAutoSuspensionService.reassignStuckDriverOrders, unchanged in
+  // substance (see that file's own header comment), for the same reason
+  // cancelAbandonedPaymentPendingOrders/paymentReconciliationJob's
+  // functions already live in their own service files. This wrapper is now
+  // exactly that same thin pattern.
   cron.schedule('*/10 * * * *', async () => {
     try {
-      // Find orders stuck in driver_assigned or driver_arrived_store for more than 45 minutes
-      const stuckOrders = await pool.query(`
-        SELECT o.id, o.driver_id, o.user_id, o.delivery_mode, o.status,
-               o.driver_payout, o.delivery_fee,
-               d.push_token as driver_push_token
-        FROM orders o
-        LEFT JOIN drivers d ON d.id = o.driver_id
-        WHERE o.status IN ('driver_assigned', 'driver_arrived_store')
-          AND o.updated_at < NOW() - INTERVAL '45 minutes'
-          AND o.driver_id IS NOT NULL
-      `);
-
-      const { requeueOrderForDriverSearch } = require('./services/orderStateMachineService');
-      const DriverWallet = require('./models/DriverWallet');
-      const ioInstance = _io;
-
-      for (const order of stuckOrders.rows) {
-        try {
-          // Requeue and the driver's pending-wallet reversal now share one
-          // transaction (same externalClient pattern as
-          // orderController.cancelOrder / driverController.cancelAssignedOrder)
-          // — previously these were two separate transactions, so a crash
-          // between them could reverse the driver's pending payout while the
-          // order stayed assigned to a driver who just timed out, or requeue
-          // the order while leaving pending_balance permanently uncorrected.
-          const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
-          const client = await pool.connect();
-          try {
-            await client.query('BEGIN');
-
-            // Re-queue through the state machine FIRST: this takes a row lock
-            // and re-validates the order is still driver_assigned/driver_arrived_store,
-            // so a driver's in-flight status update (e.g. just tapped "Picked Up")
-            // can't be clobbered by this cron. If the order has already moved
-            // on, this throws and the whole transaction rolls back below — no
-            // penalty, no wallet change — because the driver did not actually
-            // go unavailable.
-            await requeueOrderForDriverSearch(
-              order.id,
-              { actorId: 'system', actorRole: 'system' },
-              client,
-            );
-
-            if (payout > 0) {
-              await DriverWallet.reversePending(
-                client, order.driver_id, payout, order.id, 'driver_timeout_reassigned',
-              );
-            }
-
-            await client.query('COMMIT');
-          } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-          } finally {
-            client.release();
-          }
-
-          // Penalise the driver — increment cancel count
-          await pool.query(
-            `UPDATE drivers SET cancel_count = COALESCE(cancel_count, 0) + 1, updated_at = NOW() WHERE id = $1`,
-            [order.driver_id]
-          );
-
-          // Auto-suspend driver if cancel count reaches 5
-          const driverCheck = await pool.query(
-            `SELECT cancel_count FROM drivers WHERE id = $1`, [order.driver_id]
-          );
-          if ((driverCheck.rows[0]?.cancel_count || 0) >= 5) {
-            await pool.query(
-              `UPDATE drivers SET is_online = false, status = 'suspended', updated_at = NOW() WHERE id = $1`,
-              [order.driver_id]
-            );
-            console.warn(`[Cron] Driver ${order.driver_id} auto-suspended after 5 cancellations`);
-
-            // §2.4 audit — previously only a console.warn, leaving no
-            // admin-visible record of why/when a system auto-suspension
-            // happened. An admin looking at a suspended driver's own detail
-            // page (which already sums driver_penalties for that driver,
-            // adminPanel.js) had no way to see this without digging through
-            // server logs — real friction for dispute resolution ("why was
-            // I suspended?"). amount=0 since this isn't a financial penalty,
-            // just a real, dated, reasoned row. Best-effort and isolated in
-            // its own catch — this is a record of an action that already
-            // happened; a failure to write it must never block the customer
-            // notification/reassignment steps still to come below.
-            try {
-              await pool.query(
-                `INSERT INTO driver_penalties (driver_id, order_id, amount, reason, status)
-                 VALUES ($1, $2, 0, $3, 'applied')`,
-                [
-                  order.driver_id,
-                  order.id,
-                  `Auto-suspended by system: cancel_count reached ${driverCheck.rows[0].cancel_count} after order ${order.id} was stuck in ${order.status} for over 45 minutes.`,
-                ],
-              );
-            } catch (penaltyErr) {
-              console.warn(`[Cron] Failed to record auto-suspension penalty row for driver ${order.driver_id}:`, penaltyErr.message);
-            }
-          }
-
-          // Notify user with a friendlier message than the generic order_update.
-          // Side effects here only fire after the transaction above has
-          // committed (its own COMMIT/ROLLBACK already resolved above).
-          if (ioInstance) {
-            ioInstance.to(`user:${order.user_id}`).emit('order_update', {
-              orderId: order.id,
-              status: 'waiting_for_driver',
-              message: 'Your driver became unavailable. Finding a new driver now.',
-            });
-          }
-
-          // Attempt auto-reassign for fleet orders
-          if (order.delivery_mode === 'fleet') {
-            const { autoAssignNearestDriver } = require('./services/autoMatchService');
-            await autoAssignNearestDriver(order.id, ioInstance).catch(() => null);
-          }
-
-          console.log(`[Cron] Auto-reassigned stuck order ${order.id} from driver ${order.driver_id}`);
-        } catch (orderErr) {
-          console.warn(`[Cron] Failed to reassign order ${order.id}:`, orderErr.message);
-        }
-      }
+      const { reassignStuckDriverOrders } = require('./services/driverAutoSuspensionService');
+      await reassignStuckDriverOrders({ io: _io });
     } catch (e) {
       console.warn('[Cron] Stuck order detection error:', e.message);
     }
