@@ -50,6 +50,48 @@ class S3Service {
     });
   }
 
+  // BUG FIX (found writing tests/integration/storeInventoryController.test.js,
+  // coverage-remediation Phase 4): storeInventoryController.js's addProduct
+  // and updateImage have always called s3Service.uploadPublicFile(), which
+  // never existed on this class — every real store product-image upload
+  // crashed with "s3Service.uploadPublicFile is not a function",
+  // unconditionally, confirmed by reading this file in full.
+  //
+  // Not a rename of uploadFile: that method is deliberately private
+  // (type: 'authenticated', returns publicId/resourceType only, needs
+  // getSignedUrl() to ever view) -- correct for driver KYC documents and
+  // delivery-proof photos, but wrong for a product photo, which
+  // flash_inventory.image_url stores and serves directly to unauthenticated
+  // customers on the public storefront (Inventory.js's PUBLIC_COLUMNS).
+  // This is a real, separate upload mode: type: 'upload' (Cloudinary's
+  // public-access mode) and a real, permanent, directly-loadable
+  // result.secure_url -- no signed URL, no expiry, no server round-trip
+  // needed to view it, which is exactly what a product image needs.
+  async uploadPublicFile(file, folder = 'flash-public') {
+    if (!process.env.CLOUDINARY_CLOUD_NAME) {
+      throw new Error('Image storage is not configured. Please contact support.');
+    }
+
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder,
+          resource_type: 'image',
+          type: 'upload',
+        },
+        (error, result) => {
+          if (error) return reject(error);
+          resolve({
+            url: result.secure_url,
+            publicId: result.public_id,
+            resourceType: result.resource_type,
+          });
+        }
+      );
+      uploadStream.end(file.buffer);
+    });
+  }
+
   // Generate a signed, time-limited URL for private document access.
   // H-access-audit FIX: this function was already dead code (never called)
   // and, separately, actually broken — it never passed resource_type (so
