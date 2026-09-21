@@ -2,13 +2,17 @@
 /**
  * tests/unit/auth.test.js
  *
- * Tests for authentication: registration, login, JWT, email verification,
- * password reset, Google Sign-In, refresh token.
+ * Tests for authentication: registration (incl. a real success path, not
+ * just validation failures), login, JWT, email verification, password
+ * reset, Google/Apple Sign-In (all three real account states each can
+ * land in: existing-by-provider-id, link-by-email, brand-new account),
+ * refresh token.
  */
 
 jest.mock('../../src/config/database');
 jest.mock('../../src/services/emailService');
 jest.mock('../../src/services/googleAuthService');
+jest.mock('../../src/services/appleAuthService');
 jest.mock('bcryptjs');
 jest.mock('jsonwebtoken');
 
@@ -96,6 +100,256 @@ describe('AuthController.registerUser', () => {
     const AuthController = require('../../src/controllers/authController');
     await AuthController.registerUser(req, res);
     expect(res.status).toHaveBeenCalledWith(409);
+  });
+
+  // Coverage-remediation Phase 2 — only the failure paths above were ever
+  // tested; nothing proved a real sign-up actually succeeds. Real-world
+  // scenario: a new customer fills in the sign-up form and submits valid,
+  // available details -> a real account is created, real tokens come
+  // back, and the password hash is never included in the response body.
+  test('creates the account and returns real tokens on a valid, available sign-up', async () => {
+    await runValidators(req, REGISTER_VALIDATORS);
+    pool.query
+      .mockResolvedValueOnce({ rows: [] }) // User.findByEmail -> no existing account
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'new-user-1',
+          name: 'Test User',
+          email: 'test@example.com',
+          password_hash: '$2b$12$shouldneverreachtheclient',
+          phone: '+27821234567',
+          terms_accepted: false,
+        }],
+      }) // User.create INSERT ... RETURNING *
+      .mockResolvedValue({ rows: [] }); // refresh_tokens insert + fire-and-forget email_tokens insert
+
+    bcrypt.hash.mockResolvedValue('$2b$12$fakehashedpassword');
+    jwt.sign.mockReturnValue('mock.jwt.token');
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.registerUser(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(201);
+    const body = res.json.mock.calls[0][0];
+    expect(body.token).toBe('mock.jwt.token');
+    expect(body.refreshToken).toEqual(expect.any(String));
+    expect(body.user).toEqual(expect.objectContaining({ id: 'new-user-1', email: 'test@example.com' }));
+    expect(body.user.password_hash).toBeUndefined();
+    expect(body.emailVerificationSent).toBe(true);
+  });
+});
+
+// ─── Google Sign-In (user) ──────────────────────────────────────────────────
+//
+// Real-world scenarios this describe block protects -- the three real
+// account states a Google sign-in attempt can land in, plus token
+// verification failure. googleAuthService is mocked at the OAuth-provider
+// boundary (googleAuthService.test.js territory would be testing Google's
+// own token format; this is testing OUR account-creation/linking logic
+// given a verified token), same boundary-mocking precedent already used
+// throughout this file for bcryptjs/jsonwebtoken.
+describe('AuthController.googleSignInUser', () => {
+  let req, res;
+  const { verifyGoogleToken } = require('../../src/services/googleAuthService');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    req = { body: { idToken: 'real-looking-google-id-token' } };
+    res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  });
+
+  test('returns 400 when no idToken is sent', async () => {
+    req.body.idToken = undefined;
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.googleSignInUser(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(verifyGoogleToken).not.toHaveBeenCalled();
+  });
+
+  // Scenario: a returning customer who has signed in with Google before.
+  test('logs in an existing account matched by google_id, isNewUser:false', async () => {
+    verifyGoogleToken.mockResolvedValue({ sub: 'google-sub-1', email: 'existing@example.com', emailVerified: true, name: 'Existing User' });
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'user-1', email: 'existing@example.com', password_hash: 'x', google_id: 'google-sub-1' }] }) // byGoogle
+      .mockResolvedValue({ rows: [] }); // refresh_tokens insert
+    jwt.sign.mockReturnValue('mock.jwt.token');
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.googleSignInUser(req, res);
+
+    expect(res.status).not.toHaveBeenCalledWith(500);
+    const body = res.json.mock.calls[0][0];
+    expect(body.isNewUser).toBe(false);
+    expect(body.user.password_hash).toBeUndefined();
+  });
+
+  // Scenario: a customer who originally signed up with email/password now
+  // signs in with Google for the first time -- their existing account
+  // (matched by real email) is linked, not duplicated.
+  test('links Google to an existing email/password account, isNewUser:false', async () => {
+    verifyGoogleToken.mockResolvedValue({ sub: 'google-sub-2', email: 'existing2@example.com', emailVerified: true, name: 'Existing User Two' });
+    pool.query
+      .mockResolvedValueOnce({ rows: [] }) // byGoogle -> none
+      .mockResolvedValueOnce({ rows: [{ id: 'user-2', email: 'existing2@example.com', password_hash: 'x' }] }) // byEmail -> found
+      .mockResolvedValue({ rows: [] }); // UPDATE google_id + refresh_tokens insert
+    jwt.sign.mockReturnValue('mock.jwt.token');
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.googleSignInUser(req, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.isNewUser).toBe(false);
+    expect(body.user.google_id).toBe('google-sub-2');
+    // The real linking UPDATE actually ran, not just the response claiming it did.
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringMatching(/UPDATE users SET google_id/),
+      ['google-sub-2', 'user-2'],
+    );
+  });
+
+  // Scenario: a brand-new customer, never seen before, signs up via Google.
+  test('creates a brand-new account when no match exists, isNewUser:true, 201', async () => {
+    verifyGoogleToken.mockResolvedValue({ sub: 'google-sub-3', email: 'brandnew@example.com', emailVerified: true, name: 'Brand New' });
+    pool.query
+      .mockResolvedValueOnce({ rows: [] }) // byGoogle -> none
+      .mockResolvedValueOnce({ rows: [] }) // byEmail -> none
+      .mockResolvedValueOnce({ rows: [{ id: 'user-3', email: 'brandnew@example.com', password_hash: 'x', google_id: 'google-sub-3' }] }) // INSERT ... RETURNING *
+      .mockResolvedValue({ rows: [] }); // refresh_tokens insert
+    bcrypt.hash.mockResolvedValue('$2b$12$randomplaceholder');
+    jwt.sign.mockReturnValue('mock.jwt.token');
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.googleSignInUser(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(201);
+    const body = res.json.mock.calls[0][0];
+    expect(body.isNewUser).toBe(true);
+    expect(body.user.email).toBe('brandnew@example.com');
+    expect(body.user.password_hash).toBeUndefined();
+  });
+
+  // Scenario: an expired/forged/mismatched-audience token.
+  test('returns 401 when Google token verification fails with a recognizable reason', async () => {
+    verifyGoogleToken.mockRejectedValue(new Error('Token used too late, expired'));
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.googleSignInUser(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  // Scenario: something genuinely unexpected (network failure to Google,
+  // a real bug) -- must not become a misleading 401 "bad token" message.
+  test('returns 500 for a genuinely unexpected verification failure, not a leaked detail', async () => {
+    verifyGoogleToken.mockRejectedValue(new Error('ECONNRESET'));
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.googleSignInUser(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).not.toMatch(/ECONNRESET/);
+  });
+});
+
+// ─── Apple Sign-In (user) ───────────────────────────────────────────────────
+//
+// Same three account-state scenarios as Google above, mirrored for Apple's
+// own real, slightly different shape (identityToken instead of idToken,
+// fullName instead of a plain name, User.createWithApple instead of a raw
+// INSERT for the new-account path).
+describe('AuthController.appleSignInUser', () => {
+  let req, res;
+  const { verifyAppleToken } = require('../../src/services/appleAuthService');
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    req = { body: { identityToken: 'real-looking-apple-identity-token' } };
+    res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  });
+
+  test('returns 400 when no identityToken is sent', async () => {
+    req.body.identityToken = undefined;
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.appleSignInUser(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(verifyAppleToken).not.toHaveBeenCalled();
+  });
+
+  test('logs in an existing account matched by apple_id, isNewUser:false', async () => {
+    verifyAppleToken.mockResolvedValue({ sub: 'apple-sub-1', email: 'existing@example.com', emailVerified: true });
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: 'user-1', email: 'existing@example.com', password_hash: 'x', apple_id: 'apple-sub-1' }] }) // byApple
+      .mockResolvedValue({ rows: [] });
+    jwt.sign.mockReturnValue('mock.jwt.token');
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.appleSignInUser(req, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.isNewUser).toBe(false);
+    expect(body.user.password_hash).toBeUndefined();
+  });
+
+  test('links Apple to an existing email/password account, isNewUser:false', async () => {
+    verifyAppleToken.mockResolvedValue({ sub: 'apple-sub-2', email: 'existing2@example.com', emailVerified: true });
+    pool.query
+      .mockResolvedValueOnce({ rows: [] }) // byApple -> none
+      .mockResolvedValueOnce({ rows: [{ id: 'user-2', email: 'existing2@example.com', password_hash: 'x' }] }) // byEmail -> found
+      .mockResolvedValue({ rows: [] });
+    jwt.sign.mockReturnValue('mock.jwt.token');
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.appleSignInUser(req, res);
+
+    const body = res.json.mock.calls[0][0];
+    expect(body.isNewUser).toBe(false);
+    expect(body.user.apple_id).toBe('apple-sub-2');
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringMatching(/UPDATE users SET apple_id/),
+      ['apple-sub-2', 'user-2'],
+    );
+  });
+
+  // Apple famously only sends the real name on the very first sign-in;
+  // this proves the fallback (email local-part) works when it's withheld.
+  test('creates a brand-new account when no match exists, falling back to email for the name if none given, isNewUser:true, 201', async () => {
+    verifyAppleToken.mockResolvedValue({ sub: 'apple-sub-3', email: 'brandnew@example.com', emailVerified: true });
+    pool.query
+      .mockResolvedValueOnce({ rows: [] }) // byApple -> none
+      .mockResolvedValueOnce({ rows: [] }) // byEmail -> none
+      .mockResolvedValueOnce({ rows: [{ id: 'user-3', email: 'brandnew@example.com', password_hash: 'x', apple_id: 'apple-sub-3' }] }) // User.createWithApple's INSERT
+      .mockResolvedValue({ rows: [] });
+    bcrypt.hash.mockResolvedValue('$2b$12$randomplaceholder');
+    jwt.sign.mockReturnValue('mock.jwt.token');
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.appleSignInUser(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(201);
+    const body = res.json.mock.calls[0][0];
+    expect(body.isNewUser).toBe(true);
+    expect(body.user.password_hash).toBeUndefined();
+  });
+
+  test('returns 401 when Apple token verification fails with a recognizable reason', async () => {
+    verifyAppleToken.mockRejectedValue(new Error('invalid signature'));
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.appleSignInUser(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+  });
+
+  test('returns 500 for a genuinely unexpected verification failure, not a leaked detail', async () => {
+    verifyAppleToken.mockRejectedValue(new Error('ECONNRESET'));
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.appleSignInUser(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).not.toMatch(/ECONNRESET/);
   });
 });
 
