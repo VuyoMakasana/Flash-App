@@ -897,7 +897,20 @@ function buildResources(db) {
           // number instead of a raw UUID, and makes order_number (not `id`)
           // the primary/title column for orders itself.
           titleProperty: 'order_number',
-          listProperties: ['order_number', 'user_id', 'driver_id', 'status', 'stuck_delivery_flagged_at', 'driver_connection_flagged_at', 'payment_method', 'total', 'created_at'],
+          // store_id added (coverage-remediation Phase 5) so an admin can
+          // see which store an order belongs to without opening the
+          // record. Displays as a raw UUID, not a resolved store name —
+          // unlike driver_id/user_id, orders.store_id has never had a
+          // real FK constraint to stores (added via a plain
+          // ALTER COLUMN...TYPE UUID in migrate.js's v27, never a real
+          // REFERENCES stores(id)), so AdminJS's SQL-adapter reference
+          // auto-resolution (the mechanism that makes driver_id/user_id
+          // show real names) doesn't apply here. A real fix would need
+          // either an actual FK constraint (a schema change) or a virtual
+          // resolved-name field (matching attachUserNames' existing
+          // pattern for user_id) — both are bigger than this task's
+          // explicit "small, low-risk" scope for this one change.
+          listProperties: ['order_number', 'user_id', 'driver_id', 'store_id', 'status', 'stuck_delivery_flagged_at', 'driver_connection_flagged_at', 'payment_method', 'total', 'created_at'],
           properties: {
             // See the identical responsive fix's full explanation on
             // drivers.name above — order_number doesn't match AdminJS's
