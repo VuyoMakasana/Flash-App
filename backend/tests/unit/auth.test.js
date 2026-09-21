@@ -28,10 +28,41 @@ const { body } = require('express-validator');
 // invoking the controller is what makes "returns 400 for invalid input"
 // assertions test real behavior instead of a request object no real
 // route would ever hand the controller.
+//
+// BUG-IN-THIS-TEST-FILE FIX (found writing Phase 3's driver-registration
+// tests, fixed the same day): REGISTER_VALIDATORS was missing
+// dateOfBirthValidator, which the real POST /user/register route
+// (authRoutes.js) has always included -- every request in this file's
+// registerUser tests (including Phase 2's success-path test) was
+// therefore validated against an incomplete mirror of the real route and
+// never actually exercised the 18+ age gate. Not an application bug: the
+// real route enforces this correctly regardless of this file. Fixed by
+// replicating the real validator here too and giving every test in that
+// describe block a real, valid date_of_birth by default.
+const dateOfBirthValidator = body('date_of_birth')
+  .isISO8601().withMessage('A valid date of birth is required')
+  .bail()
+  .custom((value) => {
+    const dob = new Date(value);
+    const today = new Date();
+    let age = today.getFullYear() - dob.getFullYear();
+    const monthDiff = today.getMonth() - dob.getMonth();
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < dob.getDate())) age--;
+    if (age < 18) throw new Error('You must be at least 18 years old to register');
+    return true;
+  });
 const REGISTER_VALIDATORS = [
   body('name').trim().notEmpty(),
   body('email').isEmail().normalizeEmail(),
   body('password').isLength({ min: 10 }),
+  dateOfBirthValidator,
+];
+const DRIVER_REGISTER_VALIDATORS = [
+  body('name').trim().notEmpty(),
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 10 }),
+  body('phone').notEmpty(),
+  dateOfBirthValidator,
 ];
 const LOGIN_VALIDATORS = [
   body('email').isEmail().normalizeEmail(),
@@ -54,6 +85,7 @@ describe('AuthController.registerUser', () => {
         email: 'test@example.com',
         password: 'StrongPass123!',
         phone: '+27821234567',
+        date_of_birth: '2000-01-01', // real, valid, well over 18
       },
     };
     res = {
@@ -136,6 +168,116 @@ describe('AuthController.registerUser', () => {
     expect(body.user).toEqual(expect.objectContaining({ id: 'new-user-1', email: 'test@example.com' }));
     expect(body.user.password_hash).toBeUndefined();
     expect(body.emailVerificationSent).toBe(true);
+  });
+});
+
+// ─── Driver registration ────────────────────────────────────────────────────
+//
+// Coverage-remediation Phase 3 — AuthController.registerDriver had zero
+// test coverage before this. Real-world scenario: an applicant fills in
+// the driver sign-up form. Unlike a customer account, a new driver
+// account is never immediately usable -- it starts at 'pending_documents'
+// and every driver-only route stays gated behind requireApprovedDriver
+// (see requireApprovedDriverGate.test.js) until Flash staff verify their
+// documents. This block proves that real "not yet approved" contract
+// actually holds at the moment of registration.
+describe('AuthController.registerDriver', () => {
+  let req, res;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    req = {
+      body: {
+        name: 'Test Driver',
+        email: 'driver@example.com',
+        password: 'StrongPass123!',
+        phone: '+27821234567',
+        date_of_birth: '1995-06-15',
+        vehicle_type: 'motorcycle',
+        vehicle_plate: 'CA123456',
+      },
+    };
+    res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+  });
+
+  test('returns 400 when phone is missing (driver-specific requirement)', async () => {
+    req.body.phone = undefined;
+    await runValidators(req, DRIVER_REGISTER_VALIDATORS);
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.registerDriver(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  test('returns 400 for an applicant under 18', async () => {
+    req.body.date_of_birth = new Date().toISOString().slice(0, 10); // born today = 0 years old
+    await runValidators(req, DRIVER_REGISTER_VALIDATORS);
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.registerDriver(req, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  test('returns 409 when the email is already a registered driver', async () => {
+    await runValidators(req, DRIVER_REGISTER_VALIDATORS);
+    pool.query.mockResolvedValueOnce({ rows: [{ id: 'existing-driver' }] }); // Driver.findByEmail
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.registerDriver(req, res);
+    expect(res.status).toHaveBeenCalledWith(409);
+  });
+
+  // The core, real-world contract: registering is NOT the same as being
+  // able to drive. A new applicant gets an account and a token (so they
+  // can log back in to finish onboarding), but requiresApproval is
+  // explicit in the response, and nothing here ever claims the driver is
+  // approved.
+  test('creates the account as unapproved, with a real token and the correct next-step contract', async () => {
+    await runValidators(req, DRIVER_REGISTER_VALIDATORS);
+    pool.query
+      .mockResolvedValueOnce({ rows: [] }) // Driver.findByEmail -> no existing account
+      .mockResolvedValueOnce({
+        rows: [{
+          id: 'new-driver-1',
+          name: 'Test Driver',
+          email: 'driver@example.com',
+          password_hash: '$2b$12$shouldneverreachtheclient',
+          status: 'pending_documents',
+        }],
+      }) // Driver.create INSERT ... RETURNING *
+      .mockResolvedValue({ rows: [] }); // refresh_tokens insert
+
+    bcrypt.hash.mockResolvedValue('$2b$12$fakehashedpassword');
+    jwt.sign.mockReturnValue('mock.jwt.token');
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.registerDriver(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(201);
+    const body = res.json.mock.calls[0][0];
+    expect(body.token).toBe('mock.jwt.token');
+    expect(body.isNewDriver).toBe(true);
+    expect(body.nextStep).toBe('upload_documents');
+    expect(body.requiresApproval).toBe(true);
+    expect(body.driver).toEqual(expect.objectContaining({ id: 'new-driver-1', status: 'pending_documents' }));
+    expect(body.driver.password_hash).toBeUndefined();
+  });
+
+  test('returns 500 without leaking internal detail when driver creation fails unexpectedly', async () => {
+    await runValidators(req, DRIVER_REGISTER_VALIDATORS);
+    pool.query
+      .mockResolvedValueOnce({ rows: [] }) // Driver.findByEmail -> no existing account
+      .mockRejectedValueOnce(new Error('connection terminated unexpectedly')); // Driver.create fails
+
+    const AuthController = require('../../src/controllers/authController');
+    await AuthController.registerDriver(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    const body = res.json.mock.calls[0][0];
+    expect(body.error).toBe('Registration failed');
+    expect(body.error).not.toMatch(/connection terminated/);
   });
 });
 
