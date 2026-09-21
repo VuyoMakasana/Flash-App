@@ -13,7 +13,17 @@ const BaseModel = require('./BaseModel');
  */
 class Rating extends BaseModel {
   static async submitRating(orderId, userId, driverId, rating, comment) {
-    const ratingNum = parseInt(rating, 10);
+    // BUG FIX (found writing tests/integration/rating.test.js,
+    // coverage-remediation Phase 2): parseInt() truncates rather than
+    // rejects — parseInt(3.5, 10) is 3, a valid in-range integer, so a
+    // client sending a fractional rating like 3.5 silently got recorded as
+    // a 3-star rating instead of the rejection this function's own error
+    // message promises. Number() does not truncate (Number(3.5) is 3.5),
+    // so Number.isInteger() on its result correctly rejects any real
+    // fractional value while still accepting both a real number (5) and a
+    // numeric string ("5") — req.body.rating isn't guaranteed to be a JS
+    // number by any validator upstream of this call.
+    const ratingNum = Number(rating);
     if (!Number.isInteger(ratingNum) || ratingNum < 1 || ratingNum > 5) {
       throw new Error('Rating must be an integer between 1 and 5');
     }
