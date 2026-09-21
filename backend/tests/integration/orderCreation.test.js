@@ -237,38 +237,34 @@ describe('Order.create — real order placement (integration, real DB)', () => {
     ).rejects.toThrow(/Invalid price/);
   });
 
-  // KNOWN BUG (found while writing this test, reported 2026-09-21, not
-  // fixed here per explicit instruction — "test it as-is, document the
-  // bug"): order_items.product_id is NOT NULL (migrate.js), but a genuinely
-  // external item (no productId, a valid positive price) passes price
-  // validation and then hits that NOT NULL constraint in the second
+  // FIXED BUG (found while writing this test, 2026-09-21; fixed the same
+  // day on explicit instruction after being reported and confirmed):
+  // order_items.product_id is NOT NULL (migrate.js), and a genuinely
+  // external item (no productId, a valid positive price) used to pass
+  // price validation and then hit that NOT NULL constraint in the second
   // (order_items) INSERT loop, which runs *after* all price/quantity
-  // validation has already passed for every item. The result is an
-  // unhandled Postgres constraint-violation error rather than the clean,
-  // intentional 400 the rest of this validation gives for bad input --
-  // orderController.js's CLIENT_ERROR_FRAGMENTS doesn't match this
-  // message, so it surfaces to the customer as a generic 500. Confirmed
-  // this is not reachable from the real shipped user app today: every cart
-  // item in flash-user-app/context/FlashContext.js comes from
-  // api.products.getAll() (real flash_inventory rows, always a real id),
-  // so there is no UI path that produces a truly productId-less item. This
-  // test pins down TODAY'S actual (broken) behavior so a future fix has a
-  // clear "before" to diff against, and so this regressing further (e.g.
-  // corrupting a transaction silently instead of rolling back cleanly)
-  // would be caught.
-  test('BUG: a valid-priced external item with no productId at all crashes with an unhandled constraint error, not a clean 400', async () => {
-    userId = await makeTestUser('external-no-productid-bug');
+  // validation has already passed for every item -- an unhandled Postgres
+  // constraint-violation error instead of the clean, intentional 400 the
+  // rest of this validation gives for bad input. Order.create now rejects
+  // this case itself, in the same place and the same way as its other
+  // validation failures (see the BUG FIX comment on the EXTERNAL STORE
+  // PATH branch in Order.js), so it maps to a plain 400 for the customer.
+  // Confirmed this was never reachable from the real shipped user app
+  // (every cart item in flash-user-app/context/FlashContext.js comes from
+  // api.products.getAll() -- real flash_inventory rows, always a real id)
+  // -- this test protects currently-unreachable-but-real code, the same
+  // as it did before the fix.
+  test('rejects a valid-priced external item with no productId at all, cleanly', async () => {
+    userId = await makeTestUser('external-no-productid-fixed');
 
     await expect(
       Order.create(baseOrderInput({
         userId,
         items: [{ name: 'External Item', quantity: 1, price: 50 }],
       })),
-    ).rejects.toThrow(/null value in column "product_id"/);
+    ).rejects.toThrow(/a productId is required/);
 
-    // Confirm the transaction actually rolled back rather than leaving a
-    // half-written order behind -- this part of the safety net does work,
-    // even though the error itself is unclean.
+    // No half-written order left behind.
     const orphaned = await db.query(
       `SELECT id FROM orders WHERE user_id = $1`,
       [userId],

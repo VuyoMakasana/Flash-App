@@ -198,6 +198,24 @@ class Order extends BaseModel {
             item.price,
             item.name || 'external item'
           );
+
+          // BUG FIX (found writing tests/integration/orderCreation.test.js,
+          // coverage-remediation Phase 1): order_items.product_id is NOT
+          // NULL (migrate.js), but there is no real partner/external item
+          // catalogue behind this branch — an item with no productId at
+          // all could pass the price check above and then crash on the
+          // INSERT below with a raw, unhandled Postgres constraint error
+          // instead of the same clean, intentional rejection every other
+          // bad-input case in this loop gets. Reject it here, in the same
+          // place and the same way as the other validation failures, so
+          // CLIENT_ERROR_FRAGMENTS (orderController.js) maps it to a plain
+          // 400 for the customer instead of a generic 500. Deliberately
+          // placed AFTER the price check, not before: a request that's
+          // ALSO missing a valid price should still get the (equally real,
+          // pre-existing, already-tested) "Invalid price" message first.
+          throw new Error(
+            `Invalid item for "${item.name || 'item'}": a productId is required (no external/partner item catalogue exists)`
+          );
         }
 
         const qty = rawQty;

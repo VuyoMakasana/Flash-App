@@ -186,16 +186,19 @@ describe('OrderController.createOrder — Order.create failure -> status mapping
     expect(res.status).toHaveBeenCalledWith(400);
   });
 
-  // Documents the real, currently-unhandled bug found in Phase 1
-  // (tests/integration/orderCreation.test.js has the live-DB reproduction):
-  // a raw Postgres constraint-violation message doesn't match any fragment
-  // in CLIENT_ERROR_FRAGMENTS, so it falls through to the generic 500 path
-  // below -- same as any other unexpected error. This test pins down that
-  // real, current behavior at the controller layer (no internal detail
-  // leaked to the client either way), not the ideal behavior.
-  test('an unrecognized DB error (e.g. the known product_id NOT NULL bug) becomes a generic 500, not a leaked 400', async () => {
+  // Was a bug (Phase 1, found and fixed 2026-09-21 -- see the BUG FIX
+  // comment on Order.js's EXTERNAL STORE PATH branch and the matching
+  // live-DB test in tests/integration/orderCreation.test.js): an item with
+  // no productId at all used to reach an unhandled Postgres NOT NULL
+  // constraint error, which fell through CLIENT_ERROR_FRAGMENTS and
+  // surfaced as a generic 500. Order.create now rejects this itself with a
+  // clean validation message before it ever reaches the database, and
+  // 'a productId is required' is in CLIENT_ERROR_FRAGMENTS -- this is now
+  // exactly the same 400-mapping path as every other business-rule
+  // rejection below, not a special case.
+  test('a productId-less item rejection becomes a clean 400, same as any other validation failure', async () => {
     Order.create.mockRejectedValue(
-      new Error('null value in column "product_id" of relation "order_items" violates not-null constraint'),
+      new Error('Invalid item for "External Item": a productId is required (no external/partner item catalogue exists)'),
     );
 
     const req = { body: validBody(), userId: 'user-1' };
@@ -203,8 +206,8 @@ describe('OrderController.createOrder — Order.create failure -> status mapping
 
     await OrderController.createOrder(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(500);
-    expect(res.json).toHaveBeenCalledWith({ error: 'Failed to create order' });
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json.mock.calls[0][0].error).toMatch(/a productId is required/);
   });
 
   test('a genuinely unexpected error (e.g. DB connection lost) becomes a generic 500 with no internal detail leaked', async () => {
