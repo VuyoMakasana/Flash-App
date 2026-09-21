@@ -106,14 +106,18 @@ export const FlashProvider = ({ children }) => {
             image:       p.image_url   || 'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=800',
             badge:       p.brand       || null,
             description: p.description || '',
-            // No default here: flash_inventory has no store_id column today (it's a
-            // single-store table), so the backend never actually returns one. A
-            // 'flash_closet' fallback previously masqueraded as a real per-product
+            // store_id/store_name are real now (storefront port, Piece 4 —
+            // Inventory.getProducts() joins stores and returns both). This comment
+            // previously said the backend never returned store_id at all; a
+            // 'flash_closet' fallback before that masqueraded as a real per-product
             // store id, which defeated HomeScreen's own `stores.length > 1` check
             // meant to hide the shop-filter row until real multi-store data exists
             // — it always evaluated to a fake 2-store list ['all', 'flash_closet']
-            // and rendered a redundant filter pill showing the raw slug.
+            // and rendered a redundant filter pill showing the raw slug. That
+            // fallback is still gone; only one real store exists today so the
+            // filter row still stays hidden, but the wiring is now genuinely live.
             storeId:     p.store_id    || null,
+            storeName:   p.store_name  || null,
           }));
           setProducts(normalised);
         }
