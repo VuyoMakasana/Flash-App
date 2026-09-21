@@ -280,8 +280,22 @@ class OrderController {
   }
 
   static async getUserOrders(req, res) {
-    const page  = Math.max(1, parseInt(req.query.page  || '1'));
-    const limit = Math.min(50, Math.max(1, parseInt(req.query.limit || '20')));
+    // BUG FIX (found writing tests/unit/orderHistoryController.test.js,
+    // coverage-remediation Phase 2): parseInt(garbage) is NaN, and
+    // Math.max/Math.min involving NaN always return NaN -- there was no
+    // actual fallback to the intended '1'/'20' defaults for a non-numeric
+    // page/limit, despite the `|| '1'`/`|| '20'` reading like there was.
+    // That NaN reached Order.getUserOrders's LIMIT/OFFSET bind params and
+    // crashed with a raw Postgres error (confirmed live: invalid input
+    // syntax for type bigint: "NaN"), caught only by the generic 500
+    // below -- clean to the client, but an unhandled crash from
+    // unvalidated input rather than the deliberate default the code
+    // clearly intended. Parse first, then explicitly fall back to the
+    // real default on NaN, before clamping.
+    const parsedPage  = parseInt(req.query.page, 10);
+    const parsedLimit = parseInt(req.query.limit, 10);
+    const page  = Math.max(1, Number.isNaN(parsedPage) ? 1 : parsedPage);
+    const limit = Math.min(50, Math.max(1, Number.isNaN(parsedLimit) ? 20 : parsedLimit));
 
     try {
       const orders = await Order.getUserOrders(req.userId, page, limit);
