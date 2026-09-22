@@ -739,6 +739,39 @@ function suppressReference(resourceMetadata, propertyName) {
   return resourceMetadata;
 }
 
+// AdminJS's form submits a cleared or never-filled field as an empty string,
+// never as null. Postgres rejects "" for every non-text column type
+// ("invalid input syntax for type numeric/integer/date/timestamp"), so
+// clearing an optional number or date threw a raw 500 instead of storing
+// NULL. Found live on flash_inventory.cost_price (a legitimately optional
+// column), but it is not specific to that field: it applies to every
+// non-text editable column on every resource that has a form -- today
+// drivers and flash_inventory, the only two with new/edit enabled.
+//
+// Only non-text types are converted: "" is a real, meaningful value for an
+// actual text column, so those are passed through exactly as submitted.
+// A required (NOT NULL) column left blank still fails, as it should, but now
+// with Postgres's clear not-null-violation instead of a syntax error.
+function nullifyEmptyNonTextFields(request, context) {
+  const payload = request?.payload;
+  if (!payload) return request;
+
+  const typesByName = new Map(
+    (context?.resource?.properties?.() || []).map((p) => [p.name(), p.type()]),
+  );
+  const TEXT_TYPES = new Set(["string", "textarea", "richtext"]);
+
+  Object.keys(payload).forEach((key) => {
+    if (payload[key] !== "") return;
+    const type = typesByName.get(key);
+    if (type && !TEXT_TYPES.has(type)) {
+      payload[key] = null;
+    }
+  });
+
+  return request;
+}
+
 // Refactored out of mountAdminPanel (chronological-ordering pass) so it's
 // independently testable without booting the full Express app/session --
 // adminChronologicalSort.test.js imports this directly, builds its own `db`
@@ -821,7 +854,8 @@ function buildResources(db) {
           actions: {
             list: { after: [stripSensitive] },
             show: { after: [stripSensitive, attachDriverDocuments, attachWalletSummary, attachTrustedDriverScorecard] },
-            edit: { after: [stripSensitive] },
+            new: { before: [nullifyEmptyNonTextFields] },
+            edit: { before: [nullifyEmptyNonTextFields], after: [stripSensitive] },
             approveDriver: {
               actionType: 'record',
               component: false,
@@ -1601,8 +1635,8 @@ function buildResources(db) {
             // Real forms, real writes -- see clearInventoryCacheAfter's own
             // comment for why the after-hook is required here, unlike every
             // other resource in this file.
-            new: { after: [clearInventoryCacheAfter] },
-            edit: { after: [clearInventoryCacheAfter] },
+            new: { before: [nullifyEmptyNonTextFields], after: [clearInventoryCacheAfter] },
+            edit: { before: [nullifyEmptyNonTextFields], after: [clearInventoryCacheAfter] },
             // Generic delete would be a real, permanent DELETE FROM --
             // Inventory.deleteProduct is a soft delete (is_active=false),
             // matching this codebase's "never drop data unless explicitly
