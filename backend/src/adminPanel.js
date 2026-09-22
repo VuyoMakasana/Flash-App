@@ -863,7 +863,14 @@ function buildResources(db) {
         // Read-only, same as every other event-log resource here — this is
         // a record of what already happened, never something an admin
         // edits directly.
-        resource: db.table('admin_actions'),
+        // admins/messages are real FK targets in the live database but were
+        // never registered as AdminJS resources — @adminjs/sql auto-detects
+        // the constraint regardless and AdminJS.findResource() throws for an
+        // unregistered id, crashing the whole list request (confirmed live,
+        // same failure mode as the user_id/users case below). suppressReference
+        // is the same proven fix, just applied to the fields this resource
+        // actually has.
+        resource: suppressReference(db.table('admin_actions'), 'admin_id'),
         options: withChronologicalDefaults({
           listProperties: ['action_type', 'admin_id', 'target_table', 'target_id', 'created_at'],
           properties: {
@@ -887,7 +894,12 @@ function buildResources(db) {
         }, RESOURCE_TIMESTAMP_COLUMNS.admin_actions),
       },
       {
-        resource: suppressReference(db.table('orders'), 'user_id'),
+        // store_id is also a real, live FK (orders.store_id -> stores.id) --
+        // this migration history's own comment calling it "never a real
+        // foreign key" is stale relative to the live database (confirmed
+        // directly against production); stores was never registered as a
+        // resource either, so this needs the same suppression as user_id.
+        resource: suppressReference(suppressReference(db.table('orders'), 'user_id'), 'store_id'),
         options: withChronologicalDefaults({
           // Same reasoning as drivers' titleProperty above: makes every
           // reference TO orders (order_cancellations.order_id,
@@ -1184,7 +1196,14 @@ function buildResources(db) {
       // §2.4); the one real custom action here (resolve) just records what
       // an admin decided, it never suspends/penalizes automatically.
       {
-        resource: db.table('chat_reports'),
+        // message_id -> messages and reviewed_by -> admins are both real,
+        // live FKs, neither table ever registered as a resource here --
+        // both crash the list populator the same way user_id/store_id do
+        // above, even though neither column is in listProperties below
+        // (confirmed directly against AdminJS's own populator.ts: it walks
+        // every flattened property via getFlattenProperties(), not just the
+        // ones listProperties renders).
+        resource: suppressReference(suppressReference(db.table('chat_reports'), 'message_id'), 'reviewed_by'),
         options: withChronologicalDefaults({
           listProperties: [
             'order_id', 'reporter_role', 'reporter_id', 'reported_role', 'reported_id',
@@ -1557,7 +1576,12 @@ function buildResources(db) {
         }, RESOURCE_TIMESTAMP_COLUMNS.flagged_accounts),
       },
       {
-        resource: db.table('flash_inventory'),
+        // store_id -> stores.id is a real, live FK (confirmed directly
+        // against production) even though this table's own migration text
+        // above never defines the column -- the live schema has more in it
+        // than this file's migration history documents. Same suppression
+        // needed as orders.store_id above.
+        resource: suppressReference(db.table('flash_inventory'), 'store_id'),
         options: withChronologicalDefaults({
           listProperties: ['product_name', 'category', 'brand', 'price', 'is_active', 'created_at'],
           properties: {
