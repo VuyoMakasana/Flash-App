@@ -8,12 +8,44 @@ const baseCorsOptions = {
   allowedHeaders: ["Content-Type", "Authorization"],
 };
 
+// An Origin is compared as a bare scheme://host[:port] — browsers never put a
+// path or trailing slash in one, but APP_URL/ALLOWED_ORIGINS are hand-written
+// and routinely do ("https://example.com/"), which silently fails the exact
+// match below and blocks a legitimately-configured origin.
+function normalizeOrigin(value) {
+  if (typeof value !== "string") return value;
+  return value.trim().replace(/\/+$/, "");
+}
+
+// This server's own origin, derived from the request rather than from config.
+// An Origin equal to the host the request was actually sent to IS same-origin:
+// browsers never let page scripts forge Host or Origin, so a cross-site
+// attacker can't make these match — they'd have to already be on this origin,
+// at which point CORS was never the control protecting anything.
+//
+// This exists because config alone cannot be relied on to cover it. Confirmed
+// live (2026-09-22, from production): APP_URL resolves to the public app
+// domain (flashdelivery.co.za), NOT to this backend's own origin, which is
+// where AdminJS is actually served. So every fetch-based admin action —
+// bulk delete, edit/save, the custom approve/reject/acknowledge/resolve
+// actions — was being rejected with "Not allowed by CORS", while plain page
+// loads kept working because navigations send no Origin header at all.
+// Deriving it from the request means a future redeploy, domain change or
+// env-var edit can't silently reintroduce this.
+function getSelfOrigin(req) {
+  const host = req.headers.host;
+  if (!host) return null;
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const proto =
+    (forwardedProto ? String(forwardedProto).split(",")[0].trim() : req.protocol) ||
+    "https";
+  return `${proto}://${host}`;
+}
+
 // Real origin allowlist check (APP_URL, ALLOWED_ORIGINS, or dev defaults).
-// Confirmed live (2026-07-26): the admin panel is served by this same
-// backend at APP_URL, and its login page calls back into that same origin
-// — but that origin only worked if someone had also manually duplicated it
-// into ALLOWED_ORIGINS. APP_URL is the one origin this backend can always
-// vouch for as legitimately its own, so it's trusted unconditionally here.
+// Note APP_URL is NOT necessarily this backend's own origin (see
+// getSelfOrigin above) — it's whatever the deployment points at, so it's
+// treated as just another configured entry, not as self.
 function isOriginAllowed(origin) {
   let allowedOrigins = [];
 
@@ -44,7 +76,9 @@ function isOriginAllowed(origin) {
     );
   }
 
-  if (allowedOrigins.includes(origin)) return true;
+  if (allowedOrigins.map(normalizeOrigin).includes(normalizeOrigin(origin))) {
+    return true;
+  }
   if (!isProd) {
     console.warn(`[CORS] Request from unauthorized origin: ${origin}`);
     return true; // Development: forgiving, but logged.
@@ -87,6 +121,13 @@ const corsOptionsDelegate = function (req, callback) {
 
   if (origin === "null") {
     return callback(null, { ...baseCorsOptions, origin: true, credentials: false });
+  }
+
+  // Same-origin: the admin panel calling the backend that serves it. Keeps
+  // credentials on — AdminJS's session cookie rides these requests.
+  const selfOrigin = getSelfOrigin(req);
+  if (selfOrigin && normalizeOrigin(origin) === normalizeOrigin(selfOrigin)) {
+    return callback(null, { ...baseCorsOptions, origin: true });
   }
 
   const allowed = isOriginAllowed(origin);
