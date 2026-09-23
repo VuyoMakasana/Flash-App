@@ -1071,6 +1071,26 @@ async function migrate() {
     throw err;
   } finally {
     client33.release();
+  }
+
+  const client34 = await pool.connect();
+  try {
+    await migrateV34(client34);
+  } catch (err) {
+    console.error('Migration v34 failed:', err.message);
+    throw err;
+  } finally {
+    client34.release();
+  }
+
+  const client35 = await pool.connect();
+  try {
+    await migrateV35(client35);
+  } catch (err) {
+    console.error('Migration v35 failed:', err.message);
+    throw err;
+  } finally {
+    client35.release();
     await pool.end();
   }
 
@@ -2083,4 +2103,69 @@ async function migrateV33(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33 };
+// STORE PORTAL — schema reconciliation, not a fresh install.
+//
+// This database already carries most of the multi-tenant store schema from an
+// earlier deploy of a different branch (stores, store_users, store_actions,
+// flash_inventory.store_id all exist and are populated), so this migration is
+// deliberately written as ALTER-and-fill-gaps rather than CREATE-from-scratch.
+//
+// The important case, confirmed directly against the live database rather than
+// assumed: store_users EXISTS but predates force_password_reset /
+// password_changed_at. A `CREATE TABLE IF NOT EXISTS store_users (...)` — which
+// is what the originating branch's own migration does — is a silent no-op
+// against that existing table and would NEVER add the two columns. Both are
+// read on every authenticated store request (middleware/auth.js's
+// authenticateStore and requireStorePasswordCurrent), so without the explicit
+// ALTERs below the store portal would fail at runtime with
+// `column "password_changed_at" does not exist` on literally every request.
+//
+// Every statement here is additive and idempotent: no drops, no rewrites, no
+// data mutation. Safe to re-run, and safe to leave in place if the store
+// portal deploy is rolled back — nothing else reads these objects.
+async function migrateV34(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE store_users ADD COLUMN IF NOT EXISTS force_password_reset BOOLEAN NOT NULL DEFAULT false`);
+    await client.query(`ALTER TABLE store_users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_users_store_id ON store_users(store_id)`);
+
+    // store_users' own forgot/reset-password flow, independent of the
+    // user/driver one. Absent from this database entirely today.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_password_tokens (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_user_id UUID NOT NULL REFERENCES store_users(id) ON DELETE CASCADE,
+        token         VARCHAR(128) NOT NULL UNIQUE,
+        expires_at    TIMESTAMPTZ NOT NULL,
+        used_at       TIMESTAMPTZ,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_password_tokens_store_user_id ON store_password_tokens(store_user_id)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v34 completed: store_users force_password_reset/password_changed_at + store_password_tokens (store portal schema reconciliation)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v34 failed:', err.message);
+    throw err;
+  }
+}
+
+// Backs the store portal's Orders screen: "this store's orders, newest first"
+// (storeOrderController's only real list query). Purely additive.
+async function migrateV35(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_store_id ON orders(store_id, created_at DESC)`);
+    await client.query('COMMIT');
+    console.log('Flash database migration v35 completed: orders(store_id, created_at) index');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v35 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35 };
