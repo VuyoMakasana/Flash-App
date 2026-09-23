@@ -2155,10 +2155,23 @@ async function migrateV34(client) {
 
 // Backs the store portal's Orders screen: "this store's orders, newest first"
 // (storeOrderController's only real list query). Purely additive.
+//
+// Named idx_orders_store_id_created_at, NOT idx_orders_store_id: a
+// single-column btree(store_id) index under that latter name already exists on
+// this database, and CREATE INDEX IF NOT EXISTS matches on NAME ONLY, never on
+// definition. Reusing the name makes this statement a silent no-op -- no error,
+// no warning, no composite index -- which is exactly what happened the first
+// time this was run against production. Same trap as CREATE TABLE IF NOT
+// EXISTS against an existing table with different columns (see v34).
+//
+// The older single-column index is left in place deliberately: it is now
+// redundant (this composite's leading column covers it) but dropping an index
+// other queries may plan against is a separate, deliberate cleanup decision,
+// not a side-effect of shipping the store portal.
 async function migrateV35(client) {
   await client.query('BEGIN');
   try {
-    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_store_id ON orders(store_id, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_store_id_created_at ON orders(store_id, created_at DESC)`);
     await client.query('COMMIT');
     console.log('Flash database migration v35 completed: orders(store_id, created_at) index');
   } catch (err) {
