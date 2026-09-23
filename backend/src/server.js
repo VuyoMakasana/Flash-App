@@ -77,6 +77,15 @@ const orderRoutes = require("./routes/orderRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const trackingRoutes = require("./routes/trackingRoutes");
 const adminRoutes = require("./routes/adminRoutes");
+// Store Admin Portal (flash-store-portal). All namespaced under their own
+// /api/store* prefixes and behind STORE_JWT_SECRET, so they add surface area
+// without touching any existing user/driver/admin route.
+const storeAuthRoutes = require("./routes/storeAuthRoutes");
+const storeOrderRoutes = require("./routes/storeOrderRoutes");
+const storeInventoryRoutes = require("./routes/storeInventoryRoutes");
+const storeStaffRoutes = require("./routes/storeStaffRoutes");
+const storeAnalyticsRoutes = require("./routes/storeAnalyticsRoutes");
+const storefrontRoutes = require("./routes/storefrontRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
 const subscriptionRoutes = require("./routes/subscriptionRoutes");
 const sizingRoutes = require("./routes/sizingRoutes");
@@ -187,6 +196,12 @@ function createApp() {
   app.use("/api/payments", paymentRoutes);
   app.use("/api/tracking", trackingRoutes);
   app.use("/api/admin", adminRoutes);
+  app.use("/api/stores", storefrontRoutes);
+  app.use("/api/store-auth", storeAuthRoutes);
+  app.use("/api/store-orders", storeOrderRoutes);
+  app.use("/api/store-inventory", storeInventoryRoutes);
+  app.use("/api/store-staff", storeStaffRoutes);
+  app.use("/api/store-analytics", storeAnalyticsRoutes);
   app.use("/api/subscriptions", subscriptionRoutes);
   app.use("/api/sizing", sizingRoutes);
   app.use("/api/feed", feedRoutes);

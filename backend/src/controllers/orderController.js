@@ -10,6 +10,7 @@
 
 const Order = require('../models/Order');
 const Rating = require('../models/Rating');
+const Store = require('../models/Store');
 const db = require('../config/database');
 const DriverWallet = require('../models/DriverWallet');
 const {
@@ -43,6 +44,30 @@ const CLIENT_ERROR_FRAGMENTS = [
   'Order must have items',
   'Order total must be positive',
 ];
+
+// Store attribution for a new order, written so it can never be the reason a
+// checkout fails. Store.getDefaultStoreId() already returns null when no
+// active store row exists, but it still issues a real query -- a dropped
+// connection, a pool timeout or a permissions change would otherwise throw
+// straight out of createOrder and break order creation for every ordinary
+// customer, to gain nothing more than a dashboard grouping.
+//
+// So: any failure degrades to null (exactly the pre-store-portal behaviour)
+// and is logged loudly enough to notice, rather than propagated. An order
+// with store_id null is still a completely valid order -- it simply won't
+// appear in the store portal, which is the correct trade against refusing
+// the sale.
+async function resolveDefaultStoreId() {
+  try {
+    return await Store.getDefaultStoreId();
+  } catch (err) {
+    console.error(
+      '[orders] Could not resolve default store_id; creating order unattributed:',
+      err.message,
+    );
+    return null;
+  }
+}
 
 function isClientError(message) {
   if (!message) return false;
@@ -136,17 +161,19 @@ class OrderController {
         delivery_mode,
         time_slot,
         subtotal,
-        // Not client-supplied, same trust boundary as pickup_lat/pickup_lng
-        // just below -- there is no multi-vendor "stores" concept yet, so a
-        // client-sent store_id has nothing real to validate against. Was
-        // previously passed straight through from req.body with zero
-        // validation; harmless while orders.store_id was free-text VARCHAR
-        // and no real client ever populated it, but store_id is now a real
-        // UUID column (migration v27) -- an arbitrary client string would
-        // 500 the whole order-creation request instead of silently doing
-        // nothing. Explicit null until a real stores table + checkout
-        // store-selection step exists.
-        store_id: null,
+        // Still never client-supplied -- same trust boundary as
+        // pickup_lat/pickup_lng just below -- but resolved server-side now
+        // that a real `stores` table exists, instead of hardcoded null.
+        // This is what makes the Store Admin Portal's Orders screen receive
+        // real orders at all; without it every new order is unattributed and
+        // the portal silently shows nothing new.
+        //
+        // resolveDefaultStoreId() can never throw (see its definition): a
+        // failure degrades to null and logs, exactly as before this change.
+        // Checkout reliability must not depend on the store portal's
+        // attribution working -- an order that can't be attributed is still
+        // a perfectly valid order.
+        store_id: await resolveDefaultStoreId(),
         preferred_driver_id: resolvedPreferredDriverId,
         pickup_mall_id,
         dropoff_mall_id,

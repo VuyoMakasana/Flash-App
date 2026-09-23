@@ -71,6 +71,50 @@ const adminLimiter = rateLimit({
   ...storeOption,
 });
 
+// ADMIN PLATFORM PHASE 2: per-account brute-force lockout for admin login,
+// same pattern as accountLoginLimiter below (security-fixes' H-5 fix,
+// reused here for the admin surface since it's not on this branch's base —
+// see the task's own instruction to build the equivalent if missing).
+// adminLimiter above is IP-keyed; this is keyed by the normalized email
+// itself, so an attacker spraying one admin account's password from many
+// IPs (defeating the IP-keyed limiter) still hits a real per-account cap.
+// skipSuccessfulRequests: true — a legitimate admin logging in repeatedly
+// across a workday never burns down this budget, only real failed guesses
+// do.
+function normalizeAdminEmailKey(req) {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  return email || '__no_email_provided__';
+}
+
+const adminAccountLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many failed login attempts for this account. Please try again later.' },
+  skipSuccessfulRequests: true,
+  keyGenerator: normalizeAdminEmailKey,
+  ...storeOption,
+});
+
+// ADMIN PLATFORM PHASE 2 — forgot-password request, admin surface. Keyed by
+// the same normalized-email pattern as adminAccountLoginLimiter above (a
+// forgot-password request always carries an email in its body, same shape),
+// so a burst of reset requests against one specific account is capped
+// per-account, not just per-IP — same reasoning as the user/driver
+// forgot-password flow's shared authLimiter, but this is a privileged
+// surface so the cap is tighter and per-account rather than relying on the
+// generic router-wide limiter alone.
+const adminPasswordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many password reset requests. Please try again later.' },
+  keyGenerator: normalizeAdminEmailKey,
+  ...storeOption,
+});
+
 // Create order — 5 per minute
 const orderLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -152,10 +196,76 @@ const trustRequestLimiter = rateLimit({
   ...storeOption,
 });
 
+// ADMIN PLATFORM PHASE 3 — Store Admin Portal login, its own dedicated
+// counter (FLASH_STORE_ADMIN_DESIGN.md §5.5): "a credential-stuffing
+// attempt against one store's login shouldn't be able to exhaust the
+// rate-limit budget for a different store's legitimate login attempts, or
+// for the internal admin panel's." Same IP-keyed shape as adminLimiter.
+const storeAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts, please try again later.' },
+  skipSuccessfulRequests: false,
+  ...storeOption,
+});
+
+function normalizeStoreEmailKey(req) {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  return email || '__no_email_provided__';
+}
+
+// Per-account brute-force lockout, same reasoning as adminAccountLoginLimiter
+// above — an attacker spreading guesses against one store account across
+// many IPs still hits a real per-account cap.
+const storeAccountLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many failed login attempts for this account. Please try again later.' },
+  skipSuccessfulRequests: true,
+  keyGenerator: normalizeStoreEmailKey,
+  ...storeOption,
+});
+
+const storePasswordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many password reset requests. Please try again later.' },
+  keyGenerator: normalizeStoreEmailKey,
+  ...storeOption,
+});
+
+// ADMIN PLATFORM PHASE 3 — write-endpoint rate limiting for the Store Admin
+// Portal (CLAUDE.md's own scale rule: "rate limiting on every write
+// endpoint especially order-related"). IP-keyed (a store account is a real
+// staff member, not a customer — the realistic abuse case is a compromised
+// or malicious session hammering writes, not casual overuse) at a level
+// generous enough for real, busy order-acceptance/inventory-update traffic
+// but well below what a scripted flood needs.
+const storeWriteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down.' },
+  ...storeOption,
+});
+
 module.exports = {
   limiter,
   authLimiter,
   adminLimiter,
+  adminAccountLoginLimiter,
+  adminPasswordResetLimiter,
+  storeAuthLimiter,
+  storeAccountLoginLimiter,
+  storePasswordResetLimiter,
+  storeWriteLimiter,
   orderLimiter,
   locationLimiter,
   otpLimiter,
