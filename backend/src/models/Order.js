@@ -78,7 +78,10 @@ class Order extends BaseModel {
       delivery_mode,
       time_slot,
       subtotal,        // client value — used only as a fallback hint; server recomputes
-      store_id,
+      // store_id is deliberately NOT accepted from the caller any more -- it is
+      // derived below from the locked flash_inventory reads, so no path (client
+      // -supplied or controller-guessed) can attribute an order to a store that
+      // does not own the goods in it.
       preferred_driver_id,
       pickup_mall_id,
       dropoff_mall_id,
@@ -139,6 +142,14 @@ class Order extends BaseModel {
 
       let computedSubtotal = 0;
       const validatedItems  = [];
+      // Which store(s) this order's real Flash inventory belongs to. Collected
+      // from the same FOR UPDATE-locked reads below that already validate price
+      // and decrement stock, so attribution is derived from the authoritative
+      // row the order is actually built from -- no extra query, no second
+      // lookup that could disagree with it, and no race against a product being
+      // reassigned mid-checkout. External/partner items contribute nothing here
+      // because no Flash store owns them.
+      const inventoryStoreIds = new Set();
 
       for (const item of items) {
         const rawQty = Number(item.quantity);
@@ -152,7 +163,7 @@ class Order extends BaseModel {
 
         if (item.productId) {
           const invRow = await client.query(
-            `SELECT id, price, product_name, stock_by_size
+            `SELECT id, price, product_name, stock_by_size, store_id
              FROM flash_inventory
              WHERE id = $1 AND is_active = true
              FOR UPDATE`,
@@ -161,6 +172,7 @@ class Order extends BaseModel {
 
           if (invRow.rows.length) {
             // ── FLASH INVENTORY PATH: use server price, ignore client price ──
+            if (invRow.rows[0].store_id) inventoryStoreIds.add(String(invRow.rows[0].store_id));
             serverPrice = parseFloat(invRow.rows[0].price);
             if (activeDiscountPercent > 0) {
               serverPrice = Math.round(serverPrice * (1 - activeDiscountPercent / 100) * 100) / 100;
@@ -213,6 +225,35 @@ class Order extends BaseModel {
       }
       // ── END PRICE VALIDATION ───────────────────────────────────────────────
 
+      // ── STORE ATTRIBUTION ──────────────────────────────────────────────────
+      //
+      // Derived per order from the items actually bought, NOT from a "first
+      // active store" heuristic. The previous behaviour (the controller's
+      // resolveDefaultStoreId -> SELECT id FROM stores WHERE is_active LIMIT 1)
+      // was correct only while exactly one store existed: with two, every order
+      // would be attributed to whichever store happened to sort first, and once
+      // store payouts exist that misattributes real money.
+      //
+      //   no Flash inventory items -> null. An external/partner-only order is
+      //     owned by no Flash store and must not be attributed to one. The old
+      //     heuristic got this case wrong too, silently.
+      //   exactly one store        -> that store.
+      //   more than one store      -> rejected, see below.
+      //
+      // Splitting a mixed-store cart into per-store orders is deliberately out
+      // of scope here. The only alternative to rejecting is to pick one store
+      // and silently misattribute the rest of the basket's value -- precisely
+      // the money-misrouting this change exists to remove. Rejecting is a no-op
+      // against today's single-store data and leaves real splitting open later.
+      if (inventoryStoreIds.size > 1) {
+        throw new Error(
+          'Your basket contains items from more than one store. Please order from one store at a time.'
+        );
+      }
+      const derivedStoreId = inventoryStoreIds.size === 1
+        ? [...inventoryStoreIds][0]
+        : null;
+
       // Flash Premium (R99/mo) perk, approved 25% off the delivery fee,
       // uncapped: delivery_fee/driver_payout/flashCommission below are all
       // still derived from computedDeliveryFee (the full, undiscounted tier
@@ -259,7 +300,7 @@ class Order extends BaseModel {
           finalTotal,
           driverPayout,
           premiumDiscountApplied,
-          store_id            || null,
+          derivedStoreId,
           preferred_driver_id || null,
           preferredDriverExpiresAt,
           pickup_address,
