@@ -64,9 +64,63 @@ const APP_URL      = process.env.APP_URL    || 'http://localhost:3000';
 // configuration; override once the portal moves to its own subdomain.
 const STORE_PORTAL_URL = process.env.STORE_PORTAL_URL || 'https://flash-store-portal.onrender.com';
 
+// Resend's HTTP API key. Resend's SMTP password IS the API key, so an existing
+// SMTP-configured deployment needs no new environment variable — but
+// RESEND_API_KEY is preferred where it's set, because naming the thing it
+// actually is beats inheriting it from an SMTP field.
+const RESEND_API_KEY = process.env.RESEND_API_KEY
+  || (/(^|\.)resend\.com$/i.test(process.env.SMTP_HOST || '') ? process.env.SMTP_PASS : null);
+
+// Send over Resend's HTTPS API (port 443) instead of SMTP.
+//
+// Why this exists: Render blocks outbound traffic on SMTP ports 25, 465 and
+// 587 for free web services, so nodemailer could never open a TCP connection
+// at all from this deployment. It failed at connectionTimeout every time --
+// "Connection timeout", ~10s, before auth or TLS was even attempted. Confirmed
+// live in production, and confirmed against Render's own changelog. Resend
+// itself was never the problem: all five of its SMTP ports answer from an
+// unrestricted network, and its HTTPS API responds in under a second.
+//
+// Port 443 is not, and realistically will not be, blocked. This also returns a
+// structured JSON error on failure rather than a socket timeout, which is what
+// makes the silent-failure problem fixable at all.
+async function sendViaResendApi({ to, subject, html, text }) {
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ from: FROM_ADDRESS, to: [to], subject, html, text }),
+    // Belt and braces: fetch has no default timeout either, and this runs in a
+    // fire-and-forget path where a hung request would leak quietly.
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    // Surface Resend's own message -- it is specific and actionable (an
+    // unverified sending domain, for instance, says exactly that).
+    throw new Error(
+      `Resend API ${response.status}: ${payload.message || payload.name || 'unknown error'}`,
+    );
+  }
+
+  return { messageId: payload.id, via: 'resend-api' };
+}
+
 async function sendEmail({ to, subject, html, text }) {
+  // Preferred path. Tried first wherever an API key is available, because SMTP
+  // is unreachable from this platform (see sendViaResendApi above).
+  if (RESEND_API_KEY) {
+    const info = await sendViaResendApi({ to, subject, html, text });
+    console.log(`[Email] Sent to ${to} via Resend API — id: ${info.messageId}`);
+    return info;
+  }
+
   if (!transporter) {
-    // Dev mode — no SMTP configured. Print to console so you can still test.
+    // Dev mode — nothing configured. Print to console so you can still test.
     console.log('[Email] DEV MODE — would send email:');
     console.log(`  To:      ${to}`);
     console.log(`  Subject: ${subject}`);
@@ -74,6 +128,8 @@ async function sendEmail({ to, subject, html, text }) {
     return { messageId: 'dev-mode-no-send' };
   }
 
+  // Retained for any deployment using a non-Resend SMTP provider, or one on a
+  // network that permits SMTP egress.
   const info = await transporter.sendMail({
     from:    FROM_ADDRESS,
     to,
@@ -82,7 +138,7 @@ async function sendEmail({ to, subject, html, text }) {
     text,
   });
 
-  console.log(`[Email] Sent to ${to} — messageId: ${info.messageId}`);
+  console.log(`[Email] Sent to ${to} via SMTP — messageId: ${info.messageId}`);
   return info;
 }
 
