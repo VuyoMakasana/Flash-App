@@ -103,6 +103,16 @@ module.exports = {
     email_tokens:    'Internal auth-flow infrastructure (email verification/reset tokens) — no business-visibility need.',
     webhook_events:  'Internal Paystack webhook-idempotency ledger (unique constraint on paystack_event_id) — infrastructure only, no content to view.',
 
+    store_password_tokens: 'Internal auth-flow infrastructure (store-portal password reset tokens) — same reasoning as refresh_tokens/email_tokens above. Short-lived secrets, no business content.',
+
+    // ── Store Admin Portal tables — a partner store\'s own tenant data ──────
+    // These reached production via an earlier deploy and are now created by
+    // migrate.js v34, so they need an explicit decision here rather than an
+    // implicit one. None is currently registered as an AdminJS resource.
+    stores:       'Partner-store records. NOT yet a browsable admin resource — there is no store-onboarding or store-management screen built (Store.createVerified() exists but is called from nowhere). This is a genuine gap rather than a permanent exclusion: once self-service onboarding exists, Flash staff will need to review and approve applications, and this entry should move to `covered` at that point.',
+    store_users:  'Partner-store staff accounts, including bcrypt password hashes. Deliberately out of the Flash admin panel: these are a tenant\'s own users, managed by that store\'s Owner through the Store Admin Portal (storeStaffController), not by Flash staff. Browsing them platform-wide would also put another tenant\'s credentials table in a Flash-facing UI for no operational need.',
+    store_actions: 'The Store Admin Portal\'s own audit log — the store-scoped counterpart of admin_actions. Answerable per store inside the portal (StoreAction.getRecent). No Flash-side browse view yet; if a cross-tenant dispute ever needs one, it should be a purpose-built, store-filtered screen rather than a raw table browse.',
+
     // ── Dead/legacy tables that need no view because nothing writes to them ──
     saved_cards: 'DEAD TABLE, found new during this pass — superseded by payment_methods (migrate.js\'s own one-time data migration copies rows FROM saved_cards INTO payment_methods). No controller or model reads or writes saved_cards anymore.',
     store_credits: 'CONFIRMED DEAD TABLE (Addendum 1 §4.4, re-confirmed at the final completion pass by searching the entire backend source) — moved here from `covered`, where it had been sitting despite being dead. No INSERT/UPDATE anywhere; the one real read path (Return.getCredits, GET /api/returns/credits) can only ever return empty since nothing creates a balance > 0 row. Superseded by the current real-refund return model. Kept, not dropped, per this project\'s own rule — see migrate.js\'s own comment on the table definition. Must never be read from for a real admin number (e.g. "outstanding store credit liability" would always silently report zero).',

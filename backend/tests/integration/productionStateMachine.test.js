@@ -22,6 +22,32 @@ jest.mock("../../src/middleware/auth", () => ({
       return next();
     },
   requireApprovedDriver: (_req, _res, next) => next(),
+  // Store portal guards. This factory replaces the real module wholesale, so
+  // anything it omits is undefined at require time -- and server.js mounts the
+  // store routers, which register these as route handlers. Omitting them fails
+  // the entire suite at load with "Route.post() requires a callback function
+  // but got a [object Undefined]", before a single test runs.
+  //
+  // Stubs, not assertions: this suite exercises the order state machine, not
+  // store auth. Real store authentication and tenant isolation are covered by
+  // tests/unit/storeAuthController.test.js and the per-controller suites,
+  // which run against the genuine middleware.
+  authenticateStore: (req, _res, next) => {
+    req.storeUserId = req.headers["x-store-user-id"] || "store-user-1";
+    req.storeId = req.headers["x-store-id"] || "store-1";
+    req.storeRole = req.headers["x-store-role"] || "owner";
+    next();
+  },
+  requireStoreRole:
+    (...roles) =>
+    (req, res, next) => {
+      if (!roles.includes(req.storeRole)) {
+        return res.status(403).json({ error: "forbidden" });
+      }
+      return next();
+    },
+  requireOwnStore: (_req, _res, next) => next(),
+  requireStorePasswordCurrent: (_req, _res, next) => next(),
 }));
 
 jest.mock("../../src/config/database", () => ({
