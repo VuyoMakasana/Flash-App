@@ -58,6 +58,11 @@ function createTransporter() {
 const transporter = createTransporter();
 const FROM_ADDRESS = process.env.EMAIL_FROM || 'Flash <noreply@flashdelivery.co.za>';
 const APP_URL      = process.env.APP_URL    || 'http://localhost:3000';
+// The Store Admin Portal is a separate deployment from this backend, so it is
+// NOT APP_URL (which points at the public app domain, not at the portal).
+// Defaulted rather than required so the reset email keeps working without extra
+// configuration; override once the portal moves to its own subdomain.
+const STORE_PORTAL_URL = process.env.STORE_PORTAL_URL || 'https://flash-store-portal.onrender.com';
 
 async function sendEmail({ to, subject, html, text }) {
   if (!transporter) {
@@ -399,16 +404,19 @@ function escapeHtmlLite(value) {
 // belongs to the admin password-reset feature, which has no routes, no
 // controller methods and no admin_password_tokens table on this line.
 // ─── Store Password Reset (Admin Platform Phase 3) ─────────────────────────
-// Gives the raw token plus the real API contract, because the store
-// portal frontend (flash-store-portal) has its own login page but no
-// dedicated reset-password page yet, so this gives the raw token plus the
-// real API contract (POST /api/store-auth/reset-password).
+// Phase 1 fix: this used to instruct the recipient to "submit it with a POST
+// request to /api/store-auth/reset-password". That was written before the
+// portal had a reset page, and no real store owner can act on it. The portal
+// now has /reset-password (a paste-the-code form), so the email links there.
+// The raw code is still shown, because that page asks for it explicitly.
 async function sendStorePasswordResetEmail(toEmail, resetToken) {
+  const resetLink = `${STORE_PORTAL_URL}/reset-password`;
+
   return sendEmail({
     to:      toEmail,
     subject: 'Reset your Flash store account password',
     text:    `A password reset was requested for your Flash store account.\n\nReset code:\n${resetToken}\n\n`
-      + `Submit it with a POST request to /api/store-auth/reset-password as { "token": "${resetToken}", "newPassword": "..." }.\n\n`
+      + `Open ${resetLink} and enter the code above to set a new password.\n\n`
       + `This code expires in 1 hour and can only be used once. If you did not request this, ignore this email — your account is safe.`,
     html: `
 <!DOCTYPE html>
@@ -426,6 +434,10 @@ async function sendStorePasswordResetEmail(toEmail, resetToken) {
     <div style="text-align:center;margin:24px 0">
       <code style="display:inline-block;background:#f3f4f6;color:#111827;padding:14px 20px;border-radius:12px;font-weight:700;font-size:15px;word-break:break-all">${resetToken}</code>
     </div>
+    <div style="text-align:center;margin:24px 0">
+      <a href="${resetLink}" style="display:inline-block;background:#0a0a0a;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-weight:700;font-size:15px">Set a new password</a>
+    </div>
+    <p style="color:#6b7280;font-size:13px">Or open <a href="${resetLink}" style="color:#111827">${resetLink}</a> and enter the code above.</p>
     <p style="color:#9ca3af;font-size:13px">This code expires in <strong>1 hour</strong> and can only be used once. If you did not request this, ignore this email — your account is safe.</p>
   </div>
 </body>
