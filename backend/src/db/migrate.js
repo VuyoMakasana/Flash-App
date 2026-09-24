@@ -2126,6 +2126,96 @@ async function migrateV33(client) {
 async function migrateV34(client) {
   await client.query('BEGIN');
   try {
+    // ── BASE STORE SCHEMA ──────────────────────────────────────────────────
+    //
+    // These four tables reached production via an earlier deploy of a different
+    // branch, NOT via this migration file -- so this file never contained their
+    // definitions at all. That made the ALTERs below fail outright on any
+    // database that had not been through that other branch:
+    //
+    //   Migration v34 failed: relation "store_users" does not exist
+    //
+    // which is exactly what CI has been failing with on every push since the
+    // store portal merged (CI builds a fresh postgres:15 and runs this file).
+    // Production was unaffected because the tables were already there, so the
+    // gap was invisible from the production side -- the direction I had been
+    // checking. A fresh environment could not run the store portal at all.
+    //
+    // Definitions below mirror PRODUCTION's actual live shape column for
+    // column, deliberately not the originating branch's version (which also
+    // carries onboarding_verified_by/_at -- columns production does not have,
+    // and reproducing them here would manufacture fresh drift rather than
+    // remove it). Every statement is IF NOT EXISTS: a no-op against production,
+    // and the real definition everywhere else.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS stores (
+        id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        name                VARCHAR(200) NOT NULL,
+        address             TEXT,
+        lat                 DOUBLE PRECISION,
+        lng                 DOUBLE PRECISION,
+        service_area_bounds JSONB,
+        owner_name          VARCHAR(200),
+        owner_email         VARCHAR(255),
+        owner_phone         VARCHAR(20),
+        is_active           BOOLEAN NOT NULL DEFAULT true,
+        logo_url            TEXT,
+        banner_url          TEXT,
+        description         TEXT,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_users (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id      UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+        name          VARCHAR(200) NOT NULL,
+        email         VARCHAR(255) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        role          VARCHAR(20)  NOT NULL CHECK (role IN ('owner','store_manager','inventory_staff','sales_staff','finance','marketing')),
+        is_active     BOOLEAN NOT NULL DEFAULT true,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_actions (
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_user_id UUID NOT NULL REFERENCES store_users(id) ON DELETE CASCADE,
+        store_id      UUID NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+        action_type   VARCHAR(50) NOT NULL,
+        target_table  VARCHAR(50),
+        target_id     UUID,
+        metadata      JSONB,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_actions_store_user_id ON store_actions(store_user_id, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_store_actions_store_id ON store_actions(store_id, created_at DESC)`);
+
+    // Store-scoped inventory. flash_inventory is created far earlier in this
+    // file WITHOUT store_id (it predates multi-tenancy), so on a fresh database
+    // every store-scoped inventory query -- all of which filter on store_id --
+    // would fail. Same additive treatment as the tables above.
+    await client.query(`ALTER TABLE flash_inventory ADD COLUMN IF NOT EXISTS store_id UUID`);
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'flash_inventory_store_id_fkey'
+        ) THEN
+          ALTER TABLE flash_inventory
+            ADD CONSTRAINT flash_inventory_store_id_fkey
+            FOREIGN KEY (store_id) REFERENCES stores(id);
+        END IF;
+      END $$;
+    `);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_flash_inventory_store_id ON flash_inventory(store_id)`);
+
+    // ── RECONCILIATION ─────────────────────────────────────────────────────
     await client.query(`ALTER TABLE store_users ADD COLUMN IF NOT EXISTS force_password_reset BOOLEAN NOT NULL DEFAULT false`);
     await client.query(`ALTER TABLE store_users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_store_users_store_id ON store_users(store_id)`);
