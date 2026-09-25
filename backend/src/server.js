@@ -85,6 +85,7 @@ const storeOrderRoutes = require("./routes/storeOrderRoutes");
 const storeInventoryRoutes = require("./routes/storeInventoryRoutes");
 const storeStaffRoutes = require("./routes/storeStaffRoutes");
 const storeAnalyticsRoutes = require("./routes/storeAnalyticsRoutes");
+const storeBankingRoutes = require("./routes/storeBankingRoutes");
 const storefrontRoutes = require("./routes/storefrontRoutes");
 const storeOnboardingRoutes = require("./routes/storeOnboardingRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
@@ -204,6 +205,9 @@ function createApp() {
   app.use("/api/store-inventory", storeInventoryRoutes);
   app.use("/api/store-staff", storeStaffRoutes);
   app.use("/api/store-analytics", storeAnalyticsRoutes);
+  // Phase 2a — store payout destination. Owner-only; the router applies its
+  // own auth chain, same as the other store-scoped routers.
+  app.use("/api/store-banking", storeBankingRoutes);
   app.use("/api/subscriptions", subscriptionRoutes);
   app.use("/api/sizing", sizingRoutes);
   app.use("/api/feed", feedRoutes);

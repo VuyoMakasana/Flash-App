@@ -702,6 +702,16 @@ class WebhookController {
     const tracked = TRACKED_EMAIL_KINDS[subject];
     if (!tracked) return { duplicate: false };
 
+    // A log-only kind (statusColumn null) is recorded in email_events and
+    // nowhere else -- it is still visible to an admin, it just has no
+    // denormalised column on the account. See TRACKED_EMAIL_KINDS for why.
+    if (!tracked.statusColumn) {
+      console.warn(
+        `[Webhook] Resend: ${tracked.kind} email ${eventType} for ${recipient} -- logged only, no account column`,
+      );
+      return { duplicate: false, storeUsersUpdated: 0 };
+    }
+
     // Column names come from TRACKED_EMAIL_KINDS, never from the payload, so
     // there is no injection surface despite the interpolation.
     const status = eventType === 'email.bounced' ? 'bounced' : 'delayed';

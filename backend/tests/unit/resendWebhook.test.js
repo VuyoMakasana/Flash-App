@@ -316,13 +316,39 @@ describe('EMAIL_SUBJECTS is the single source of truth', () => {
     }
   });
 
-  test('every tracked subject maps to a distinct pair of columns', () => {
-    const statusColumns = Object.values(TRACKED_EMAIL_KINDS).map((k) => k.statusColumn);
+  test('every tracked subject with columns maps to a DISTINCT pair', () => {
+    // A log-only kind (statusColumn null) is legitimate -- it is recorded in
+    // email_events without a denormalised account column. Two kinds sharing the
+    // same column would not be: a bounce on one would be reported as the other.
+    const withColumns = Object.values(TRACKED_EMAIL_KINDS).filter((k) => k.statusColumn);
+    const statusColumns = withColumns.map((k) => k.statusColumn);
     expect(new Set(statusColumns).size).toBe(statusColumns.length);
-    for (const entry of Object.values(TRACKED_EMAIL_KINDS)) {
+    for (const entry of withColumns) {
       expect(entry.statusColumn).toMatch(/^[a-z_]+$/);
       expect(entry.timestampColumn).toMatch(/^[a-z_]+$/);
     }
+  });
+
+  test('a log-only kind declares BOTH columns null, never just one', () => {
+    // Half-declaring would build an UPDATE naming an undefined column.
+    for (const entry of Object.values(TRACKED_EMAIL_KINDS)) {
+      const hasStatus = Boolean(entry.statusColumn);
+      const hasTimestamp = Boolean(entry.timestampColumn);
+      expect(hasStatus).toBe(hasTimestamp);
+    }
+  });
+
+  test('a bounce on a log-only kind is recorded but updates no account', async () => {
+    pool.query.mockResolvedValueOnce({ rows: [{ id: 'evt-1' }] });
+
+    const event = bounceEvent(EMAIL_SUBJECTS.STORE_PAYOUT_DESTINATION_CHANGED);
+    const result = await WebhookController.recordResendEvent('msg_logonly', event);
+
+    // Logged in email_events...
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    expect(pool.query.mock.calls[0][0]).toMatch(/INSERT INTO email_events/);
+    // ...and no UPDATE attempted against a null column name.
+    expect(result.storeUsersUpdated).toBe(0);
   });
 
   test('every EMAIL_SUBJECTS value has a TRACKED_EMAIL_KINDS entry', () => {

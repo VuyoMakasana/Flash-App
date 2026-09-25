@@ -1111,6 +1111,16 @@ async function migrate() {
     throw err;
   } finally {
     client37.release();
+  }
+
+  const client38 = await pool.connect();
+  try {
+    await migrateV38(client38);
+  } catch (err) {
+    console.error('Migration v38 failed:', err.message);
+    throw err;
+  } finally {
+    client38.release();
     await pool.end();
   }
 
@@ -2408,4 +2418,73 @@ async function migrateV37(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37 };
+// STORE PAYOUT DESTINATION (Phase 2a).
+//
+// Where a store's settlement money goes. Phase 2a only: no money moves until
+// 2c, and by then the amount owed will already be independently computable and
+// auditable from 2b's work.
+//
+// THE ACCOUNT NUMBER IS DELIBERATELY NOT STORED. Once
+// paystackService.createTransferRecipient succeeds, Paystack holds the account
+// and `recipient_code` is all Flash needs to pay it. Flash keeps only what it
+// needs to SHOW the owner which account is on file: bank name, the last four
+// digits, and the account holder's name.
+//
+// This is a deliberate departure from the driver equivalent
+// (transfer_recipients), which stores the full account_number in plaintext
+// despite utils/paymentCrypto.js existing in the same codebase — tracked as
+// OPEN_FOLLOWUPS #17. Encrypting the number here was the obvious alternative,
+// but not holding it is strictly stronger: data that was never persisted cannot
+// be leaked by a database dump, written to a log, or returned across a
+// tenant boundary by a future query that forgets to exclude a column.
+async function migrateV38(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS store_transfer_recipients (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        store_id        UUID NOT NULL REFERENCES stores(id),
+        recipient_code  VARCHAR(255) NOT NULL,
+        bank_code       VARCHAR(20)  NOT NULL,
+        bank_name       VARCHAR(255),
+        account_last4   VARCHAR(4)   NOT NULL,
+        account_name    VARCHAR(255) NOT NULL,
+        is_active       BOOLEAN      NOT NULL DEFAULT true,
+        created_by      UUID REFERENCES store_users(id),
+        created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    // A store has AT MOST ONE active payout destination, enforced by the
+    // database rather than by application discipline. A partial unique index is
+    // what makes that a real invariant: two concurrent "change my bank account"
+    // requests cannot both succeed and leave two active destinations, with a
+    // later settlement then picking whichever row it happened to read first.
+    //
+    // The driver table has no equivalent constraint — it relies on the
+    // controller deactivating the old row first, which is correct today but is
+    // a convention, not a guarantee.
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_store_transfer_recipients_one_active
+        ON store_transfer_recipients(store_id) WHERE is_active = true
+    `);
+
+    // Superseded destinations are kept, never deleted: "which account was this
+    // store's money sent to in March" must remain answerable, and a payout
+    // history that silently loses its destinations is not an audit trail.
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_store_transfer_recipients_store_created
+        ON store_transfer_recipients(store_id, created_at DESC)
+    `);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v38 completed: store_transfer_recipients (no account number stored)');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v38 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38 };
