@@ -63,6 +63,13 @@ export default function LoginPage() {
         {error && <p className="form-error">{error}</p>}
         <button type="submit" disabled={loading}>{loading ? 'Signing in…' : 'Sign in'}</button>
         <Link to="/forgot-password" style={{ fontSize: 13, textAlign: 'center' }}>Forgot password?</Link>
+        {/* Phase 3 — the only discoverable entry point to self-service
+            onboarding. Without this an owner has to be sent the /apply URL
+            directly, which was the whole limitation onboarding set out to
+            remove. */}
+        <p style={{ fontSize: 13, textAlign: 'center', color: '#666', margin: '4px 0 0' }}>
+          Want to sell on Flash? <Link to="/apply">Apply to open a store</Link>
+        </p>
       </form>
     </div>
   );

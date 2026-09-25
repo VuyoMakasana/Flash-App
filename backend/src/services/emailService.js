@@ -510,7 +510,14 @@ async function sendStorePasswordResetEmail(toEmail, resetToken) {
 // founder's own seeded admin account), emailed here rather than ever
 // displayed/logged in plaintext anywhere else.
 async function sendStoreWelcomeEmail(toEmail, ownerName, inviteToken) {
-  const setPasswordLink = `${STORE_PORTAL_URL}/reset-password`;
+  // Points at the dedicated first-password page rather than /reset-password.
+  // Both spend the same store_password_tokens row through the same endpoint —
+  // only the copy differs, and a newly-approved owner should not be greeted by
+  // a page titled "Set a NEW password" asking for a "Reset code". The token
+  // stays out of this URL deliberately: it is pasted from the code shown in
+  // the email body, so a single-use credential never reaches browser history,
+  // a Referer header, or the static host's access logs.
+  const setPasswordLink = `${STORE_PORTAL_URL}/set-password`;
 
   return sendEmail({
     to:      toEmail,
