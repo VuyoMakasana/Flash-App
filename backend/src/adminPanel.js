@@ -1736,6 +1736,44 @@ function buildResources(db) {
         }, RESOURCE_TIMESTAMP_COLUMNS.marketing_waitlist),
       },
       {
+        // EMAIL DELIVERY EVENTS — the admin-visible half of bounce visibility.
+        //
+        // Before this, a bounced email was invisible to Flash: sendEmail()
+        // resolves when Resend ACCEPTS a message, and the bounce arrives
+        // asynchronously afterwards with nothing listening. A real store
+        // password-reset bounced on 24 Sep 2026 and sat undetected until
+        // someone went looking in Resend's own dashboard.
+        //
+        // Deliberately covers EVERY recipient, not just store owners: the
+        // transport is shared by customer password resets, email verification,
+        // SOS alerts, order escalation and admin mail, so a systemic delivery
+        // problem should be visible here whoever it affects.
+        //
+        // Read-only: these are received facts about what a mail provider did.
+        // Editing one would be falsifying a delivery record.
+        resource: db.table('email_events'),
+        options: withChronologicalDefaults({
+          listProperties: ['event_type', 'recipient', 'subject', 'reason', 'created_at'],
+          properties: {
+            recipient: { isTitle: true },
+            reason: { type: 'textarea' },
+            // The raw provider payload, kept for diagnosis but hidden from the
+            // list so it cannot drown the columns that matter.
+            payload: { type: 'textarea', isVisible: { list: false, show: true, edit: false, filter: false } },
+            svix_id: { isVisible: { list: false, show: true, edit: false, filter: false } },
+            resend_email_id: { isVisible: { list: false, show: true, edit: false, filter: true } },
+          },
+          actions: {
+            list: {},
+            show: {},
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.email_events),
+      },
+      {
         // Contact page submissions from the public marketing site.
         resource: db.table('marketing_contact_messages'),
         options: withChronologicalDefaults({

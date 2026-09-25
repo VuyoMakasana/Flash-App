@@ -54,6 +54,7 @@ const RESOURCE_TIMESTAMP_COLUMNS = {
   // shuffling long-waiting applications around for reasons unrelated to when
   // they arrived.
   stores: 'created_at',
+  email_events: 'created_at',
   chat_reports: 'created_at',
   user_blocks: 'created_at',
   // §2.13 audit (full admin visibility) — driver_commission_debts,

@@ -17,4 +17,9 @@ const WebhookController = require('../controllers/webhookController');
 // receives the original bytes. Do NOT add express.json() here.
 router.post('/paystack', express.raw({ type: 'application/json' }), WebhookController.handlePaystack);
 
+// Resend email delivery events (bounces and delays). Same raw-body treatment
+// and for the same reason: Svix signs the original bytes, so anything that
+// re-serialises the JSON first would invalidate every signature.
+router.post('/resend', express.raw({ type: 'application/json' }), WebhookController.handleResend);
+
 module.exports = router;

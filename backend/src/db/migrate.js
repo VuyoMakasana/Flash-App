@@ -1101,6 +1101,16 @@ async function migrate() {
     throw err;
   } finally {
     client36.release();
+  }
+
+  const client37 = await pool.connect();
+  try {
+    await migrateV37(client37);
+  } catch (err) {
+    console.error('Migration v37 failed:', err.message);
+    throw err;
+  } finally {
+    client37.release();
     await pool.end();
   }
 
@@ -2336,4 +2346,66 @@ async function migrateV36(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36 };
+// EMAIL DELIVERY VISIBILITY.
+//
+// Flash could not see a bounce. sendEmail() resolves as soon as Resend ACCEPTS
+// a message, but a bounce happens asynchronously afterwards, so every caller --
+// including the fire-and-forget sendStoreWelcomeEmail -- logged success and
+// moved on. Proven live, not theorised: a store password-reset sent to a real
+// Gmail address on 24 Sep 2026 bounced, and nothing anywhere recorded it. It was
+// found only by going and looking in Resend's dashboard.
+//
+// That matters most for onboarding, where the welcome email is the ONLY way an
+// approved owner ever gets a password. A bounce leaves an active store whose
+// owner cannot sign in, with the store, the account and the token all looking
+// perfectly healthy in the database.
+async function migrateV37(client) {
+  await client.query('BEGIN');
+  try {
+    // The durable record, covering every recipient -- not just store owners.
+    // The blast radius of the transport is platform-wide (customer password
+    // resets, email verification, SOS alerts, order escalation, admin mail),
+    // so the log is deliberately general even though the columns below are
+    // store-specific.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS email_events (
+        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        svix_id         VARCHAR(255) UNIQUE,
+        resend_email_id VARCHAR(255),
+        event_type      VARCHAR(64)  NOT NULL,
+        recipient       VARCHAR(255),
+        subject         TEXT,
+        reason          TEXT,
+        payload         JSONB,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    // svix_id is UNIQUE because webhooks RETRY. Svix redelivers on any non-2xx
+    // and on timeouts, so the same event will legitimately arrive more than
+    // once; the unique constraint is what makes the handler idempotent rather
+    // than accumulating duplicates of a single bounce.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_email_events_recipient_created ON email_events(recipient, created_at DESC)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_email_events_type_created ON email_events(event_type, created_at DESC)`);
+
+    // Denormalised onto the account the failure actually concerns, so
+    // "did this owner ever receive their welcome email?" is a single read
+    // rather than a join against a table that will be pruned eventually.
+    // Nullable by design: NULL means "nothing has gone wrong that we know of",
+    // which is the correct state for every existing row and avoids a backfill
+    // that would invent history we do not have.
+    await client.query(`ALTER TABLE store_users ADD COLUMN IF NOT EXISTS welcome_email_status VARCHAR(32)`);
+    await client.query(`ALTER TABLE store_users ADD COLUMN IF NOT EXISTS welcome_email_status_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE store_users ADD COLUMN IF NOT EXISTS reset_email_status VARCHAR(32)`);
+    await client.query(`ALTER TABLE store_users ADD COLUMN IF NOT EXISTS reset_email_status_at TIMESTAMPTZ`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v37 completed: email_events + store_users delivery-status columns');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v37 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37 };

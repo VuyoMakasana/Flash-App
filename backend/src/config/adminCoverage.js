@@ -56,6 +56,7 @@ module.exports = {
 
     // ── Phase 0 — this table and its own audit trail ─────────────────────
     admins:        'Phase 0 — the account itself. A "manage other admins" screen is a natural Phase 4 addition once there\'s a real second admin (Addendum 3 §4\'s role decision).',
+    email_events: 'Bounce visibility — real, browsable AdminJS resource (read-only). Every Resend delivery event Flash receives lands here, for every recipient, not just store owners: the transport is shared by customer password resets, email verification, SOS alerts and order escalation, so a systemic delivery failure is visible here whoever it hits. This is the surface that replaces having to go and look in Resend, which is how the 24 Sep 2026 bounce was found.',
     stores: 'Phase 3 — real, browsable AdminJS resource: the store-onboarding review queue. Public applications (POST /api/store-onboarding/apply) land here as pending, and the approveStore/rejectStore actions are the only way a store goes live. Moved here from intentionallyExcluded, exactly as that entry said it should be once onboarding existed.',
     admin_actions: 'Phase 0 — real, browsable, read-only AdminJS resource, now built and verified live (production-readiness audit §2.13, full admin visibility). AdminAction.getRecent() remains the backend read path other code uses; this resource is the human-facing browse/search view over the same table.',
 
