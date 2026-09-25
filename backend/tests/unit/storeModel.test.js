@@ -12,6 +12,9 @@
  * both methods filter to is_active stores only.
  */
 
+// Phase 3 additions below the original storefront tests: the onboarding
+// lifecycle methods, and the storefront gate that keeps an unapproved store
+// out of the public directory.
 jest.mock('../../src/config/database');
 
 const pool = require('../../src/config/database');
@@ -58,5 +61,96 @@ describe('Store.findPublicById', () => {
     pool.query.mockResolvedValue({ rows: [] });
     const result = await Store.findPublicById('missing');
     expect(result).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3 — onboarding lifecycle
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ADMIN_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const STORE_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+
+describe('Store.createApplication', () => {
+  test('creates the store inactive and pending, whatever the applicant sent', async () => {
+    pool.query.mockResolvedValue({ rows: [{ id: STORE_ID }] });
+    await Store.createApplication({
+      name: 'Kwazakhele Threads',
+      ownerName: 'Nomsa',
+      ownerEmail: 'nomsa@example.com',
+    });
+
+    const [sql] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/INSERT INTO stores/);
+    expect(sql).toMatch(/false, 'pending'/);
+  });
+});
+
+describe('Store.approve / Store.reject', () => {
+  test('approve activates the store and records who decided', async () => {
+    pool.query.mockResolvedValue({ rows: [{ id: STORE_ID }] });
+    await Store.approve(STORE_ID, ADMIN_ID);
+
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/status = 'approved'/);
+    expect(sql).toMatch(/is_active = true/);
+    expect(sql).toMatch(/reviewed_by = \$2/);
+    expect(params).toEqual([STORE_ID, ADMIN_ID]);
+  });
+
+  // The race guard: both transitions are scoped to the states they are legal
+  // from, so a second caller updates zero rows instead of re-deciding.
+  test.each([['approve'], ['reject']])('%s only applies to an undecided application', async (method) => {
+    pool.query.mockResolvedValue({ rows: [] });
+    const result = method === 'approve'
+      ? await Store.approve(STORE_ID, ADMIN_ID)
+      : await Store.reject(STORE_ID, ADMIN_ID, 'reason');
+
+    expect(pool.query.mock.calls[0][0]).toMatch(/status IN \('pending','under_review'\)/);
+    expect(result).toBeNull();
+  });
+
+  test('reject records the reason and leaves the store offline', async () => {
+    pool.query.mockResolvedValue({ rows: [{ id: STORE_ID }] });
+    await Store.reject(STORE_ID, ADMIN_ID, 'Outside service area');
+
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/status = 'rejected'/);
+    expect(sql).toMatch(/is_active = false/);
+    expect(params).toContain('Outside service area');
+  });
+
+  test('approve clears any earlier rejection reason', async () => {
+    pool.query.mockResolvedValue({ rows: [{ id: STORE_ID }] });
+    await Store.approve(STORE_ID, ADMIN_ID);
+    expect(pool.query.mock.calls[0][0]).toMatch(/rejection_reason = NULL/);
+  });
+});
+
+describe('storefront visibility gate', () => {
+  // An application must not be discoverable by customers before a human has
+  // approved it -- is_active alone was not enough once pending stores existed.
+  test('listActive requires approved status, not just is_active', async () => {
+    pool.query.mockResolvedValue({ rows: [] });
+    await Store.listActive(1, 20);
+    expect(pool.query.mock.calls[0][0]).toMatch(/is_active = true AND status = 'approved'/);
+  });
+
+  test('findPublicById requires approved status too', async () => {
+    pool.query.mockResolvedValue({ rows: [] });
+    await Store.findPublicById(STORE_ID);
+    expect(pool.query.mock.calls[0][0]).toMatch(/is_active = true AND status = 'approved'/);
+  });
+
+  test('the review queue never exposes the public column allowlist\'s omissions by accident', async () => {
+    pool.query.mockResolvedValue({ rows: [] });
+    await Store.listByStatus('pending');
+
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/WHERE status = \$1/);
+    expect(params[0]).toBe('pending');
+    // This one is admin-facing, so owner contact details are expected here --
+    // the opposite of listActive. Asserted so the two cannot be confused.
+    expect(sql).toMatch(/owner_email/);
   });
 });

@@ -240,6 +240,21 @@ const storePasswordResetLimiter = rateLimit({
   ...storeOption,
 });
 
+// Phase 3 — public store-onboarding applications. Unauthenticated and it
+// writes two rows per call, so it is the most abusable endpoint the store
+// portal exposes: unthrottled it would let anyone mass-create pending stores
+// and, because store_users.email is globally unique, squat real businesses'
+// email addresses. Keyed by IP rather than email, since the email is exactly
+// what an abuser would vary.
+const storeOnboardingLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many applications from this network. Please try again later.' },
+  ...storeOption,
+});
+
 // ADMIN PLATFORM PHASE 3 — write-endpoint rate limiting for the Store Admin
 // Portal (CLAUDE.md's own scale rule: "rate limiting on every write
 // endpoint especially order-related"). IP-keyed (a store account is a real
@@ -265,6 +280,7 @@ module.exports = {
   storeAuthLimiter,
   storeAccountLoginLimiter,
   storePasswordResetLimiter,
+  storeOnboardingLimiter,
   storeWriteLimiter,
   orderLimiter,
   locationLimiter,

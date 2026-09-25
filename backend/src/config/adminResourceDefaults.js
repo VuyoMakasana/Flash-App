@@ -48,6 +48,12 @@ const RESOURCE_TIMESTAMP_COLUMNS = {
   marketing_waitlist: 'created_at',
   marketing_contact_messages: 'created_at',
   marketing_applications: 'created_at',
+  // created_at is when the store APPLIED, which is the question the review
+  // queue actually asks ("what came in, and how long has it been waiting").
+  // Not updated_at, which an approval or a later profile edit would bump,
+  // shuffling long-waiting applications around for reasons unrelated to when
+  // they arrived.
+  stores: 'created_at',
   chat_reports: 'created_at',
   user_blocks: 'created_at',
   // §2.13 audit (full admin visibility) — driver_commission_debts,

@@ -56,6 +56,7 @@ module.exports = {
 
     // ── Phase 0 — this table and its own audit trail ─────────────────────
     admins:        'Phase 0 — the account itself. A "manage other admins" screen is a natural Phase 4 addition once there\'s a real second admin (Addendum 3 §4\'s role decision).',
+    stores: 'Phase 3 — real, browsable AdminJS resource: the store-onboarding review queue. Public applications (POST /api/store-onboarding/apply) land here as pending, and the approveStore/rejectStore actions are the only way a store goes live. Moved here from intentionallyExcluded, exactly as that entry said it should be once onboarding existed.',
     admin_actions: 'Phase 0 — real, browsable, read-only AdminJS resource, now built and verified live (production-readiness audit §2.13, full admin visibility). AdminAction.getRecent() remains the backend read path other code uses; this resource is the human-facing browse/search view over the same table.',
 
     // ── Phase 2 — financial and dispute visibility ──────────────────────
@@ -109,7 +110,6 @@ module.exports = {
     // These reached production via an earlier deploy and are now created by
     // migrate.js v34, so they need an explicit decision here rather than an
     // implicit one. None is currently registered as an AdminJS resource.
-    stores:       'Partner-store records. NOT yet a browsable admin resource — there is no store-onboarding or store-management screen built (Store.createVerified() exists but is called from nowhere). This is a genuine gap rather than a permanent exclusion: once self-service onboarding exists, Flash staff will need to review and approve applications, and this entry should move to `covered` at that point.',
     store_users:  'Partner-store staff accounts, including bcrypt password hashes. Deliberately out of the Flash admin panel: these are a tenant\'s own users, managed by that store\'s Owner through the Store Admin Portal (storeStaffController), not by Flash staff. Browsing them platform-wide would also put another tenant\'s credentials table in a Flash-facing UI for no operational need.',
     store_actions: 'The Store Admin Portal\'s own audit log — the store-scoped counterpart of admin_actions. Answerable per store inside the portal (StoreAction.getRecent). No Flash-side browse view yet; if a cross-tenant dispute ever needs one, it should be a purpose-built, store-filtered screen rather than a raw table browse.',
 

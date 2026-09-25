@@ -509,14 +509,27 @@ async function sendStorePasswordResetEmail(toEmail, resetToken) {
 // password (force_password_reset = true, same structural guarantee as the
 // founder's own seeded admin account), emailed here rather than ever
 // displayed/logged in plaintext anywhere else.
-async function sendStoreWelcomeEmail(toEmail, ownerName, tempPassword) {
+async function sendStoreWelcomeEmail(toEmail, ownerName, inviteToken) {
+  const setPasswordLink = `${STORE_PORTAL_URL}/reset-password`;
+
   return sendEmail({
     to:      toEmail,
     subject: 'Your Flash Store Portal account is ready',
-    text:    `Hi ${ownerName},\n\nYour store has been verified and your Flash Store Portal account is ready.\n\n`
-      + `Email: ${toEmail}\nTemporary password: ${tempPassword}\n\n`
-      + `You'll be asked to set a new password the first time you sign in. This temporary password cannot be reused after that.\n\n`
-      + `If you weren't expecting this, contact Flash support.`,
+    text:    `Hi ${ownerName},
+
+Your store has been approved and your Flash Store Portal account is ready.
+
+`
+      + `Set your password to get started.
+
+Setup code:
+${inviteToken}
+
+`
+      + `Open ${setPasswordLink} and enter the code above to choose your password.
+
+`
+      + `This code expires in 7 days and can only be used once. If you weren't expecting this, contact Flash support.`,
     html: `
 <!DOCTYPE html>
 <html>
@@ -529,9 +542,15 @@ async function sendStoreWelcomeEmail(toEmail, ownerName, tempPassword) {
       </div>
     </div>
     <h2 style="color:#111827;margin-top:0">Your Store Portal account is ready</h2>
-    <p style="color:#6b7280">Hi ${escapeHtmlLite(ownerName)}, your store has been verified. Sign in with the temporary credentials below — you'll be asked to set a new password immediately.</p>
-    <p style="color:#111827"><strong>Email:</strong> ${escapeHtmlLite(toEmail)}<br><strong>Temporary password:</strong> <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px">${escapeHtmlLite(tempPassword)}</code></p>
-    <p style="color:#9ca3af;font-size:13px">If you weren't expecting this, contact Flash support.</p>
+    <p style="color:#6b7280">Hi ${escapeHtmlLite(ownerName)}, your store has been approved. Set your password below to sign in for the first time.</p>
+    <div style="text-align:center;margin:24px 0">
+      <code style="display:inline-block;background:#f3f4f6;color:#111827;padding:14px 20px;border-radius:12px;font-weight:700;font-size:15px;word-break:break-all">${escapeHtmlLite(inviteToken)}</code>
+    </div>
+    <div style="text-align:center;margin:24px 0">
+      <a href="${setPasswordLink}" style="display:inline-block;background:#0a0a0a;color:#fff;text-decoration:none;padding:14px 28px;border-radius:12px;font-weight:700;font-size:15px">Set your password</a>
+    </div>
+    <p style="color:#6b7280;font-size:13px">Or open <a href="${setPasswordLink}" style="color:#111827">${setPasswordLink}</a> and enter the code above.</p>
+    <p style="color:#9ca3af;font-size:13px">This code expires in <strong>7 days</strong> and can only be used once. If you weren't expecting this, contact Flash support.</p>
   </div>
 </body>
 </html>`,
