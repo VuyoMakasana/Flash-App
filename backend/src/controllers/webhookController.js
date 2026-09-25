@@ -561,6 +561,165 @@ class WebhookController {
       });
     }
   }
+
+  // ─── RESEND: EMAIL DELIVERY EVENTS ───────────────────────────────────────
+  //
+  // Flash could not see a bounce before this existed. sendEmail() resolves the
+  // moment Resend ACCEPTS a message; the bounce happens asynchronously
+  // afterwards, so every caller logged success and moved on. A real store
+  // password-reset to a real Gmail address bounced on 24 Sep 2026 and nothing
+  // recorded it — it was found only by going and looking in Resend.
+  //
+  // That is worst for onboarding: the welcome email is the ONLY way an approved
+  // owner ever gets a password, so a bounce leaves an active store whose owner
+  // cannot sign in, while the store, the account and the token all look healthy.
+  //
+  // Verification follows Svix's scheme (Resend delegates webhook signing to
+  // Svix), implemented with node's crypto rather than by adding the `svix`
+  // package — one more dependency in the webhook path is not worth saving
+  // twenty lines, and this file already verifies Paystack's HMAC by hand.
+  static async handleResend(req, res) {
+    const signingSecret = getOptional('RESEND_WEBHOOK_SECRET', 'webhook');
+
+    if (!signingSecret) {
+      // Refuse rather than accept unverified events. An endpoint that writes to
+      // the database on the word of any anonymous caller is worse than one that
+      // is temporarily down: Svix retries, so a missing secret costs nothing
+      // permanent, whereas an unauthenticated write path would let anyone forge
+      // "bounced" against any address.
+      console.error('[Webhook] Resend: RESEND_WEBHOOK_SECRET not configured — rejecting event');
+      return res.status(500).send('Webhook secret not configured');
+    }
+
+    if (!Buffer.isBuffer(req.body)) {
+      console.warn('[Webhook] Resend request body was not raw bytes');
+      return res.status(400).send('Invalid webhook body');
+    }
+
+    const svixId        = String(req.headers['svix-id'] || '');
+    const svixTimestamp = String(req.headers['svix-timestamp'] || '');
+    const svixSignature = String(req.headers['svix-signature'] || '');
+
+    if (!svixId || !svixTimestamp || !svixSignature) {
+      console.warn('[Webhook] Resend: missing svix headers — rejecting');
+      return res.status(400).send('Invalid signature');
+    }
+
+    // Replay window. Without it a captured request stays valid forever and
+    // could be replayed indefinitely. 300s is Svix's own default tolerance.
+    const timestampSeconds = Number(svixTimestamp);
+    if (!Number.isFinite(timestampSeconds)
+        || Math.abs(Date.now() / 1000 - timestampSeconds) > 300) {
+      console.warn('[Webhook] Resend: timestamp outside tolerance — rejecting');
+      return res.status(400).send('Invalid signature');
+    }
+
+    // Secret is whsec_<base64>; the base64 portion decodes to the HMAC key.
+    const secretBytes = Buffer.from(signingSecret.replace(/^whsec_/, ''), 'base64');
+    const signedContent = svixId + '.' + svixTimestamp + '.' + req.body.toString('utf8');
+    const expected = crypto.createHmac('sha256', secretBytes).update(signedContent).digest('base64');
+    const expectedBuf = Buffer.from(expected, 'base64');
+
+    // The header carries space-delimited "v1,<sig>" entries, and may hold more
+    // than one during a secret rotation, so any single valid v1 entry passes.
+    const matched = svixSignature.split(' ').some((entry) => {
+      const [version, value] = entry.split(',');
+      if (version !== 'v1' || !value) return false;
+      let candidate;
+      try {
+        candidate = Buffer.from(value, 'base64');
+      } catch (e) {
+        return false;
+      }
+      // Length checked first: timingSafeEqual throws on a length mismatch.
+      return candidate.length === expectedBuf.length
+        && crypto.timingSafeEqual(candidate, expectedBuf);
+    });
+
+    if (!matched) {
+      console.warn('[Webhook] Resend: signature mismatch — rejecting request');
+      return res.status(400).send('Invalid signature');
+    }
+
+    let event;
+    try {
+      event = JSON.parse(req.body.toString('utf8'));
+    } catch (e) {
+      console.error('[Webhook] Resend: failed to parse body:', e.message);
+      return res.status(400).send('Invalid payload');
+    }
+
+    try {
+      await WebhookController.recordResendEvent(svixId, event);
+    } catch (err) {
+      // 500 so Svix retries. Losing a bounce silently is the exact failure this
+      // feature exists to remove, so a write failure must not hide behind a 200.
+      console.error('[Webhook] Resend: failed to record event:', err.message);
+      return res.status(500).send('Failed to record event');
+    }
+
+    return res.status(200).send('ok');
+  }
+
+  // Split out from the request handler so it is unit-testable without having to
+  // construct a validly-signed request.
+  static async recordResendEvent(svixId, event) {
+    const { TRACKED_EMAIL_KINDS } = require('../services/emailService');
+
+    const eventType = (event && event.type) || 'unknown';
+    const data      = (event && event.data) || {};
+    // `to` is an array on Resend's payloads.
+    const recipient = Array.isArray(data.to) ? data.to[0] : (data.to || null);
+    const subject   = data.subject || null;
+    const reason    = data.reason || (data.bounce && (data.bounce.message || data.bounce.subType)) || null;
+
+    // ON CONFLICT against the UNIQUE svix_id is what makes this idempotent:
+    // Svix retries on any non-2xx and on timeouts, so the same event
+    // legitimately arrives more than once and must not be recorded twice or
+    // double-update the account below.
+    const inserted = await pool.query(
+      `INSERT INTO email_events (svix_id, resend_email_id, event_type, recipient, subject, reason, payload)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (svix_id) DO NOTHING
+       RETURNING id`,
+      [svixId, data.email_id || null, eventType, recipient, subject, reason, JSON.stringify(event)],
+    );
+
+    if (!inserted.rows.length) {
+      console.log(`[Webhook] Resend: duplicate event ${svixId} ignored`);
+      return { duplicate: true };
+    }
+
+    console.log(`[Webhook] Resend: ${eventType} for ${recipient || 'unknown recipient'}${reason ? ' — ' + reason : ''}`);
+
+    // Only failures are mirrored onto the account. A delivered event is kept in
+    // email_events for context but must never overwrite a bounce: the
+    // operationally interesting state is "this person did not get it", and a
+    // later unrelated delivery should not erase that.
+    const isFailure = eventType === 'email.bounced' || eventType === 'email.delivery_delayed';
+    if (!isFailure || !recipient || !subject) return { duplicate: false };
+
+    const tracked = TRACKED_EMAIL_KINDS[subject];
+    if (!tracked) return { duplicate: false };
+
+    // Column names come from TRACKED_EMAIL_KINDS, never from the payload, so
+    // there is no injection surface despite the interpolation.
+    const status = eventType === 'email.bounced' ? 'bounced' : 'delayed';
+    const updated = await pool.query(
+      `UPDATE store_users
+          SET ${tracked.statusColumn} = $2, ${tracked.timestampColumn} = NOW(), updated_at = NOW()
+        WHERE email = $1
+        RETURNING id`,
+      [recipient, status],
+    );
+
+    if (updated.rows.length) {
+      console.warn(
+        `[Webhook] Resend: ${tracked.kind} email ${status} for store user ${updated.rows[0].id} (${recipient}) — this account may be unable to sign in`,
+      );
+    }
+    return { duplicate: false, storeUsersUpdated: updated.rows.length };
+  }
 }
 
 module.exports = WebhookController;

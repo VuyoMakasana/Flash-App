@@ -465,12 +465,42 @@ function escapeHtmlLite(value) {
 // portal had a reset page, and no real store owner can act on it. The portal
 // now has /reset-password (a paste-the-code form), so the email links there.
 // The raw code is still shown, because that page asks for it explicitly.
+// Subject lines for the two store-account emails whose delivery Flash needs to
+// be able to see. They live here as constants because TWO places depend on the
+// exact string: the senders below, and the Resend webhook handler, which maps a
+// bounce back to the kind of email that bounced (webhookController.handleResend).
+//
+// Same reasoning as STORE_STATUS_TRANSITIONS in models/Store.js -- if the
+// sender and the consumer each spelled the subject out separately, editing one
+// would silently stop bounces being attributed, and nothing would fail. A test
+// asserts the senders actually use these.
+const EMAIL_SUBJECTS = {
+  STORE_WELCOME: 'Your Flash Store Portal account is ready',
+  STORE_PASSWORD_RESET: 'Reset your Flash store account password',
+};
+
+// Maps a subject back to the store_users columns it should update. Used only by
+// the webhook handler; kept beside the subjects so a new tracked email cannot be
+// added without deciding where its status is recorded.
+const TRACKED_EMAIL_KINDS = {
+  [EMAIL_SUBJECTS.STORE_WELCOME]: {
+    kind: 'welcome',
+    statusColumn: 'welcome_email_status',
+    timestampColumn: 'welcome_email_status_at',
+  },
+  [EMAIL_SUBJECTS.STORE_PASSWORD_RESET]: {
+    kind: 'password_reset',
+    statusColumn: 'reset_email_status',
+    timestampColumn: 'reset_email_status_at',
+  },
+};
+
 async function sendStorePasswordResetEmail(toEmail, resetToken) {
   const resetLink = `${STORE_PORTAL_URL}/reset-password`;
 
   return sendEmail({
     to:      toEmail,
-    subject: 'Reset your Flash store account password',
+    subject: EMAIL_SUBJECTS.STORE_PASSWORD_RESET,
     text:    `A password reset was requested for your Flash store account.\n\nReset code:\n${resetToken}\n\n`
       + `Open ${resetLink} and enter the code above to set a new password.\n\n`
       + `This code expires in 1 hour and can only be used once. If you did not request this, ignore this email — your account is safe.`,
@@ -521,7 +551,7 @@ async function sendStoreWelcomeEmail(toEmail, ownerName, inviteToken) {
 
   return sendEmail({
     to:      toEmail,
-    subject: 'Your Flash Store Portal account is ready',
+    subject: EMAIL_SUBJECTS.STORE_WELCOME,
     text:    `Hi ${ownerName},
 
 Your store has been approved and your Flash Store Portal account is ready.
@@ -565,6 +595,8 @@ ${inviteToken}
 }
 
 module.exports = {
+  EMAIL_SUBJECTS,
+  TRACKED_EMAIL_KINDS,
   sendPasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
   sendSosAlertEmail, sendOrderEscalationEmail, sendOrderMissedEmail, sendMarketingLeadEmail,
   sendStorePasswordResetEmail, sendStoreWelcomeEmail,
