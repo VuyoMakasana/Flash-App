@@ -159,6 +159,10 @@ input, textarea, select {
 }
 .analytics-tile .tile-label { font-size: 12px; color: #7f8c8d; margin: 0 0 4px; }
 .analytics-tile .tile-value { font-size: 24px; font-weight: 700; margin: 0; }
+/* Qualifier under a figure, e.g. "Excludes delivery fees" — deliberately
+   quiet, but always rendered rather than hidden behind a tooltip, because it
+   changes what the number above it means. */
+.analytics-tile .tile-note { font-size: 11px; color: #999; margin: 4px 0 0; line-height: 1.35; }
 .analytics-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; }
 .analytics-table th, .analytics-table td { text-align: left; padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #f0f1f3; }
 .analytics-table-wrap { overflow-x: auto; margin-bottom: 24px; }
