@@ -21,6 +21,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const Admin = require('./models/Admin');
 const AdminAction = require('./models/AdminAction');
+const StoreOnboardingService = require('./services/storeOnboardingService');
 const Return = require('./models/Return');
 const {
   acceptOrder,
@@ -158,6 +159,18 @@ const ORDER_STATUS_VALUES = [
   { value: 'delivered', label: 'Delivered' },
   { value: 'completed', label: 'Completed' },
   { value: 'cancelled', label: 'Cancelled' },
+];
+
+// Phase 3 — the store onboarding lifecycle, mirroring DRIVER_STATUS_VALUES
+// below. 'suspended' is reachable only by a direct database change today;
+// it exists in the CHECK constraint so taking a live store offline has a
+// real state rather than being faked with is_active alone.
+const STORE_STATUS_VALUES = [
+  { value: 'pending', label: 'Pending Review' },
+  { value: 'under_review', label: 'Under Review' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'rejected', label: 'Rejected' },
+  { value: 'suspended', label: 'Suspended' },
 ];
 
 const DRIVER_STATUS_VALUES = [
@@ -781,6 +794,45 @@ function nullifyEmptyNonTextFields(request, context) {
 // without going through withChronologicalDefaults has no `sort` key and
 // fails that test, the same shape adminCoverage.test.js already uses for
 // table-visibility decisions.
+// A structural backstop for the single most repeated outage in this panel's
+// history: a real Postgres foreign key pointing at a table that is not a
+// registered AdminJS resource. AdminJS.findResource() throws for an unknown
+// id, and populator() calls it for EVERY flattened property of a resource
+// before it inspects any row -- so one such column takes down that resource's
+// entire list view, not just its own field.
+//
+// This has now happened three separate times, each found in production rather
+// than in review: admin_actions.admin_id and chat_reports.message_id/
+// reviewed_by; orders/flash_inventory.store_id; and stores.onboarding_verified_by
+// (a column that exists in one environment and not another, which is exactly
+// the kind of difference a hand-maintained list of column names cannot track).
+//
+// The per-property suppressReference() calls below stay as they are -- they
+// document known cases at the point of use, and they run first. This is the
+// net underneath them: instead of enumerating columns, it derives the answer
+// from the resource list itself, so a reference is suppressed precisely when
+// its target is not browsable. A future FK added to any table, in any
+// environment, is covered without anyone remembering to update a list.
+//
+// Suppressed properties render as plain text rather than a link. That is the
+// correct outcome: a link to a resource that does not exist cannot be followed
+// anyway, and a readable id beats a 500.
+function suppressReferencesToUnregisteredTables(resources) {
+  const registered = new Set(resources.map((entry) => entry.resource.tableName));
+
+  for (const entry of resources) {
+    for (const property of entry.resource.properties) {
+      const target = property._referencedTable;
+      if (target && !registered.has(target)) {
+        property._referencedTable = null;
+        property._type = 'string';
+      }
+    }
+  }
+
+  return resources;
+}
+
 function buildResources(db) {
   return [
       {
@@ -1712,6 +1764,98 @@ function buildResources(db) {
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.marketing_applications),
       },
+      {
+        // Phase 3 — the store-onboarding review queue. This is the screen the
+        // whole self-service signup flow depends on: without it an application
+        // can be submitted but never approved.
+        //
+        // reviewed_by is a real FK to admins, and admins is deliberately NOT a
+        // registered resource here. Left alone, @adminjs/sql auto-detects that
+        // FK and AdminJS.findResource('admins') throws, killing the entire list
+        // request -- the exact failure that took four admin list views down
+        // earlier in this project. Registering a new resource with an FK to an
+        // unregistered table is precisely when that bug reappears.
+        resource: suppressReference(db.table('stores'), 'reviewed_by'),
+        options: withChronologicalDefaults({
+          listProperties: ['name', 'status', 'owner_name', 'owner_email', 'owner_phone', 'created_at'],
+          properties: {
+            name: { isTitle: true },
+            status: { isVisible: { edit: false }, availableValues: STORE_STATUS_VALUES },
+            description: { type: 'textarea' },
+            rejection_reason: { type: 'textarea', isVisible: { edit: false } },
+            // The lifecycle columns are readable but never hand-editable: they
+            // may only change through the two real actions below, which record
+            // who decided and when. Same reasoning as drivers.status.
+            is_active: { isVisible: { edit: false } },
+            reviewed_by: { isVisible: { edit: false } },
+            reviewed_at: { isVisible: { edit: false } },
+          },
+          actions: {
+            list: {},
+            show: {},
+            // Stores are created by the public application endpoint, never by
+            // hand -- a hand-made row would skip the owner account that
+            // onboarding creates in the same transaction, producing a store
+            // nobody can sign in to.
+            new: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+            // Editing real details (name, address, logo) stays available; the
+            // before-hook is the same one every other form here uses, so a
+            // cleared lat/lng or timestamp stores NULL instead of "".
+            edit: { before: [nullifyEmptyNonTextFields] },
+
+            approveStore: {
+              actionType: 'record',
+              component: false,
+              guard: 'Approve this store? It becomes visible to customers and its owner is emailed a link to set their password.',
+              isAccessible: ({ record }) => ['pending', 'under_review'].includes(record.param('status')),
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                const result = await StoreOnboardingService.approve(record.id(), currentAdmin.id);
+                if (!result.ok) {
+                  const message = result.reason === 'no_owner'
+                    ? 'This application has no owner account, so it cannot be approved. Flag it for investigation.'
+                    : 'This store is no longer awaiting review — someone may have just actioned it.';
+                  return { record: record.toJSON(currentAdmin), notice: { message, type: 'error' } };
+                }
+                AdminAction.log(currentAdmin.id, 'store_approve', 'stores', record.id());
+                record.set('status', 'approved');
+                record.set('is_active', true);
+                return {
+                  record: record.toJSON(currentAdmin),
+                  notice: { message: 'Store approved — the owner has been emailed a link to set their password.', type: 'success' },
+                };
+              },
+            },
+
+            rejectStore: {
+              actionType: 'record',
+              component: false,
+              guard: 'Reject this application? The applicant keeps their record but the store stays offline.',
+              isAccessible: ({ record }) => ['pending', 'under_review'].includes(record.param('status')),
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                const reason = (request.payload || {}).reason || null;
+                const result = await StoreOnboardingService.reject(record.id(), currentAdmin.id, reason);
+                if (!result.ok) {
+                  return {
+                    record: record.toJSON(currentAdmin),
+                    notice: { message: 'This store is no longer awaiting review — someone may have just actioned it.', type: 'error' },
+                  };
+                }
+                AdminAction.log(currentAdmin.id, 'store_reject', 'stores', record.id(), { reason });
+                record.set('status', 'rejected');
+                record.set('is_active', false);
+                return {
+                  record: record.toJSON(currentAdmin),
+                  notice: { message: 'Application rejected.', type: 'success' },
+                };
+              },
+            },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.stores),
+      },
   ];
 }
 
@@ -1827,7 +1971,7 @@ async function mountAdminPanel(app) {
   // the marketing_* resources even before this section's own five
   // additions) — full visibility should extend to what the logs
   // themselves say is actually mounted, not just the panel's own UI.
-  const resources = buildResources(db);
+  const resources = suppressReferencesToUnregisteredTables(buildResources(db));
 
   const admin = new AdminJS({
     rootPath: ADMIN_PANEL_PATH,

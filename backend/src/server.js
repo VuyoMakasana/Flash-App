@@ -86,6 +86,7 @@ const storeInventoryRoutes = require("./routes/storeInventoryRoutes");
 const storeStaffRoutes = require("./routes/storeStaffRoutes");
 const storeAnalyticsRoutes = require("./routes/storeAnalyticsRoutes");
 const storefrontRoutes = require("./routes/storefrontRoutes");
+const storeOnboardingRoutes = require("./routes/storeOnboardingRoutes");
 const webhookRoutes = require("./routes/webhookRoutes");
 const subscriptionRoutes = require("./routes/subscriptionRoutes");
 const sizingRoutes = require("./routes/sizingRoutes");
@@ -197,6 +198,7 @@ function createApp() {
   app.use("/api/tracking", trackingRoutes);
   app.use("/api/admin", adminRoutes);
   app.use("/api/stores", storefrontRoutes);
+  app.use("/api/store-onboarding", storeOnboardingRoutes);
   app.use("/api/store-auth", storeAuthRoutes);
   app.use("/api/store-orders", storeOrderRoutes);
   app.use("/api/store-inventory", storeInventoryRoutes);

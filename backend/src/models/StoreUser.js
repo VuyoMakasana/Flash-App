@@ -21,8 +21,12 @@ class StoreUser extends BaseModel {
     return result.rows[0] || null;
   }
 
-  static async create({ storeId, name, email, passwordHash, role, forcePasswordReset = false }) {
-    const result = await this.query(
+  // `client` lets a caller run this inside an existing transaction -- store
+  // onboarding creates the store and its owner account together, so a failure
+  // on either side must leave neither behind.
+  static async create({ storeId, name, email, passwordHash, role, forcePasswordReset = false }, client = null) {
+    const runner = client || this;
+    const result = await runner.query(
       `INSERT INTO store_users (store_id, name, email, password_hash, role, is_active, force_password_reset)
        VALUES ($1, $2, $3, $4, $5, true, $6)
        RETURNING id, store_id, name, email, role, is_active, force_password_reset, created_at`,

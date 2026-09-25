@@ -1091,6 +1091,16 @@ async function migrate() {
     throw err;
   } finally {
     client35.release();
+  }
+
+  const client36 = await pool.connect();
+  try {
+    await migrateV36(client36);
+  } catch (err) {
+    console.error('Migration v36 failed:', err.message);
+    throw err;
+  } finally {
+    client36.release();
     await pool.end();
   }
 
@@ -2271,4 +2281,59 @@ async function migrateV35(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35 };
+// STORE SELF-SERVICE ONBOARDING (Phase 3).
+//
+// Gives `stores` a real review lifecycle, mirroring how drivers already work
+// (public registration -> pending -> admin review -> approved/rejected), rather
+// than inventing a second, different approval model.
+//
+// The backfill below is the part that needs care. Adding a NOT NULL column with
+// DEFAULT 'pending' would mark every EXISTING store pending -- including the one
+// live store currently serving real orders, which would immediately drop it out
+// of the public storefront. So the column is added nullable, existing rows are
+// backfilled to 'approved' (they predate onboarding and are live by definition),
+// and only then does 'pending' become the default for genuinely new applications.
+//
+// `UPDATE ... WHERE status IS NULL` is what makes that backfill idempotent: on a
+// re-run there are no NULLs left, so a later pending application is never
+// silently approved by a repeat migration.
+async function migrateV36(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS status VARCHAR(20)`);
+    await client.query(`UPDATE stores SET status = 'approved' WHERE status IS NULL`);
+    await client.query(`ALTER TABLE stores ALTER COLUMN status SET DEFAULT 'pending'`);
+    await client.query(`ALTER TABLE stores ALTER COLUMN status SET NOT NULL`);
+
+    // ADD CONSTRAINT has no IF NOT EXISTS, so it is guarded explicitly.
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'stores_status_check') THEN
+          ALTER TABLE stores ADD CONSTRAINT stores_status_check
+            CHECK (status IN ('pending','under_review','approved','rejected','suspended'));
+        END IF;
+      END $$;
+    `);
+
+    // Review provenance: who decided, when, and why if refused. reviewed_by is
+    // a real FK to admins so an approval can always be traced to a person.
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS reviewed_by UUID REFERENCES admins(id)`);
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS rejection_reason TEXT`);
+
+    // Backs the admin review queue ("pending applications, oldest first") and
+    // the storefront's own "approved and active" filter. stores had no index at
+    // all beyond its primary key before this.
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_stores_status_created ON stores(status, created_at DESC)`);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v36 completed: stores review lifecycle (status + reviewed_by/at + rejection_reason), existing stores backfilled to approved');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v36 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36 };
