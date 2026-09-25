@@ -614,3 +614,117 @@ item is about removing the reliance on remembering.
 3. Either way, put the expand-then-migrate rule where someone merging a PR
    will actually see it — `CLAUDE.md` or the PR template, not only an audit
    doc.
+## 17. Driver bank account numbers are stored in plaintext
+
+**Scheduled: immediately after Phase 2 wraps — not open-ended.**
+
+`transfer_recipients.account_number` is a plain `VARCHAR(255)`, and
+`driverController.js:640` inserts the raw account number straight into it. No
+encryption is applied anywhere on that path.
+
+What makes this worth a tracked item rather than a shrug: the codebase
+**already has** the tool. `utils/paymentCrypto.js` implements AES-256-GCM with
+a key from `PAYMENT_METHOD_ENCRYPTION_KEY` and throws in production if the key
+is absent. It is used for stored card authorisation codes. It simply was not
+used here.
+
+**Why it is not urgent:** the account number alone is not sufficient to move
+money out of an account, and the same value is already held by Paystack. The
+realistic exposure is a database dump or an over-broad read — real, but not a
+live path to theft.
+
+**Why it should not be left:** it is a straightforward data-at-rest failure in
+the one table that names where a real person's money goes, and Flash is about
+to build the store equivalent. Store payouts (Phase 2a) deliberately take the
+stronger approach — store only Paystack's `recipient_code` plus `bank_name`,
+`account_last4` and `account_name`, never the full number, because data not
+held cannot leak. That will leave two adjacent tables with different postures
+until this is closed.
+
+**To close this out:**
+1. Decide between encrypting `account_number` with the existing `paymentCrypto`
+   and **dropping the column entirely**, keeping only a `last4`. Dropping is
+   preferable and should be checked first: search every read of
+   `account_number` — the `ON CONFLICT (driver_id, account_number, bank_code)`
+   clause in `driverController` is the one real dependency, and it can key on
+   `recipient_code` instead. Paystack already holds the authoritative value, so
+   Flash very likely does not need it at all.
+2. If dropping, write the migration as expand-then-contract: add `account_last4`,
+   backfill from `account_number`, deploy code that reads only `last4`, and drop
+   the old column in a later migration — never in one step.
+3. Whichever path, make the two tables consistent and say so in the driver
+   payout docs, so a future developer does not copy the weaker pattern again.
+
+---
+
+## 18. `orders.store_paid` means "the customer paid by card", not "the store was paid"
+
+Surfaced while scoping Phase 2 (`PHASE2_STORE_PAYOUTS_PLAN.md` §1.2).
+
+The column name says the store has been paid. What it actually records is that
+a **customer's card payment succeeded**. It is set `true` at exactly three
+sites, all card paths: `webhookController.js:172` (matches on
+`paystack_reference`), `Payment.js:83`, and `paymentReconciliationJob.js:29`
+(only iterates orders that have a `paystack_reference`). A cash order never
+touches any of them.
+
+**This is a latent trap for settlement work, and the reason it is subtle is
+that production data currently hides it.** Verified: 19 orders, `store_paid`
+true on **zero** of them, and no `paystack_reference` anywhere — the only two
+completed orders are cash. So today the column reads `false` universally and
+looks like an unused flag that is free to adopt. The first card order to
+complete flips it to `true`, and any settlement logic that had adopted it as
+"this store has been settled" would immediately and silently conclude that the
+store had already been paid.
+
+**Why it was deferred:** renaming a column touches five files and a migration,
+and Phase 2 deliberately does not reuse the field, so nothing is blocked. The
+danger is entirely to a *future* developer who reads the name and believes it.
+
+**To close this out:**
+1. Prefer renaming to something honest — `card_payment_captured` or
+   `customer_paid_at` (a timestamp would be strictly more useful than a
+   boolean) — via expand-then-contract: add the new column, write both, migrate
+   readers, drop the old one later.
+2. If renaming is judged not worth the churn, add an explicit comment at the
+   migration's column definition and at all three write sites. That is weaker,
+   since it relies on someone reading the right line.
+3. Either way, do it **before** 2c, so no settlement code is ever written next
+   to a column whose name asserts the opposite of what it means.
+
+---
+
+## 19. `order_cancellation_store_shares` records money owed to stores and never pays it
+
+Surfaced while scoping Phase 2 (`PHASE2_STORE_PAYOUTS_PLAN.md`).
+
+When an order is cancelled, `computeCancellationSplit` allocates a share of item
+value to the store (10% pre-arrival, 0% once the driver has reached the store),
+and `orderController` writes it to `order_cancellation_store_shares`. That table
+is then read in exactly one place: `Admin.getCancellations()`, for display in the
+admin panel.
+
+**Nothing ever pays it.** It is a write-only record of a real liability. No
+disbursement path exists, because Store Settlement does not exist yet.
+
+**Why it was deferred:** it is harmless while no settlement mechanism exists at
+all — the money simply has not been paid to anyone, and the amounts are
+recorded, so nothing is lost or unaccounted for. It becomes a genuine problem
+the moment settlement starts and these shares are *not* included, because then
+stores are being paid for completed orders while an acknowledged debt from
+cancelled ones quietly accumulates beside it forever.
+
+**To close this out:**
+1. Decide during 2c whether cancellation shares are settled through the same
+   `store_settlements` cycle as completed orders. They should be — a store's
+   payout ought to be one number it can reconcile, not two mechanisms — which
+   means `store_settlement_line_items` needs to represent a cancellation share
+   as well as an order line, or carry a `source` discriminator.
+2. Decide what happens to shares accrued **before** settlement existed. There
+   may be a real backlog by then; paying it or explicitly writing it off are
+   both defensible, but it should be a decision, not an accident of the cutoff
+   date chosen for the first cycle.
+3. Note the interaction with §3.4's netting rule: a cancellation share is a
+   credit to the store, while a post-settlement return is a debit. Both land in
+   the next open cycle, so the sign convention on line items needs to handle
+   both without ambiguity.
