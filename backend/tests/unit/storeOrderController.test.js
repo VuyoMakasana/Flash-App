@@ -235,4 +235,41 @@ describe('getAnalytics', () => {
 
     expect(res.status).toHaveBeenCalledWith(500);
   });
+
+  // Regression guard. This reported SUM(total) — subtotal PLUS delivery_fee —
+  // as the store's revenue, showing a store money that was never its own and
+  // that Store Settlement will never pay it. The gap would have first become
+  // visible on the day real settlement money arrived, which is the worst
+  // possible moment to find it. FINANCIAL_DOMAIN_SPECIFICATION.md §1 forbids
+  // combining Delivery Fee with the store's item revenue anywhere.
+  test('revenue sums subtotal only — never total, which includes the delivery fee', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+    await StoreOrderController.getAnalytics(mockReq({ query: {} }), mockRes());
+
+    const revenueQueries = db.query.mock.calls
+      .map(([sql]) => sql)
+      .filter((sql) => /as revenue/i.test(sql));
+
+    // Both the summary tile and the daily breakdown compute it.
+    expect(revenueQueries).toHaveLength(2);
+    for (const sql of revenueQueries) {
+      expect(sql).toMatch(/SUM\(subtotal\)/);
+      expect(sql).not.toMatch(/SUM\(total\)/);
+      // delivery_fee must not sneak back in by another route either.
+      expect(sql).not.toMatch(/delivery_fee/);
+    }
+  });
+
+  test('refunded orders stay excluded from revenue', async () => {
+    // refundService moves a refunded order to payment_status 'refunded' (and a
+    // failed refund to 'refund_failed'), so filtering on 'paid' is what keeps
+    // reversed money out of the figure. Asserted so the filter is not loosened
+    // later without someone noticing it also re-admits refunds.
+    db.query.mockResolvedValue({ rows: [] });
+    await StoreOrderController.getAnalytics(mockReq({ query: {} }), mockRes());
+
+    for (const [sql] of db.query.mock.calls.filter(([s]) => /as revenue/i.test(s))) {
+      expect(sql).toMatch(/payment_status = 'paid'/);
+    }
+  });
 });

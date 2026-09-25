@@ -59,9 +59,16 @@ export default function AnalyticsPage() {
               <p className="tile-label">Orders (paid)</p>
               <p className="tile-value">{data.summary.orderCount}</p>
             </div>
+            {/* "Item sales", not "Revenue". The backend now sums subtotal
+                rather than total, so this is the value of goods sold and
+                excludes the delivery fee, which was never the store's money.
+                Labelled precisely because this figure will shortly sit next to
+                real settlement amounts, and a store owner needs to be able to
+                reconcile the two without guessing what either includes. */}
             <div className="analytics-tile">
-              <p className="tile-label">Revenue</p>
+              <p className="tile-label">Item sales</p>
               <p className="tile-value">R{data.summary.revenue.toFixed(2)}</p>
+              <p className="tile-note">Excludes delivery fees</p>
             </div>
           </div>
 
@@ -69,7 +76,7 @@ export default function AnalyticsPage() {
           <div className="analytics-table-wrap">
             <table className="analytics-table">
               <thead>
-                <tr><th>Day</th><th>Orders</th><th>Revenue</th></tr>
+                <tr><th>Day</th><th>Orders</th><th>Item sales</th></tr>
               </thead>
               <tbody>
                 {data.daily.length === 0 ? (

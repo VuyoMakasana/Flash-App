@@ -150,6 +150,31 @@ check, so no additional guard is needed there.
 4. **Driver plaintext bank numbers:** tracked remediation, scheduled
    immediately after Phase 2 wraps — not open-ended.
 
+5. **A real card payment must run through production before 2c goes live.**
+   Not a blocker for 2a or 2b. Confirmed platform-wide, not just for one store:
+   **zero orders have ever had a `paystack_reference` or
+   `payment_method = 'card'` — all 19 to date are cash.** So the entire card
+   pipeline (checkout → Paystack webhook → `store_paid` → reconciliation) has
+   no production track record whatsoever, and commission and settlement are
+   almost entirely *about* card orders.
+
+   This is a hard gate on 2c, held to the same standard as the onboarding
+   email and the bounce webhook: verified live, not merely tested. What must be
+   observed end to end, not inferred:
+   - a real checkout reaching Paystack and returning a `paystack_reference`
+   - the **webhook** arriving and being signature-verified (the only production
+     evidence so far is that the *Resend* webhook works; Paystack's has never
+     fired here)
+   - `payment_status` reaching `'paid'` and `payment_method` becoming `'card'`
+   - `store_paid` flipping to `true` — the first time it will ever have done so
+     in this database, which is also the live confirmation of correction §1.2
+   - `paymentReconciliationJob` leaving an already-settled order alone rather
+     than double-processing it
+
+   Note the ordering benefit: doing this before 2c means the first card order
+   in Flash's history is a deliberate test with someone watching, rather than a
+   real customer's purchase that settlement logic then has to reason about.
+
 ---
 
 ## 5. Carried into the follow-ups list
