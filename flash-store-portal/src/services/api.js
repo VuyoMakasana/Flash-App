@@ -21,6 +21,21 @@ async function request(path, options = {}) {
   if (!res.ok) {
     const error = new Error(body.error || 'Request failed');
     error.status = res.status;
+    // Store onboarding — express-validator replies with
+    // { errors: [{ path, msg, ... }] } rather than a single { error }, and
+    // this layer previously dropped that array entirely, leaving pages no
+    // way to put a message next to the field that caused it. Normalized to
+    // { fieldName: message } here (first message per field wins, matching
+    // how the backend orders its own validation chain) so pages never have
+    // to know express-validator's wire shape. Additive: `message` and
+    // `status` behave exactly as before for every existing caller.
+    if (Array.isArray(body.errors)) {
+      error.fieldErrors = body.errors.reduce((acc, item) => {
+        const field = item?.path || item?.param;
+        if (field && !acc[field]) acc[field] = item.msg || 'Invalid value';
+        return acc;
+      }, {});
+    }
     throw error;
   }
   return body;
@@ -59,6 +74,16 @@ export const storeApi = {
     request('/api/store-auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
   resetPassword: (token, newPassword) =>
     request('/api/store-auth/reset-password', { method: 'POST', body: JSON.stringify({ token, newPassword }) }),
+  // Phase 3 — public store-onboarding application (no auth; the applicant has
+  // no Flash account yet by definition). Field names are the snake_case ones
+  // storeOnboardingRoutes.js validates, deliberately passed straight through
+  // rather than camelCased here, so a validation error's `path` matches the
+  // form field it belongs to without a translation layer in between.
+  applyForStore: ({ store_name, owner_name, owner_email, owner_phone, address }) =>
+    request('/api/store-onboarding/apply', {
+      method: 'POST',
+      body: JSON.stringify({ store_name, owner_name, owner_email, owner_phone, address }),
+    }),
 };
 
 export { getToken };

@@ -180,3 +180,165 @@ input, textarea, select {
 .btn-reject { background: #c0392b; color: #fff; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
 .btn-mark-ready { background: #2980b9; color: #fff; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; }
 button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Phase 3 — store-owner onboarding (SignupPage, SetPasswordPage).
+   
+   Kept as its own `.onboard-*` block rather than reusing `.login-card`:
+   that card is a fixed `width: 320px`, which is right for a 2-field sign-in
+   but cramps a 5-field application with explanatory copy, and at exactly
+   320px viewport it also leaves no side gutter at all. These pages are the
+   first thing a real boutique owner sees of Flash, and most of them will
+   open it on a phone.
+   
+   Palette is the existing one — amber #f59e0b for the primary action,
+   #1a1a1a text, #f5f6f8 page — so this reads as the same product as the
+   portal it leads into, not a separate microsite.
+   ───────────────────────────────────────────────────────────────────────── */
+.onboard-page {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 100vh;
+  /* The side gutter .login-page never had. */
+  padding: 24px 16px 48px;
+}
+.onboard-card {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.07);
+  padding: 28px 24px;
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.onboard-card--narrow { max-width: 420px; }
+
+.onboard-brand {
+  align-self: flex-start;
+  background: #1a1a1a;
+  color: #fff;
+  font-weight: 900;
+  font-size: 13px;
+  letter-spacing: 3px;
+  padding: 7px 12px;
+  border-radius: 7px;
+}
+.onboard-card h1 { font-size: 24px; line-height: 1.25; margin: 4px 0 0; }
+.onboard-lede { margin: 0; color: #555; font-size: 14px; line-height: 1.55; }
+
+/* Three-step tracker. Communicates up front that approval is a real step
+   and not instant — the same message the copy makes explicitly. */
+.onboard-progress {
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+}
+.onboard-progress li {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: #999;
+  text-align: center;
+  border-top: 3px solid #eee;
+  padding-top: 8px;
+}
+.onboard-progress li span {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #eee; color: #999;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+}
+.onboard-progress li.is-current { color: #1a1a1a; border-top-color: #f59e0b; font-weight: 600; }
+.onboard-progress li.is-current span { background: #f59e0b; color: #1a1a1a; }
+.onboard-progress li.is-done { color: #555; border-top-color: #27ae60; }
+.onboard-progress li.is-done span { background: #27ae60; color: #fff; }
+
+.onboard-fields { display: flex; flex-direction: column; gap: 14px; }
+.onboard-fields label { display: flex; flex-direction: column; gap: 5px; }
+.onboard-label { font-size: 13px; font-weight: 600; color: #333; }
+.onboard-optional { font-weight: 400; color: #999; font-size: 12px; }
+.onboard-fields input,
+.onboard-fields textarea {
+  padding: 11px 12px;
+  border: 1px solid #ccc;
+  border-radius: 7px;
+  font-family: inherit;
+  width: 100%;
+  /* font-size is forced to 16px globally above — the iOS zoom-on-focus fix. */
+}
+.onboard-fields textarea { resize: vertical; }
+.onboard-fields input:focus,
+.onboard-fields textarea:focus {
+  outline: 2px solid #f59e0b;
+  outline-offset: -1px;
+  border-color: #f59e0b;
+}
+/* Error state is carried by BOTH colour and the message text, never colour
+   alone — colour-blind users and anyone on a washed-out phone screen in
+   sunlight still get the message. aria-invalid is set on the input too. */
+.onboard-fields label.has-error input,
+.onboard-fields label.has-error textarea { border-color: #c0392b; }
+.onboard-fields label.has-error .onboard-label { color: #c0392b; }
+.onboard-field-error { color: #c0392b; font-size: 12.5px; line-height: 1.45; }
+.onboard-hint { color: #888; font-size: 12.5px; line-height: 1.45; }
+
+/* The setup code is a 96-character hex string. Monospace + break-all so the
+   owner can actually see whether they pasted the whole thing. */
+.onboard-code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.3px;
+  word-break: break-all;
+}
+
+.onboard-card button[type="submit"] {
+  background: #f59e0b;
+  color: #1a1a1a;
+  border: none;
+  padding: 13px;
+  border-radius: 7px;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+  margin-top: 2px;
+}
+.onboard-card button[type="submit"]:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.onboard-next {
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 9px;
+  padding: 16px;
+}
+.onboard-next h2 { font-size: 14px; margin: 0 0 10px; }
+.onboard-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 9px; }
+.onboard-steps li { font-size: 13.5px; line-height: 1.5; color: #555; }
+.onboard-steps strong { color: #1a1a1a; }
+
+.onboard-note { font-size: 12.5px; color: #777; line-height: 1.5; margin: 10px 0 0; }
+.onboard-note--tight { margin: 0; text-align: center; }
+.onboard-footer { font-size: 13px; color: #666; text-align: center; margin: 0; }
+
+.onboard-tick {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: #27ae60; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; font-weight: 700;
+  margin-top: 4px;
+}
+.onboard-link { font-size: 13px; text-align: center; }
+
+/* Roomier on a desktop, where there is no reason to stay phone-sized. */
+@media (min-width: 560px) {
+  .onboard-page { align-items: center; padding: 40px 24px; }
+  .onboard-card { padding: 36px 32px; }
+  .onboard-card h1 { font-size: 26px; }
+  .onboard-progress li { font-size: 12px; }
+}

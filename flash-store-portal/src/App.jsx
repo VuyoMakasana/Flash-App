@@ -4,6 +4,8 @@ import ProtectedRoute from './components/ProtectedRoute';
 import LoginPage from './pages/LoginPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
+import SignupPage from './pages/SignupPage';
+import SetPasswordPage from './pages/SetPasswordPage';
 import OrdersPage from './pages/OrdersPage';
 import InventoryPage from './pages/InventoryPage';
 import AnalyticsPage from './pages/AnalyticsPage';
@@ -29,6 +31,14 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          {/* Phase 3 store onboarding. Both are public by design: an
+              applicant has no Flash account yet, and a newly-approved owner
+              cannot sign in until they have set a password here. Neither
+              grants anything on its own — /apply creates an inactive store
+              awaiting admin approval, and /set-password only spends a token
+              that approval itself minted. */}
+          <Route path="/apply" element={<SignupPage />} />
+          <Route path="/set-password" element={<SetPasswordPage />} />
           <Route
             path="/orders"
             element={
