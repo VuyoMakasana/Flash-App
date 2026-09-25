@@ -8,6 +8,18 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // Set by services/api.js when the backend ended the session itself (today:
+  // the store was suspended). Read once and cleared, so it explains THIS
+  // redirect and doesn't reappear on a later visit to the login page.
+  const [endedReason] = useState(() => {
+    try {
+      const reason = localStorage.getItem('flash_store_session_ended_reason');
+      if (reason) localStorage.removeItem('flash_store_session_ended_reason');
+      return reason;
+    } catch (_) {
+      return null;
+    }
+  });
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -52,6 +64,7 @@ export default function LoginPage() {
     <div className="login-page">
       <form className="login-card" onSubmit={handleSubmit}>
         <h1>Flash Store Portal</h1>
+        {endedReason && <p className="form-error" role="alert">{endedReason}</p>}
         <label>
           Email
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />

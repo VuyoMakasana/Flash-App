@@ -1,5 +1,5 @@
-import { createContext, useContext, useState, useCallback } from 'react';
-import { storeApi } from '../services/api';
+import { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { storeApi, SESSION_ENDED_EVENT } from '../services/api';
 
 // One global context holding auth/session state — matching the existing
 // mobile apps' own FlashContext.js/DriverContext.js convention (CLAUDE.md).
@@ -10,6 +10,23 @@ export function StoreAuthProvider({ children }) {
     const raw = localStorage.getItem('flash_store_user');
     return raw ? JSON.parse(raw) : null;
   });
+
+  // The backend re-checks the store's live status on every request, so a
+  // store suspended mid-session starts failing immediately rather than when
+  // the 8h token expires. services/api.js tears the stored session down and
+  // fires this event; clearing React state here is what actually drops
+  // ProtectedRoute back to /login.
+  //
+  // This is why ProtectedRoute no longer effectively trusts localStorage on
+  // its own: that value now gets cleared out from under it the moment the
+  // server says the session is over, instead of surviving until the tab is
+  // closed. The server was always the real boundary — requests were already
+  // being refused — but the UI used to keep claiming the user was signed in.
+  useEffect(() => {
+    const onSessionEnded = () => setStoreUser(null);
+    window.addEventListener(SESSION_ENDED_EVENT, onSessionEnded);
+    return () => window.removeEventListener(SESSION_ENDED_EVENT, onSessionEnded);
+  }, []);
 
   const login = useCallback(async (email, password) => {
     const { token, storeUser: user, forcePasswordReset } = await storeApi.login(email, password);

@@ -71,7 +71,19 @@ describe('authenticateStore', () => {
     jwt.verify.mockReturnValue({ id: 'su-1', storeId: 'store-A', role: 'sales_staff', jti: 'jti-1', iat: 1000 });
     pool.query
       .mockResolvedValueOnce({ rows: [] })
-      .mockResolvedValueOnce({ rows: [{ is_active: true, password_changed_at: null }] });
+      // The account row now arrives joined to its store, because
+      // authenticateStore re-checks the STORE's live status on every request
+      // too (the suspension kill switch). An approved, active store here so
+      // this test still exercises what it is actually about — that req.storeId
+      // comes from the token and never from the request body/query.
+      .mockResolvedValueOnce({
+        rows: [{
+          is_active: true,
+          password_changed_at: null,
+          store_is_active: true,
+          store_status: 'approved',
+        }],
+      });
     // The request tries to smuggle a DIFFERENT storeId via body/query —
     // authenticateStore must never read from these; only the verified
     // token's own storeId claim ends up on req.

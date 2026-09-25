@@ -29,6 +29,12 @@ import { storeApi } from '../services/api';
 
 vi.mock('../services/api', () => ({
   storeApi: { login: vi.fn(), logout: vi.fn() },
+  // The provider also subscribes to this event so a store suspended
+  // mid-session drops the in-memory session (see the useEffect in
+  // StoreAuthContext). The real module exports it; the mock must too, or the
+  // provider fails to import. Behaviour of that listener is covered in
+  // storeSuspension.test.jsx.
+  SESSION_ENDED_EVENT: 'flash-store-session-ended',
 }));
 
 // A minimal real consumer -- exercises the context the same way a real

@@ -7,6 +7,30 @@ function getToken() {
   return localStorage.getItem('flash_store_token');
 }
 
+// Broadcast when the backend tells us this session is finished for a reason
+// the user can't fix by retrying — today that means the store was suspended.
+// StoreAuthContext listens and clears its React state, which drops
+// ProtectedRoute back to /login with an explanation.
+//
+// Done as an event rather than a redirect here on purpose: services/api.js
+// has no router access, and giving it any would make every page's data layer
+// able to navigate. The server remains the real boundary either way — this
+// exists so the portal doesn't sit in a half-logged-in state showing an error
+// on every panel while localStorage still claims the user is signed in.
+export const SESSION_ENDED_EVENT = 'flash-store-session-ended';
+
+function endSession(reason) {
+  try {
+    localStorage.removeItem('flash_store_token');
+    localStorage.removeItem('flash_store_user');
+    if (reason) localStorage.setItem('flash_store_session_ended_reason', reason);
+  } catch (_) {
+    // Private mode / blocked storage — the event below still fires, so the
+    // in-memory session is cleared regardless.
+  }
+  window.dispatchEvent(new CustomEvent(SESSION_ENDED_EVENT, { detail: { reason } }));
+}
+
 async function request(path, options = {}) {
   const token = getToken();
   // A FormData body (real image uploads) must never get a manual
@@ -21,6 +45,16 @@ async function request(path, options = {}) {
   if (!res.ok) {
     const error = new Error(body.error || 'Request failed');
     error.status = res.status;
+    error.code = body.code;
+    // A suspended store is terminal for this session: the backend now
+    // re-checks the store's live status on every request, so every subsequent
+    // call would fail the same way. Tear the session down immediately rather
+    // than letting the user click around a portal where nothing works.
+    // Deliberately NOT triggered on a bare 401 — that is an expired or
+    // invalid token, which the existing per-page handling already covers.
+    if (res.status === 403 && body.code === 'STORE_SUSPENDED') {
+      endSession(body.error || 'This store is not currently active.');
+    }
     // Store onboarding — express-validator replies with
     // { errors: [{ path, msg, ... }] } rather than a single { error }, and
     // this layer previously dropped that array entirely, leaving pages no
