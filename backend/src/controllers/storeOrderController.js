@@ -166,15 +166,35 @@ class StoreOrderController {
   static async getAnalytics(req, res) {
     const days = Math.min(90, Math.max(1, parseInt(req.query.days, 10) || 14));
     try {
+      // SUM(subtotal), not SUM(total). `total` is subtotal + delivery_fee, so
+      // reporting it here showed a store the DELIVERY FEE as part of its own
+      // revenue — money that was never theirs. It belongs to the driver and to
+      // Flash, and FINANCIAL_DOMAIN_SPECIFICATION.md §1 makes the rule
+      // explicit: Delivery Fee and the store's own item revenue are two
+      // distinct concepts that must never be combined or netted anywhere.
+      //
+      // This was not a cosmetic reporting error. Store Settlement pays out item
+      // value less commission, so the figure a store watched here was
+      // structurally larger than anything it could ever be paid — and the gap
+      // would first become visible on the day real money started arriving,
+      // which is the worst possible moment to discover it. Fixed ahead of
+      // settlement deliberately, not alongside it.
+      //
+      // Note what is NOT changed: `payment_status = 'paid'` already excludes
+      // refunded orders, since refundService moves a refunded order to
+      // 'refunded' (and a failed one to 'refund_failed'). Commission is still
+      // not deducted here — that arrives with the commission work, at which
+      // point this becomes gross item value and a separate net-of-commission
+      // figure sits beside it.
       const [summaryRes, dailyRes, popularRes] = await Promise.all([
         db.query(
-          `SELECT COUNT(*) as order_count, COALESCE(SUM(total), 0) as revenue
+          `SELECT COUNT(*) as order_count, COALESCE(SUM(subtotal), 0) as revenue
            FROM orders WHERE store_id = $1 AND payment_status = 'paid'
              AND created_at >= NOW() - ($2 || ' days')::interval`,
           [req.storeId, days],
         ),
         db.query(
-          `SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, COUNT(*) AS orders, COALESCE(SUM(total), 0) as revenue
+          `SELECT TO_CHAR(created_at, 'YYYY-MM-DD') AS day, COUNT(*) AS orders, COALESCE(SUM(subtotal), 0) as revenue
            FROM orders
            WHERE store_id = $1 AND payment_status = 'paid' AND created_at >= NOW() - ($2 || ' days')::interval
            GROUP BY day ORDER BY day ASC`,
