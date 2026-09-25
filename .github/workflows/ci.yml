@@ -113,6 +113,43 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: true
 
+  store-portal-test:
+    name: Store Portal — Test & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Plain `npm ci`, NOT `--ignore-scripts` as the mobile jobs use: esbuild
+      # (via vite/vitest) installs its platform binary from a postinstall
+      # script, and skipping it leaves both the test run and the build unable
+      # to start at all.
+      - name: Install store portal dependencies
+        working-directory: flash-store-portal
+        run: npm ci
+
+      - name: Run store portal tests
+        working-directory: flash-store-portal
+        run: npm test
+
+      # The portal ships as a static build, so a compile error is a shipping
+      # failure, not just a local annoyance — and `vitest` alone would not
+      # catch one in a file no test imports.
+      - name: Build store portal
+        working-directory: flash-store-portal
+        run: npm run build
+
+      - name: Audit store portal dependencies
+        working-directory: flash-store-portal
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
   secrets-scan:
     name: Secrets Scan
     runs-on: ubuntu-latest
