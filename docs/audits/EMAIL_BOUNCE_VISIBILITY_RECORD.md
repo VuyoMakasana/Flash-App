@@ -227,21 +227,91 @@ to production. This is exactly the hazard recorded as OPEN_FOLLOWUPS #16.
 
 ---
 
-## 8. Not verified
 
-- **Nothing has been received from Resend yet.** Signature verification is
-  tested against signatures this test suite generates using the documented
-  algorithm — not against a genuine Resend delivery. The algorithm was read
-  from Svix's documentation rather than confirmed against a live payload, so
-  the first real event is the actual proof.
-- **The webhook is not configured yet** and `RESEND_WEBHOOK_SECRET` is not set
-  — both are deployment steps above.
-- **v37 has not been run against production.**
+## 8. Live verification — done
+
+Deployed and verified against production on **25 Sep 2026**. Everything listed
+as unverified in the original version of this document has now been exercised
+with real Resend traffic, so that section is replaced by what actually happened.
+
+**Deployment sequence, as planned in §7:**
+
+1. Migration v37 applied to production **before** the merge, and verified
+   independently — table shape, `svix_id` uniqueness, both indexes checked by
+   definition, and both existing `store_users` rows confirmed `NULL` across the
+   new columns.
+2. PR #19 merged and deployed (`083ebf1`). The boot log confirms the point of
+   the migration-first ordering:
+   `[AdminPanel] Mounted at /admin-panel (… marketing_waitlist, email_events, …)`
+   — **26 resources**, mounted cleanly, no "Failed to mount".
+3. Webhook created (`136ab3f8-7d50-4c79-be1d-6cf10a28a582`), enabled, pointing
+   at `https://flash-app-hplc.onrender.com/api/webhooks/resend`.
+4. `RESEND_WEBHOOK_SECRET` set on the backend service via a **merge** update
+   (`replace: false`), confirmed non-destructive by `/health` still reporting
+   `database: ok` afterwards.
+5. Two real sends, through Flash's own `/api/store-auth/forgot-password` path
+   rather than Resend's API directly, so the production email flow itself was
+   what got tested.
+
+**The fail-closed state transition was observable**, which is a useful proof in
+itself: the endpoint answered **500** (`RESEND_WEBHOOK_SECRET not configured`)
+before the secret was set, and **400** (signature required) after — exactly the
+designed behaviour in both states, and an unsigned request is still refused now.
+
+### Test A — delivered
+
+A real reset email to `delivered@resend.dev`. Event landed **1.6 seconds** later:
+
+| Field | Value |
+|---|---|
+| `event_type` | `email.delivered` |
+| `recipient` | `delivered@resend.dev` — correctly extracted from `data.to[]` |
+| `subject` | `Reset your Flash store account password` — exact `EMAIL_SUBJECTS` match |
+| `resend_email_id` | matched Resend's own id exactly |
+| `svix_id` | `msg_3Jpef5F5XEQkQL…` |
+
+This closed the largest open risk: **signature verification now proven against a
+genuine Resend payload**, not only against signatures this repo's own tests
+generate. The assumed payload shape (`data.to[]`, `data.subject`,
+`data.email_id`) is confirmed correct against real data.
+
+### Test B — bounced, and attributed
+
+The `delivered` path is the easy one; the feature exists for bounces. The test
+account was temporarily pointed at Resend's hard-bounce simulator
+(`bounced@resend.dev`) so the failure path could run against a real
+`store_users` row, then restored.
+
+- `email_events` recorded `email.bounced` with the provider's full reason text
+  ("The recipient's email provider sent a hard bounce message…").
+- `store_users.reset_email_status` became `'bounced'`, timestamped.
+- `welcome_email_status` stayed `NULL` — correctly scoped to the kind of email
+  that actually failed.
+- Flash Closet's row was untouched — no collateral.
+
+It also demonstrated the delivered-never-clears-a-bounce rule in production:
+`reset_email_status` remained `NULL` through the delivered event at 18:55:36 and
+was set only by the bounce at 18:56:26.
+
+**Cleanup:** the test account's address was restored and its synthetic
+`bounced` stamp cleared — leaving it would have been misleading data, since that
+address did not really fail. The `email_events` rows were kept: they are the
+genuine audit record and accurately state that `bounced@resend.dev` bounced.
+
+### Still not verified
+
+- **Idempotency has not been observed live.** Svix only retries on a non-2xx or
+  a timeout, and neither happened. The `ON CONFLICT (svix_id)` guard is covered
+  by unit tests and by mutation testing, but no real retry has been seen.
 - **The Email Events admin resource has not been loaded by an authenticated
-  admin** — same credential limitation as previous rounds.
-- **The payload shape is assumed from Resend's documented examples**
-  (`data.to[]`, `data.subject`, `data.email_id`, `data.bounce.message`). If the
-  real shape differs, events will still be recorded — the raw payload is stored
-  — but attribution to a store user could miss. The first live event will show
-  this immediately, and the stored payload makes it correctable without data
-  loss.
+  admin.** It is confirmed registered (it appears in the mount log) and the
+  underlying rows are confirmed present, but nobody has clicked into the list —
+  the same admin-credential limitation as previous rounds.
+- **No `email.complained` or `email.delivery_delayed` event has been seen.**
+  Both are subscribed and take the same code path as `email.bounced`, but only
+  `delivered` and `bounced` have actually arrived.
+- **Transient vs permanent bounces are not distinguished** in the stored status;
+  both record `'bounced'`. The distinction lives in the raw payload and in the
+  reason text. The 24 Sep incident was `bounced_transient`, which matters
+  operationally — see §3's triage table — so this is worth refining if bounce
+  volume ever rises.
