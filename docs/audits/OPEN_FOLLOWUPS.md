@@ -467,3 +467,150 @@ engagement).
    in-transit order; the driver, if an admin acts on a stuck delivered
    order) so neither side is left silently guessing what happened to their
    order.
+
+---
+
+## 13. `/api/store-auth/reset-password` has no rate limiter
+
+Surfaced while building store suspension (`STORE_SUSPENSION_RECORD.md` §7).
+
+Every other write on the store-auth surface is throttled — `login` carries
+both `storeAuthLimiter` and `storeAccountLoginLockout`, `forgot-password` is
+limited, and the public onboarding endpoint allows 5/hour/IP. `reset-password`
+has **none**. It is reachable unauthenticated by anyone holding a token
+string, and it is the endpoint that sets a password.
+
+**Why this is not urgent:** the token is `crypto.randomBytes(48)` — 384 bits.
+Guessing one is not a practical attack, and the endpoint already refuses any
+token that is used or expired, inside a transaction. So this is defence in
+depth rather than a live hole.
+
+**Why it still matters:** it is the only unthrottled write in the auth
+surface, which makes it the natural place for an unbounded-request bug to hide
+later, and there is no cost signal if someone starts hammering it. It is also
+the one endpoint where a future weakening of token entropy would go from
+harmless to serious with nothing else standing in the way.
+
+**To close this out:**
+1. Add a limiter to `POST /api/store-auth/reset-password` in
+   `storeAuthRoutes.js`, keyed by IP, sized so a real person mistyping a
+   pasted code several times is never blocked — the onboarding setup code is
+   96 characters and gets pasted out of an email, so a few failures per person
+   is normal rather than suspicious.
+2. Decide whether to also key by token prefix, so one IP cannot grind many
+   different tokens while staying under a per-IP ceiling.
+3. Keep the rate-limited response identical to what the endpoint already
+   returns for an invalid token, so the limiter itself does not become an
+   oracle for "this token exists".
+
+---
+
+## 14. No per-account admin revocation of a live store session
+
+Surfaced while building store suspension (`STORE_SUSPENSION_RECORD.md` §7).
+
+`revoked_tokens` is keyed by the JWT `jti`, and the only thing that ever
+writes to it is the user's own `POST /logout`. Nothing records which `jti`
+values are outstanding for an account, so an admin cannot terminate one staff
+member's session. Deactivating the account (`store_users.is_active = false`)
+does work, because `authenticateStore` re-checks it live — but that is a
+bigger hammer than "sign this person out".
+
+Store suspension (merged) covers the whole-store case, which was the urgent
+one: a suspended store's staff lose access on their very next request. This
+item is the narrower remaining gap.
+
+**Why it was deferred:** the dangerous case — cutting off an entire store — is
+handled, and handled by re-reading live state rather than by tracking tokens,
+which is strictly more reliable. Solving the per-account case properly means
+either storing issued `jti` values per account (new table, new cleanup cron) or
+adding a `sessions_valid_from` column compared against the token's `iat`.
+
+**To close this out:**
+1. Prefer the `sessions_valid_from` approach over a token registry — it reuses
+   the exact pattern already proven by the `password_changed_at` check in
+   `authenticateStore`, needs no cleanup job, and costs no extra query, since
+   that row is already read on every request.
+2. Give admins an action that stamps it, with the usual `admin_actions` audit
+   entry.
+3. Decide whether an Owner should be able to do this to their own staff from
+   the Store Portal, or whether it stays Flash-only. That is a product call.
+
+---
+
+## 15. Suspending a store notifies nobody
+
+Surfaced while building store suspension (`STORE_SUSPENSION_RECORD.md` §7).
+
+`Store.suspend()` changes state and nothing else. The owner finds out by being
+signed out mid-task and shown "This store is not currently active. Please
+contact Flash support." — accurate, and deliberately non-specific, but not an
+explanation, and they got no warning.
+
+There is a second, worse silence. Suspending a store with orders still in
+`pending_store_acceptance` means those orders are auto-cancelled and refunded
+within ~30 minutes by the existing acceptance-timeout cron (traced in
+`STORE_SUSPENSION_RECORD.md` §4 — that cron has no store filter, so it applies
+here unchanged). That is the intended outcome, but neither the store nor those
+customers are told it happened because of a suspension rather than the store
+simply not responding.
+
+**Why it was deferred:** the safety control had to land first, and suspension
+is currently only reachable by a Flash admin who can pick up the phone.
+Automated notification also depends on bounce visibility being in place —
+telling an owner by email that they have been suspended is worthless if the
+email silently bounces, which is exactly the blind spot that exists today
+(`STORE_ONBOARDING_FRONTEND_RECORD.md` §6).
+
+**To close this out:**
+1. Do bounce visibility first. A suspension notice that silently fails to
+   deliver is worse than none, because Flash would then believe the owner had
+   been told.
+2. Email the owner on suspension and on reactivation, using the reason already
+   captured in `stores.rejection_reason` by `Store.suspend()`.
+3. Decide whether affected customers get a distinct message rather than the
+   generic "store didn't respond" cancellation they receive today. That is a
+   customer-trust call, not purely technical.
+4. Consider whether suspension should ever be warned or scheduled rather than
+   immediate. For fraud, immediate is correct; for an administrative issue such
+   as lapsed details, a warning window may be fairer.
+
+---
+
+## 16. Render auto-deploys ahead of pending migrations, with no gate
+
+**This item was discussed in two earlier sessions and referred to by number,
+but was never actually written into this file — it is being recorded properly
+now.** That omission is itself the lesson: it existed only in conversation, and
+it nearly caused an outage.
+
+Migrations do **not** run on boot. `grep -nE "migrate|runMigrations"
+backend/src/server.js backend/server.js` returns nothing; `npm run migrate` is
+a separate manual step. But the `Flash-App` service has `autoDeploy: yes` on
+`main`, so merging a PR deploys new code immediately, whether or not the schema
+it depends on exists yet.
+
+This came within one action of breaking production during the store-onboarding
+work. PR #12's code hard-required `stores.status` in `Store.listActive()` and
+`findPublicById()`, which back `GET /api/stores` — the public storefront the
+customer app reads. Merging before applying migration v36 would have returned
+`column "status" does not exist` to every customer. It was caught only because
+the sequencing was checked by hand first, and v36 was applied before the merge.
+
+**Why it was deferred:** the expand-then-migrate discipline (additive schema
+first, then deploy) works when followed, and it has been followed so far. This
+item is about removing the reliance on remembering.
+
+**To close this out:**
+1. Decide the mechanism. A Render pre-deploy command running
+   `node src/db/migrate.js` is the smallest change, and the runner is already
+   idempotent (`CREATE ... IF NOT EXISTS`, and v36's backfill is guarded by
+   `WHERE status IS NULL`). Note this couples deploy success to migration
+   success — which is the point, but it means a bad migration blocks the deploy
+   rather than half-applying.
+2. Alternatively keep migrations manual, but add a boot-time schema assertion
+   that fails loudly and refuses to serve, rather than serving per-request
+   500s.
+3. Either way, put the expand-then-migrate rule where someone merging a PR
+   will actually see it — `CLAUDE.md` or the PR template, not only an audit
+   doc.
