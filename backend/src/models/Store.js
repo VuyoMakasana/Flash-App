@@ -14,6 +14,49 @@ const BaseModel = require("./BaseModel");
 // (logo_url/banner_url/description added in migration v40, this same port).
 const PUBLIC_COLUMNS = `id, name, logo_url, banner_url, description, address`;
 
+// THE SINGLE SOURCE OF TRUTH FOR THE STORE LIFECYCLE.
+//
+// Each entry lists the statuses a transition may legally run FROM. Both the
+// model's own WHERE clauses below and the AdminJS actions' isAccessible
+// checks (adminPanel.js) derive from this one object — they are never written
+// out by hand in two places.
+//
+// That is not tidiness. The suspension gap this was written to close was
+// caused precisely by those two things being written separately and
+// disagreeing: rejectStore's isAccessible and Store.reject()'s WHERE both
+// hard-excluded 'approved', so there was no way to take a live store offline
+// and nothing failed loudly enough to reveal it. A mismatch here is now
+// impossible by construction, and storeSuspension.test.js asserts the admin
+// actions and these clauses still agree.
+//
+// Why each transition is scoped the way it is:
+//   approve/reject — act on an APPLICATION. An application is only undecided
+//     while pending/under_review; deciding it twice must not re-fire the
+//     welcome email or re-mint an invite token.
+//   suspend — acts on a LIVE STORE. Only 'approved' is meaningful: a pending
+//     application that should not proceed gets rejected (that is what reject
+//     is for), and a rejected store is already offline.
+//   reactivate — the deliberate inverse of suspend, and only that. It does
+//     NOT go through approve(), because approve() mints a fresh invite token
+//     and sends a welcome email — both wrong for an owner who already has a
+//     password. See StoreOnboardingService.approve().
+const STORE_STATUS_TRANSITIONS = {
+  approve: ['pending', 'under_review'],
+  reject: ['pending', 'under_review'],
+  suspend: ['approved'],
+  reactivate: ['suspended'],
+};
+
+// Renders a transition's legal source states as a SQL IN-list. Values come
+// only from the frozen object above — never from user input — so there is no
+// injection surface here, and parameterising them would prevent Postgres from
+// using the status index on a constant list.
+function sourceStatesSql(transition) {
+  const states = STORE_STATUS_TRANSITIONS[transition];
+  if (!states) throw new Error(`Unknown store transition: ${transition}`);
+  return states.map((s) => `'${s}'`).join(',');
+}
+
 class Store extends BaseModel {
   static async findById(id) {
     const result = await this.query("SELECT * FROM stores WHERE id=$1", [id]);
@@ -63,7 +106,7 @@ class Store extends BaseModel {
       `UPDATE stores
        SET status = 'approved', is_active = true, reviewed_by = $2, reviewed_at = NOW(),
            rejection_reason = NULL, updated_at = NOW()
-       WHERE id = $1 AND status IN ('pending','under_review')
+       WHERE id = $1 AND status IN (${sourceStatesSql('approve')})
        RETURNING *`,
       [storeId, adminId],
     );
@@ -76,9 +119,63 @@ class Store extends BaseModel {
       `UPDATE stores
        SET status = 'rejected', is_active = false, reviewed_by = $2, reviewed_at = NOW(),
            rejection_reason = $3, updated_at = NOW()
-       WHERE id = $1 AND status IN ('pending','under_review')
+       WHERE id = $1 AND status IN (${sourceStatesSql('reject')})
        RETURNING *`,
       [storeId, adminId, reason || null],
+    );
+    return result.rows[0] || null;
+  }
+
+  // Takes a LIVE store offline. The safety control that was missing entirely:
+  // before this, nothing anywhere could move a store out of 'approved', so a
+  // store could not be cut off for fraud, a chargeback dispute or a closure
+  // without hand-written SQL against production.
+  //
+  // Sets is_active = false as well as the status. Both are set for the same
+  // reason approve()/reject() set both: the customer-facing storefront reads
+  // (listActive/findPublicById) filter on `is_active = true AND status =
+  // 'approved'`, so a suspended store drops out on either condition
+  // independently rather than relying on one of them being correct.
+  //
+  // What this does NOT do is equally deliberate: it does not touch orders.
+  // A customer who has paid and has a driver on the way must not lose their
+  // delivery because of a back-office action, and an order still awaiting
+  // acceptance is already covered — once suspended the store cannot act on it
+  // at all, so it falls into the existing store-acceptance timeout, which
+  // auto-cancels and refunds it. That path was traced, not assumed; see
+  // docs/audits/STORE_SUSPENSION_RECORD.md §4.
+  static async suspend(storeId, adminId, reason, client = null) {
+    const runner = client || this;
+    const result = await runner.query(
+      `UPDATE stores
+       SET status = 'suspended', is_active = false, reviewed_by = $2, reviewed_at = NOW(),
+           rejection_reason = $3, updated_at = NOW()
+       WHERE id = $1 AND status IN (${sourceStatesSql('suspend')})
+       RETURNING *`,
+      [storeId, adminId, reason || null],
+    );
+    return result.rows[0] || null;
+  }
+
+  // The deliberate inverse of suspend, and nothing more. Restores the store to
+  // 'approved' and clears the suspension reason.
+  //
+  // Crucially this is NOT approve(): approve() is the onboarding path and runs
+  // through StoreOnboardingService, which mints a fresh single-use invite token
+  // and emails a welcome message. Doing that to a reactivated owner would be
+  // wrong twice over — they already have a working password, and the mail would
+  // invite them to set another one. Reactivation touches no tokens and sends no
+  // email; the owner's existing credentials simply start working again, which
+  // is exactly what a suspension being lifted should mean.
+  static async reactivate(storeId, adminId, client = null) {
+    const runner = client || this;
+    const result = await runner.query(
+      `UPDATE stores
+       SET status = 'approved', is_active = true, reviewed_by = $2, reviewed_at = NOW(),
+           rejection_reason = NULL, updated_at = NOW()
+       WHERE id = $1 AND status IN (${sourceStatesSql('reactivate')})
+       RETURNING *`,
+      [storeId, adminId],
     );
     return result.rows[0] || null;
   }
@@ -123,3 +220,6 @@ class Store extends BaseModel {
 }
 
 module.exports = Store;
+// Exported so adminPanel.js's isAccessible checks derive from the same object
+// the WHERE clauses above do, rather than restating the states by hand.
+module.exports.STORE_STATUS_TRANSITIONS = STORE_STATUS_TRANSITIONS;

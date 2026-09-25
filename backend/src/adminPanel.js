@@ -22,6 +22,11 @@ const bcrypt = require('bcryptjs');
 const Admin = require('./models/Admin');
 const AdminAction = require('./models/AdminAction');
 const StoreOnboardingService = require('./services/storeOnboardingService');
+const Store = require('./models/Store');
+// One object drives BOTH these actions' isAccessible and the model's WHERE
+// clauses — see the comment on STORE_STATUS_TRANSITIONS in models/Store.js
+// for why they must never be written out separately again.
+const { STORE_STATUS_TRANSITIONS } = require('./models/Store');
 const Return = require('./models/Return');
 const {
   acceptOrder,
@@ -1809,7 +1814,7 @@ function buildResources(db) {
               actionType: 'record',
               component: false,
               guard: 'Approve this store? It becomes visible to customers and its owner is emailed a link to set their password.',
-              isAccessible: ({ record }) => ['pending', 'under_review'].includes(record.param('status')),
+              isAccessible: ({ record }) => STORE_STATUS_TRANSITIONS.approve.includes(record.param('status')),
               handler: async (request, response, context) => {
                 const { record, currentAdmin } = context;
                 const result = await StoreOnboardingService.approve(record.id(), currentAdmin.id);
@@ -1833,7 +1838,7 @@ function buildResources(db) {
               actionType: 'record',
               component: false,
               guard: 'Reject this application? The applicant keeps their record but the store stays offline.',
-              isAccessible: ({ record }) => ['pending', 'under_review'].includes(record.param('status')),
+              isAccessible: ({ record }) => STORE_STATUS_TRANSITIONS.reject.includes(record.param('status')),
               handler: async (request, response, context) => {
                 const { record, currentAdmin } = context;
                 const reason = (request.payload || {}).reason || null;
@@ -1850,6 +1855,69 @@ function buildResources(db) {
                 return {
                   record: record.toJSON(currentAdmin),
                   notice: { message: 'Application rejected.', type: 'success' },
+                };
+              },
+            },
+
+            // THE KILL SWITCH. Before this, nothing anywhere could move a
+            // store out of 'approved' — a live store could not be cut off for
+            // fraud, a chargeback dispute or a closure without hand-written
+            // SQL against production.
+            //
+            // isAccessible reads STORE_STATUS_TRANSITIONS rather than
+            // restating the states, because an isAccessible that disagreed
+            // with the model's WHERE clause is exactly how the original gap
+            // hid: the action was silently unreachable and nothing failed.
+            suspendStore: {
+              actionType: 'record',
+              component: false,
+              guard: 'Suspend this store? It disappears from the customer app immediately and its staff are signed out of the portal on their very next request. Orders already accepted are left alone and still get delivered.',
+              isAccessible: ({ record }) => STORE_STATUS_TRANSITIONS.suspend.includes(record.param('status')),
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                const reason = (request.payload || {}).reason || null;
+                const result = await Store.suspend(record.id(), currentAdmin.id, reason);
+                if (!result) {
+                  return {
+                    record: record.toJSON(currentAdmin),
+                    notice: { message: 'This store is not currently active, so it cannot be suspended — someone may have just actioned it.', type: 'error' },
+                  };
+                }
+                AdminAction.log(currentAdmin.id, 'store_suspend', 'stores', record.id(), { reason });
+                record.set('status', 'suspended');
+                record.set('is_active', false);
+                return {
+                  record: record.toJSON(currentAdmin),
+                  notice: { message: 'Store suspended — it is off the customer app and its staff can no longer use the portal.', type: 'success' },
+                };
+              },
+            },
+
+            // Deliberately NOT approveStore. That path runs through
+            // StoreOnboardingService, which mints a fresh invite token and
+            // emails a welcome message — both wrong for an owner who already
+            // has a working password. Store.reactivate() touches no tokens
+            // and sends no email.
+            reactivateStore: {
+              actionType: 'record',
+              component: false,
+              guard: 'Reactivate this store? It becomes visible to customers again and its existing staff logins start working immediately. No new password email is sent.',
+              isAccessible: ({ record }) => STORE_STATUS_TRANSITIONS.reactivate.includes(record.param('status')),
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                const result = await Store.reactivate(record.id(), currentAdmin.id);
+                if (!result) {
+                  return {
+                    record: record.toJSON(currentAdmin),
+                    notice: { message: 'This store is not suspended, so it cannot be reactivated — someone may have just actioned it.', type: 'error' },
+                  };
+                }
+                AdminAction.log(currentAdmin.id, 'store_reactivate', 'stores', record.id());
+                record.set('status', 'approved');
+                record.set('is_active', true);
+                return {
+                  record: record.toJSON(currentAdmin),
+                  notice: { message: 'Store reactivated — it is live again and its staff can sign in with their existing passwords.', type: 'success' },
                 };
               },
             },

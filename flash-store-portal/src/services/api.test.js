@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { storeApi } from './api';
+import { storeApi, SESSION_ENDED_EVENT } from './api';
 
 /**
  * src/services/api.test.js
@@ -194,6 +194,102 @@ describe('request() field-error normalization', () => {
       expect(err.message).toBe('Product not found');
       expect(err.status).toBe(404);
       expect(err.fieldErrors).toBeUndefined();
+    }
+  });
+});
+
+/**
+ * Store suspension — the client half of the kill switch.
+ *
+ * The backend now re-checks the store's live status on every request and
+ * answers 403 + STORE_SUSPENDED. Without the handling below, the portal would
+ * keep claiming the user was signed in while every panel failed, because
+ * ProtectedRoute only ever read localStorage.
+ *
+ * The narrowness matters as much as the behaviour: tearing down a session is
+ * destructive, so it must fire for exactly this case and nothing adjacent.
+ */
+describe('request() — STORE_SUSPENDED session teardown', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  function seedSession() {
+    localStorage.setItem('flash_store_token', 'live-session-token');
+    localStorage.setItem('flash_store_user', JSON.stringify({ id: 'su-1', role: 'owner' }));
+  }
+
+  test('a 403 STORE_SUSPENDED clears the stored session', async () => {
+    seedSession();
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: 'This store is not currently active.', code: 'STORE_SUSPENDED' }),
+    });
+
+    await expect(storeApi.getOrders()).rejects.toThrow();
+
+    expect(localStorage.getItem('flash_store_token')).toBeNull();
+    expect(localStorage.getItem('flash_store_user')).toBeNull();
+    // The reason survives so the login page can explain the redirect.
+    expect(localStorage.getItem('flash_store_session_ended_reason')).toMatch(/not currently active/i);
+  });
+
+  test('it broadcasts the session-ended event so the context can drop its state', async () => {
+    seedSession();
+    const handler = vi.fn();
+    window.addEventListener(SESSION_ENDED_EVENT, handler);
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: 'suspended', code: 'STORE_SUSPENDED' }),
+    });
+
+    await expect(storeApi.getOrders()).rejects.toThrow();
+    expect(handler).toHaveBeenCalledTimes(1);
+    window.removeEventListener(SESSION_ENDED_EVENT, handler);
+  });
+
+  test('a plain 401 does NOT tear the session down', async () => {
+    // An expired or invalid token is already handled per-page, and is often
+    // transient. Nuking the session on every 401 would log people out for the
+    // wrong reasons.
+    seedSession();
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false, status: 401, json: async () => ({ error: 'Invalid token' }),
+    });
+
+    await expect(storeApi.getOrders()).rejects.toThrow();
+    expect(localStorage.getItem('flash_store_token')).toBe('live-session-token');
+  });
+
+  test('a 403 WITHOUT the code does NOT tear the session down', async () => {
+    // e.g. the role guard refusing one endpoint — that must not sign the
+    // user out of the whole portal.
+    seedSession();
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 403,
+      json: async () => ({ error: 'Access forbidden. Required role: owner' }),
+    });
+
+    await expect(storeApi.getOrders()).rejects.toThrow();
+    expect(localStorage.getItem('flash_store_token')).toBe('live-session-token');
+  });
+
+  test('the error still carries status and code for the calling page', async () => {
+    seedSession();
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: false, status: 403, json: async () => ({ error: 'suspended', code: 'STORE_SUSPENDED' }),
+    });
+
+    try {
+      await storeApi.getOrders();
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect(err.status).toBe(403);
+      expect(err.code).toBe('STORE_SUSPENDED');
     }
   });
 });

@@ -176,7 +176,20 @@ const authenticateStore = async (req, res, next) => {
       decoded.jti
         ? pool.query("SELECT 1 FROM revoked_tokens WHERE jti = $1", [decoded.jti])
         : Promise.resolve({ rows: [] }),
-      pool.query("SELECT is_active, password_changed_at FROM store_users WHERE id = $1", [decoded.id]),
+      // Joined to stores so the STORE's live state is checked on every
+      // request too, not just the account's. store_users.store_id is NOT NULL
+      // with a real FK, so an inner join can never drop a legitimate row —
+      // and if data were ever orphaned, the row vanishes and access is
+      // denied, which fails closed rather than open. Still one round trip:
+      // this is a primary-key join, not an extra query.
+      pool.query(
+        `SELECT su.is_active, su.password_changed_at,
+                s.is_active AS store_is_active, s.status AS store_status
+           FROM store_users su
+           JOIN stores s ON s.id = su.store_id
+          WHERE su.id = $1`,
+        [decoded.id],
+      ),
     ]);
     if (revokedResult.rows.length)
       return res.status(401).json({ error: "Token revoked" });
@@ -185,6 +198,33 @@ const authenticateStore = async (req, res, next) => {
     // its token naturally expires up to 8h later.
     if (!storeUserResult.rows.length || !storeUserResult.rows[0].is_active)
       return res.status(401).json({ error: "Account deactivated" });
+
+    // THE SUSPENSION KILL SWITCH.
+    //
+    // Store tokens last 8h and there is no refresh endpoint, so before this
+    // existed a suspended store's staff kept full access — real 200s on
+    // orders, inventory, analytics and staff — for up to eight hours after
+    // being cut off. Flipping a flag nothing re-read was not a kill switch.
+    //
+    // Re-checked here on EVERY request rather than only at login, because the
+    // dangerous case is the session that already exists at the moment
+    // suspension happens. authenticateStore is applied router-wide (via
+    // router.use) on every store-scoped router, so this one check covers all
+    // of them.
+    //
+    // 403, not 401: the credentials are valid and the session is real — it is
+    // the store that is forbidden. A 401 would read as "log in again" and send
+    // the owner into a loop; storeAuthController.login refuses suspended
+    // stores too, so that loop cannot happen either way. The machine-readable
+    // code is what lets the portal say "your store is suspended" instead of
+    // "session expired".
+    const storeRow = storeUserResult.rows[0];
+    if (!storeRow.store_is_active || storeRow.store_status !== "approved") {
+      return res.status(403).json({
+        error: "This store is not currently active. Please contact Flash support.",
+        code: "STORE_SUSPENDED",
+      });
+    }
 
     // Same session-invalidation-on-password-change mechanism as admin
     // tokens (see the password_changed_at comment on authenticate() above) —

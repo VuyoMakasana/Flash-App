@@ -1,6 +1,7 @@
 'use strict';
 
 const StoreUser = require("../models/StoreUser");
+const Store = require("../models/Store");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
@@ -45,6 +46,23 @@ class StoreAuthController {
       // this codebase.
       if (storeUser.role === "marketing") {
         return res.status(403).json({ error: "Marketing access isn't available yet. Contact your store Owner." });
+      }
+
+      // Suspension must block NEW sessions as well as existing ones.
+      // authenticateStore rejects a suspended store's live tokens on every
+      // request, but without this check the staff could simply sign in again
+      // and mint a fresh 8h token — the kill switch would stop nothing.
+      //
+      // Checked after the password is verified, for the same anti-enumeration
+      // reason as the marketing-role check directly above: answering before
+      // credentials are proven would tell anyone who merely guesses an email
+      // that it belongs to a suspended store.
+      const storeState = await Store.findById(storeUser.store_id);
+      if (!storeState || !storeState.is_active || storeState.status !== "approved") {
+        return res.status(403).json({
+          error: "This store is not currently active. Please contact Flash support.",
+          code: "STORE_SUSPENDED",
+        });
       }
 
       const storeJwtSecret = getRequired("STORE_JWT_SECRET", "store-auth");

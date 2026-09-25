@@ -51,6 +51,20 @@ async function activeOwner(password = 'correct-horse-battery') {
   };
 }
 
+// Login now also reads the STORE's live state, because a suspended store must
+// not be able to mint a fresh 8h token by simply signing in again. These
+// helpers mock the two reads in the order login performs them:
+// StoreUser.findByEmail, then Store.findById.
+function approvedStore() {
+  return { id: STORE_ID, name: 'Test Store', is_active: true, status: 'approved' };
+}
+
+function mockLoginReads(user, store = approvedStore()) {
+  pool.query
+    .mockResolvedValueOnce({ rows: [user] })   // StoreUser.findByEmail
+    .mockResolvedValueOnce({ rows: [store] }); // Store.findById
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   process.env.STORE_JWT_SECRET = STORE_SECRET;
@@ -60,7 +74,7 @@ beforeEach(() => {
 describe('login', () => {
   test('issues a token signed with STORE_JWT_SECRET carrying the store scope', async () => {
     const user = await activeOwner();
-    pool.query.mockResolvedValue({ rows: [user] });
+    mockLoginReads(user);
     const res = mockRes();
 
     await StoreAuthController.login(
@@ -151,7 +165,7 @@ describe('login', () => {
   test('a misconfigured secret is a 500, never an unsigned token', async () => {
     delete process.env.STORE_JWT_SECRET;
     const user = await activeOwner();
-    pool.query.mockResolvedValue({ rows: [user] });
+    mockLoginReads(user);
     const res = mockRes();
 
     await StoreAuthController.login(
