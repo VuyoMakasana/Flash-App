@@ -2530,6 +2530,70 @@ async function migrateV38(client) {
 async function migrateV39(client) {
   await client.query('BEGIN');
   try {
+    // SELF-SUFFICIENT, and it has to be. commission_rates exists in production
+    // -- seeded by a "v31" that lives on an unmerged branch -- but this repo's
+    // migration chain never creates it, so a fresh database (CI, a new
+    // environment) has no such table and the FK below fails outright. Exactly
+    // the drift that broke v34 earlier in this project's history.
+    //
+    // Shape mirrors PRODUCTION, read directly from pg_constraint/pg_indexes
+    // rather than from the unmerged branch, so an existing database is
+    // unaffected (every statement is IF NOT EXISTS) and a fresh one ends up
+    // identical to the real thing.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS commission_rates (
+        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        scope_type VARCHAR(20) NOT NULL,
+        store_id   UUID REFERENCES stores(id),
+        rate       NUMERIC(5,4) NOT NULL,
+        starts_at  TIMESTAMPTZ,
+        ends_at    TIMESTAMPTZ,
+        is_active  BOOLEAN NOT NULL DEFAULT true,
+        created_by UUID REFERENCES admins(id),
+        reason     TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT commission_rates_scope_type_check
+          CHECK (scope_type IN ('global','store','promotional')),
+        CONSTRAINT commission_rates_rate_check
+          CHECK (rate >= 0 AND rate <= 1),
+        -- A global rate applies to everyone so must NOT name a store; a store
+        -- or promotional rate is meaningless without one.
+        CONSTRAINT commission_rates_scope_store_check
+          CHECK ((scope_type = 'global' AND store_id IS NULL)
+              OR (scope_type IN ('store','promotional') AND store_id IS NOT NULL)),
+        -- A promotional rate exists precisely to be time-boxed, so an open-ended
+        -- one is a contradiction the database refuses rather than trusts.
+        CONSTRAINT commission_rates_promotional_window_check
+          CHECK (scope_type <> 'promotional'
+              OR (starts_at IS NOT NULL AND ends_at IS NOT NULL AND ends_at > starts_at))
+      )
+    `);
+
+    // Spec 2.2's "exactly one active global row at all times" as a real
+    // database invariant rather than an assumption. Two active globals would
+    // make rate resolution depend on created_at tie-breaking.
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_commission_rates_one_active_global
+        ON commission_rates(scope_type) WHERE scope_type = 'global' AND is_active = true
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_commission_rates_store_id
+        ON commission_rates(store_id) WHERE store_id IS NOT NULL
+    `);
+
+    // Seed the launch rate ONLY where no active global exists. Production
+    // already has one (0.1000, founder-confirmed, 2026-08-01) so this is a
+    // no-op there; a fresh database would otherwise resolve no rate at all and
+    // silently stamp nothing.
+    await client.query(`
+      INSERT INTO commission_rates (scope_type, rate, is_active, reason)
+      SELECT 'global', 0.1000, true,
+             'Launch commission rate (founder-confirmed) -- seeded by migration v39 for environments created after v31'
+      WHERE NOT EXISTS (
+        SELECT 1 FROM commission_rates WHERE scope_type = 'global' AND is_active = true
+      )
+    `);
+
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_commission NUMERIC(10,2)`);
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS commission_rate_applied NUMERIC(5,4)`);
     await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS commission_rate_id UUID REFERENCES commission_rates(id)`);
