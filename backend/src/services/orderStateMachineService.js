@@ -13,6 +13,7 @@
 const pool        = require('../config/database');
 const DriverWallet = require('../models/DriverWallet');
 const Order        = require('../models/Order');
+const { computeStoreCommission } = require('./commissionService');
 
 // pending_store_acceptance / preparing: the store-facing accept/reject/
 // preparing gate (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0). A paid order
@@ -237,6 +238,53 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
       if (order.payment_method === 'cash' && order.payment_status !== 'paid') {
         throw new Error('Cash orders require payment confirmation before completion');
       }
+
+      // STORE COMMISSION (Phase 2b) — resolved and FROZEN here, never
+      // recomputed later. A rate change must not retroactively alter what a
+      // store earned on an order that already completed under the old rate,
+      // which is the same reason driver_payout is computed once at creation
+      // and never recalculated.
+      //
+      // Idempotent on four independent layers, three of which already existed:
+      //   1. the SELECT ... FOR UPDATE above serialises concurrent callers
+      //   2. currentState === targetState returns early, before this branch
+      //   3. 'completed' is terminal (ALLOWED_TRANSITIONS.completed === [])
+      //   4. store_commission IS NULL, checked here -- the column is its own
+      //      guard, so even a manual status flip in the database could not
+      //      cause a second stamp
+      //
+      // Stamped into `updates`, so it lands in the SAME atomic UPDATE as the
+      // status change: an order cannot be completed without its commission, or
+      // carry a commission without being completed.
+      //
+      // Applies to cash orders too. The arithmetic is identical -- Flash earns
+      // its share of item value however the customer paid -- but SETTLING it is
+      // not, because on a cash order Flash never receives the money: the driver
+      // collects it at the door. 2c must branch on payment_method and cannot
+      // treat the two alike. Tracked as OPEN_FOLLOWUPS #20, flagged as a
+      // blocker for 2c scoping.
+      if (order.store_id && order.store_commission == null) {
+        try {
+          const commission = await computeStoreCommission(client, {
+            storeId: order.store_id,
+            subtotal: order.subtotal,
+          });
+          if (commission) {
+            updates.store_commission = commission.amount;
+            updates.commission_rate_applied = commission.rate;
+            updates.commission_rate_id = commission.rateId;
+          } else {
+            console.warn(
+              `[Commission] No active rate resolved for store ${order.store_id} on order ${orderId} — left unstamped`,
+            );
+          }
+        } catch (commissionErr) {
+          // Never block a completion on this. The goods are delivered and the
+          // order is real; an unstamped commission is recoverable afterwards,
+          // whereas a failed completion strands a live delivery.
+          console.error(`[Commission] Failed to stamp order ${orderId}:`, commissionErr.message);
+        }
+      }
     }
 
     // delivered_at is written exactly once, the first time an order reaches
@@ -248,11 +296,20 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
     const deliveredAtParam = targetState === 'delivered' ? new Date() : null;
 
     const updatedResult = await client.query(
+      // The commission columns use COALESCE(column, $n) -- the SAME write-once
+      // shape as delivered_at directly above, and for the same reason. Note the
+      // argument order: the EXISTING value wins, so once a commission is
+      // stamped no later pass can overwrite it, even if the JS guard were
+      // somehow bypassed. That makes the database the final idempotency layer
+      // rather than trusting the branch above to be the only writer.
       `UPDATE orders
        SET status = $1,
            delivery_payment_status = COALESCE($2, delivery_payment_status),
            driver_paid = COALESCE($3, driver_paid),
            delivered_at = COALESCE(delivered_at, $5),
+           store_commission = COALESCE(store_commission, $6),
+           commission_rate_applied = COALESCE(commission_rate_applied, $7),
+           commission_rate_id = COALESCE(commission_rate_id, $8),
            updated_at = NOW()
        WHERE id = $4
        RETURNING *`,
@@ -262,6 +319,9 @@ async function updateOrderStatus(orderId, nextState, context = {}) {
         updates.driver_paid ?? null,
         orderId,
         deliveredAtParam,
+        updates.store_commission ?? null,
+        updates.commission_rate_applied ?? null,
+        updates.commission_rate_id ?? null,
       ],
     );
 

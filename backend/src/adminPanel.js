@@ -1736,6 +1736,44 @@ function buildResources(db) {
         }, RESOURCE_TIMESTAMP_COLUMNS.marketing_waitlist),
       },
       {
+        // COMMISSION RATES (Phase 2b) — READ-ONLY, deliberately.
+        //
+        // Admins need to see which rate is active and which one produced a
+        // given order's stamped commission; orders.commission_rate_id points
+        // straight at a row here, so a dispute is reconstructable.
+        //
+        // But new/edit/delete are all disabled, and that is the point.
+        // FINANCIAL_DOMAIN_SPECIFICATION.md 2.4 is explicit that changing a
+        // rate is an INSERT of a new row with the old one deactivated, NEVER an
+        // UPDATE -- the table IS its own audit trail, and editing a row in
+        // place would destroy the history that makes a past commission
+        // explicable. An editable AdminJS form would quietly permit exactly
+        // that.
+        //
+        // Creating rates through the panel is a deliberate future piece, not an
+        // omission: inserting a second active global row violates the unique
+        // partial index (one active global at a time) and would surface as a
+        // raw database error in the UI, so it needs a real action with real
+        // validation rather than a default form. Until then a rate change is an
+        // intentional ops action.
+        resource: db.table('commission_rates'),
+        options: withChronologicalDefaults({
+          listProperties: ['scope_type', 'rate', 'store_id', 'is_active', 'starts_at', 'ends_at', 'created_at'],
+          properties: {
+            reason: { type: 'textarea' },
+            store_id: { isVisible: { list: true, show: true, edit: false, filter: true } },
+          },
+          actions: {
+            list: {},
+            show: {},
+            new: { isAccessible: false },
+            edit: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
+          },
+        }, RESOURCE_TIMESTAMP_COLUMNS.commission_rates),
+      },
+      {
         // EMAIL DELIVERY EVENTS — the admin-visible half of bounce visibility.
         //
         // Before this, a bounced email was invisible to Flash: sendEmail()
