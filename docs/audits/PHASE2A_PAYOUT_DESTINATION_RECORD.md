@@ -33,7 +33,7 @@ bank is the authority on whose account it is.
 
 ---
 
-## 2. Four controls, each for a different failure
+## 2. Three controls — and a fourth that proved impossible
 
 **Owner only.** `requireStoreRole('owner')` at the router. Deliberately narrower
 than Finance's access elsewhere in the portal: reading financials and
@@ -43,57 +43,64 @@ hiding a screen is not a control.
 **Password re-authentication.** A hijacked session must not be enough to
 redirect a store's income. Mirrors the driver flow, which already does this.
 
-**Bank name verification.** `verifyBankAccount` resolves the holder's name from
-the bank and it is compared against the submitted name, so a mistyped digit
-cannot silently point settlement at a stranger's account. See §3.
-
 **Notify + audit.** A `store_actions` row on every change, plus an email to the
 owner stating which account money will now go to and what to do if it was not
 them. Sent fire-and-forget *after* commit — an email cannot be rolled back, so a
 mail failure must not undo a change the owner legitimately made.
 
 Suspended stores need no extra guard: `authenticateStore` re-checks the store's
-live status on every request, so a suspended store cannot reach any of this.
+live status on every request.
 
----
+### The fourth control cannot be built today
 
-## 3. The name check, and why it is its own tested function
+The original design verified the account holder's name with the bank before
+saving. **A live probe against Paystack proved that is impossible for South
+African accounts**, and the detail matters enough to record precisely — see §3.
 
-`utils/accountNameMatch.js`. Neither extreme was acceptable:
+Registration is therefore **unverified**, matching the driver path, which has
+always called `createTransferRecipient` with no prior resolve for exactly this
+reason. The practical consequence, stated plainly: **a mistyped account number
+will be accepted.** That is why the notification email carries more weight here
+than it otherwise would — it is the only signal a store owner gets that their
+payout destination changed, correctly or otherwise.
 
-- **Exact equality** rejects most real accounts. South African banks return
-  whatever form they hold: `MR JOHN DOE`, `DOE JOHN`, `J DOE`, `JOHN M DOE`. An
-  owner typing "John Doe" would be refused their own account.
-- **No check** means a mistyped digit sends settlement money to a stranger,
-  discovered only when the store asks where its money went.
+Two tests assert this posture explicitly rather than leaving it implicit, so
+that a later reader cannot assume verification is happening.
 
-So it is lenient about form and strict about substance. Titles (`MR`, `DR`) and
-company noise (`PTY`, `LTD`, `THE`) are stripped; apostrophes are removed so
-`O'Brien` becomes `OBRIEN` rather than splitting into fragments; hyphens
-separate. Then:
+## 3. Why there is no bank verification — the live probe
 
-- **At least two components must line up**, so a shared first name alone is
-  never sufficient — `John Doe` vs `JOHN` is rejected.
-- **At least one must be a full exact match**, so a string of initials cannot
-  pass — `J M D` vs `JOHN MICHAEL DOE` is rejected.
-- **A single-token name** (a business whose name reduces to `THREADS` once
-  `PTY LTD` is stripped) is accepted only when both normalized names are
-  *identical* — the strongest evidence rather than the weakest.
+This section is the evidence, because the conclusion is uncomfortable and
+should not have to be taken on trust.
 
-Both bypasses were found by writing the tests first and watching them fail; the
-initial implementation accepted both.
+I ran the real `paystackService` against Paystack's live API (test key, no
+mocks). Three results:
 
-### The lookup-oracle problem
+| Call | Result |
+|---|---|
+| `createTransferRecipient` | **Worked.** Returned `RCP_x91pcx1c3zncdeq`. `data.recipient_code` is exactly where the code reads it, and `data.details` carries `account_number, account_name, bank_code, bank_name` |
+| `getBankList` (`country=south_africa`) | `status: true` but **zero rows** |
+| `verifyBankAccount` (`/bank/resolve`) | **`"Please supply one of the following valid currencies: NGN, USD, GHS, KES"`** — ZAR absent |
 
-**The bank-held name is never echoed back on mismatch.** Returning it would turn
-"set my payout account" into an account-holder lookup: submit any account number
-with a deliberately wrong name and read the real holder's name out of the error
-message. Paystack's resolve endpoint *is* such an oracle; Flash must not
-re-expose it to a store-portal session. The match function therefore returns a
-boolean, never a diff, and there is a test asserting the rejected name does not
-appear anywhere in the response body.
+`/bank/resolve` is a **Nigeria/Ghana product**. The South African equivalent is
+a different endpoint, `/bank/validate`, which is a **paid product (ZAR 3 per
+successful call)** and additionally requires the owner's **ID number, passport
+number or company registration number** — materially more sensitive data than a
+bank account number, with POPIA implications.
 
----
+**Had this shipped as originally designed, it would have rejected 100% of real
+South African stores** while passing every unit test, because the tests mocked
+a resolve call that cannot succeed in this market.
+
+A corroborating detail that had been sitting in plain sight: the driver flow
+has a standalone optional verify endpoint but does **not** gate registration on
+it. That avoidance now looks load-bearing rather than accidental.
+
+`/bank/validate` is **shelved, not abandoned** — revisit once Flash has a live,
+ZA-configured Paystack account with Account Validation enabled. There is no
+live key at all today (production runs on `sk_test_`), which is also why
+`accountNameMatch.js` was **deleted rather than kept as defence in depth**: a
+heuristic name check over unverified input protects nothing real, and leaving
+it would imply a protection that does not exist.
 
 ## 4. Schema (migration v38)
 
@@ -146,44 +153,39 @@ resource over this table.
 
 ## 7. Testing
 
-**50 new tests** (33 name-match, 15 controller, 2 log-only-kind). Backend suite **456 → 506**, 38 suites, all passing.
+**17 new tests** (13 controller, 2 log-only-kind, plus model coverage). Backend
+suite **456 → 471**, 37 suites, all passing.
 
-Adversarial results:
+The count went *down* from the first draft of this PR: 33 name-match tests were
+deleted along with the module they covered. Tests for a control that cannot
+exist are worse than no tests, because they imply the control does.
 
 | Attempt | Result |
 |---|---|
 | Change destination with a wrong password | 401; Paystack never called, nothing written |
 | Change from a deactivated account | 401 |
-| Account number that does not resolve | 400; nothing written |
-| Real account, **different holder** (mistyped digit) | 400; nothing written |
-| Read the bank-held name out of the mismatch error | Not present in the response |
-| Legitimate bank formatting (`MR N DLAMINI` vs `Nomsa Dlamini`) | Succeeds |
-| Provider outage | 502, never a silent success |
-| Recipient registration returning no code | 502; no destination written |
+| Provider outage / Paystack throws | 502; nothing written. **This is the expected production behaviour until a live key exists** |
+| Registration returning no `recipient_code` | 502; no destination written |
 | Account number present in what is persisted | Absent — only `last4` |
 | Account number or `recipient_code` in the response | Absent |
 | Notification failure | Change still succeeds |
+| A name that does not match the real holder | **Accepted** — asserted deliberately, documenting the gap |
+| Any resolve call attempted | None — asserted |
 
-**Mutation-tested** — each caught by exactly one test:
+**Mutation-tested**, each caught by exactly one test:
 
 | Mutation | Result |
 |---|---|
 | Password check bypassed | 1 test fails |
-| Name match bypassed | 1 test fails |
 | Full account number stored instead of `last4` | 1 test fails |
-| Bank-held name echoed back on mismatch | 1 test fails |
+| Missing-`recipient_code` guard disabled | 1 test fails |
 
-The bounce-visibility **drift guard also fired during this work**, which is
-worth recording as evidence it does its job: adding
-`STORE_PAYOUT_DESTINATION_CHANGED` to `EMAIL_SUBJECTS` without a
-`TRACKED_EMAIL_KINDS` entry failed the test immediately. That prompted the right
-question rather than a mechanical fix — this is the *most* important email to
-bounce-track, because if it fails an owner never learns their payout account was
-redirected. It is now tracked as a **log-only** kind: recorded in `email_events`
-and visible in the admin Email Events list, without a third pair of
-`store_users` columns that would establish a pattern that does not scale.
-
----
+One mutation attempt in this round silently did not apply — a shell-quoting
+error meant the anchor never matched, and the resulting "all passed" was
+meaningless. Re-run with a corrected anchor, it failed as expected. Recorded
+because a mutation test that does not actually mutate is indistinguishable from
+a passing one, and that is exactly the false comfort this technique exists to
+avoid.
 
 ## 8. Not built, and not verified
 
@@ -191,6 +193,14 @@ and visible in the admin Email Events list, without a third pair of
   increment, deliberately split the same way store onboarding was (endpoint
   first, then the page) so the security surface could be reviewed on its own.
   Until that lands, a payout destination can only be set by an API call.
+- **This will not function in production until a live Paystack key exists.**
+  `paystackService` throws on every call when `NODE_ENV=production` and the key
+  starts with `sk_test_`, which is what production runs today. So
+  `POST /api/store-banking` will return 502 and `GET /banks` will return 502,
+  every time, for every store. The code is correct; the environment cannot
+  support it yet. This is the same state the driver banking path is already in
+  — a driver with R12.45 in their wallet currently cannot register a bank
+  account for the same reason. Stated here rather than discovered later.
 - **Nothing has been exercised against production.** No real bank account has
   been registered, `verifyBankAccount` and `createTransferRecipient` have never
   been called against live Paystack from this feature, and v38 has not been

@@ -6,7 +6,6 @@ const pool = require('../config/database');
 const StoreTransferRecipient = require('../models/StoreTransferRecipient');
 const StoreAction = require('../models/StoreAction');
 const paystackService = require('../services/paystackService');
-const { namesPlausiblyMatch } = require('../utils/accountNameMatch');
 const { sendStorePayoutDestinationChangedEmail } = require('../services/emailService');
 
 // Phase 2a — where a store's settlement money goes.
@@ -15,17 +14,23 @@ const { sendStorePayoutDestinationChangedEmail } = require('../services/emailSer
 // so getting it wrong here means paying the wrong account later, which is the
 // single most damaging thing this system could do to a real merchant.
 //
-// Four controls, each for a different failure:
+// THREE controls, and one that was designed but proved impossible:
 //   1. Owner only (route-level) — reading financials and REDIRECTING money are
 //      different privileges, so Finance is deliberately excluded.
 //   2. Password re-authentication — a hijacked session must not be enough to
 //      redirect a store's income. Mirrors the driver flow, which already does
 //      this for the same reason.
-//   3. Bank name verification — the account number is resolved with the bank
-//      and the holder's name compared, so a mistyped digit cannot silently
-//      point settlement at a stranger.
-//   4. Notify + audit — a real owner gets an immediate signal if it was not
+//   3. Notify + audit — a real owner gets an immediate signal if it was not
 //      them, and every change leaves a store_actions row.
+//
+// The fourth was independent verification of the account holder's name. A live
+// probe against Paystack proved /bank/resolve is Nigeria/Ghana only and
+// rejects South African requests outright, so that control cannot be built
+// today. Its replacement (/bank/validate, ZAR 3 per call, requires an ID
+// number) is shelved until a live ZA-configured key exists. This is therefore
+// UNVERIFIED registration -- the same posture the driver path has always had.
+// A mistyped account number will be accepted, which is precisely why the
+// notification email at step 4 matters more here than it otherwise would.
 //
 // Suspended stores need no separate guard: authenticateStore already refuses
 // any request from a store that is not active and approved.
@@ -93,50 +98,42 @@ class StoreBankingController {
         return res.status(401).json({ error: 'Incorrect password.' });
       }
 
-      // ── 2. Confirm the account exists and belongs to this name ────────────
-      let resolved;
-      try {
-        resolved = await paystackService.verifyBankAccount(account_number, bank_code);
-      } catch (verifyErr) {
-        console.error('[StoreBanking] verifyBankAccount threw:', verifyErr.message);
-        return res.status(502).json({ error: 'Could not reach the bank to verify this account. Please try again.' });
-      }
-
-      if (!resolved || !resolved.status || !resolved.data || !resolved.data.account_name) {
-        // Paystack could not resolve it at all — usually a wrong account
-        // number or the wrong bank selected.
-        return res.status(400).json({
-          error: 'We could not verify that account number with the selected bank. Please check both and try again.',
-        });
-      }
-
-      const bankHeldName = resolved.data.account_name;
-
-      if (!namesPlausiblyMatch(account_name, bankHeldName)) {
-        // THE NAME IS NOT ECHOED BACK. Returning the bank-held name would turn
-        // this endpoint into an account-holder lookup oracle: submit any
-        // account number with a deliberately wrong name and read the real
-        // owner's name out of the error. Paystack's resolve endpoint is such an
-        // oracle; Flash must not re-expose it to a store portal session.
-        console.warn(
-          `[StoreBanking] name mismatch for store ${req.storeId} — submitted name did not match the bank's record`,
-        );
-        return res.status(400).json({
-          error: "The account holder's name doesn't match the name on that account. "
-            + 'Please enter it exactly as your bank has it, or contact Flash support.',
-        });
-      }
-
-      // ── 3. Register with Paystack, then persist only the token ────────────
+      // ── 2. Register with Paystack ─────────────────────────────────────────
+      //
+      // THE ACCOUNT IS NOT INDEPENDENTLY VERIFIED, and that is a deliberate,
+      // documented decision rather than an omission.
+      //
+      // The original design resolved the account and compared the holder's
+      // name. A live probe against Paystack proved that cannot work here:
+      // /bank/resolve is a Nigeria/Ghana product and answers a South African
+      // request with "Please supply one of the following valid currencies:
+      // NGN, USD, GHS, KES". Building on it would have rejected 100% of real
+      // South African stores while looking correct in every unit test.
+      //
+      // The South African equivalent, /bank/validate, is a separate paid
+      // product (ZAR 3 per successful call) that additionally requires the
+      // owner's ID or company registration number. It is shelved until Flash
+      // has a live, ZA-configured Paystack account — there is no live key at
+      // all today. See docs/audits/PHASE2A_PAYOUT_DESTINATION_RECORD.md §3.
+      //
+      // So registration is unverified, matching the existing driver path,
+      // which calls createTransferRecipient with no prior resolve for exactly
+      // the same reason. The real controls here are the password
+      // re-authentication above, the notification email, and the audit row —
+      // not a name check that cannot be performed.
       let recipient;
       try {
         recipient = await paystackService.createTransferRecipient({
-          name: bankHeldName, // the bank's own spelling, not the submitted one
+          name: account_name,
           accountNumber: account_number,
           bankCode: bank_code,
           description: `Flash store – ${req.storeId}`,
         });
       } catch (recipientErr) {
+        // Expected in production until a live key exists: paystackService
+        // throws on any call when NODE_ENV is production and the key is
+        // sk_test_. Surfaced as a 502 rather than swallowed, so a store owner
+        // is told it failed instead of believing a destination was saved.
         console.error('[StoreBanking] createTransferRecipient threw:', recipientErr.message);
         return res.status(502).json({ error: 'Could not register this account with our payment provider. Please try again.' });
       }
@@ -146,13 +143,23 @@ class StoreBankingController {
         return res.status(502).json({ error: 'Could not register this account with our payment provider. Please try again.' });
       }
 
+      // Paystack echoes the registered account back under data.details, which
+      // a live probe confirmed carries account_number, account_name, bank_code
+      // and bank_name. Preferring its values over the submitted ones means the
+      // bank name is whatever the provider actually recorded rather than
+      // something Flash inferred from a bank_code — and if Paystack ever does
+      // normalise the holder's name, that normalisation is what gets stored.
+      // Falls back to the submitted values, since for South African recipients
+      // the echo may simply repeat what was sent.
+      const details = (recipient.data && recipient.data.details) || {};
+
       const destination = await StoreTransferRecipient.replaceForStore(req.storeId, {
         recipientCode,
         bankCode: bank_code,
-        bankName: resolved.data.bank_name || null,
+        bankName: details.bank_name || null,
         // The ONLY part of the account number that is persisted.
         accountLast4: String(account_number).slice(-4),
-        accountName: bankHeldName,
+        accountName: details.account_name || account_name,
         createdBy: req.storeUserId,
       });
 

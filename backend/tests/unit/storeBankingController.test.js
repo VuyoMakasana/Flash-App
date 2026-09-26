@@ -10,16 +10,20 @@
  * each one tries to get a payout destination changed, or read back something it
  * should not, by a route that should be closed.
  *
- * The four controls under test:
+ * The three controls under test:
  *   1. password re-authentication — a hijacked session is not enough
- *   2. bank name verification — a mistyped digit cannot silently redirect money
- *   3. the account number is never stored and never returned
- *   4. the bank-held name is never echoed back (no lookup oracle)
+ *   2. the account number is never stored and never returned
+ *   3. every change is audit-logged and the owner notified
+ *
+ * A fourth — verifying the account holder's name with the bank — was designed
+ * and then proved impossible: a live probe showed /bank/resolve is a
+ * Nigeria/Ghana product that rejects South African requests outright. So
+ * registration is UNVERIFIED, and there are tests below asserting that
+ * explicitly, so the gap is visible rather than assumed away.
  */
 
 jest.mock('../../src/config/database');
 jest.mock('../../src/services/paystackService', () => ({
-  verifyBankAccount: jest.fn(),
   createTransferRecipient: jest.fn(),
   getBankList: jest.fn(),
 }));
@@ -85,24 +89,27 @@ function mockActorRow() {
   });
 }
 
-function mockBankResolves(accountName = 'NOMSA DLAMINI') {
-  paystackService.verifyBankAccount.mockResolvedValue({
-    status: true,
-    data: { account_name: accountName, bank_name: 'Absa Bank' },
-  });
-}
-
-function mockRecipientCreated(code = 'RCP_test123') {
+// Shape confirmed by a live probe against Paystack: data.recipient_code, and
+// data.details carrying account_number, account_name, bank_code, bank_name.
+function mockRecipientCreated(code = 'RCP_test123', details = {}) {
   paystackService.createTransferRecipient.mockResolvedValue({
     status: true,
-    data: { recipient_code: code },
+    data: {
+      recipient_code: code,
+      details: {
+        account_number: '1234567890',
+        account_name: 'Nomsa Dlamini',
+        bank_code: '632005',
+        bank_name: 'Absa Bank',
+        ...details,
+      },
+    },
   });
   StoreTransferRecipient.replaceForStore.mockResolvedValue({
     id: 'dest-1', bank_name: 'Absa Bank', bank_code: '632005',
-    account_last4: '7890', account_name: accountName(code),
+    account_last4: '7890', account_name: 'Nomsa Dlamini',
   });
 }
-function accountName() { return 'NOMSA DLAMINI'; }
 
 beforeAll(async () => {
   PASSWORD_HASH = await bcrypt.hash(CORRECT_PASSWORD, 4); // low cost: test speed
@@ -124,7 +131,6 @@ describe('setDestination — a valid session alone is not enough', () => {
     expect(res.status).toHaveBeenCalledWith(401);
     // The critical assertions: the external registration and the write must
     // never be reached, so a hijacked session cannot redirect money.
-    expect(paystackService.verifyBankAccount).not.toHaveBeenCalled();
     expect(paystackService.createTransferRecipient).not.toHaveBeenCalled();
     expect(StoreTransferRecipient.replaceForStore).not.toHaveBeenCalled();
   });
@@ -152,53 +158,35 @@ describe('setDestination — a valid session alone is not enough', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bank verification — the mistyped-digit case
+// Unverified registration — the posture, stated as tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('setDestination — the account must verifiably belong to this name', () => {
-  test('an unresolvable account number is refused', async () => {
+describe('setDestination — registration is deliberately UNVERIFIED', () => {
+  // These tests exist to make the security posture visible rather than
+  // implicit. A live probe proved /bank/resolve is Nigeria/Ghana only and
+  // rejects South African requests, so the holder's name cannot be checked
+  // today. That is a known, accepted gap -- not an oversight -- and it should
+  // fail a test if someone later assumes verification is happening.
+
+  test('no account-resolution call is attempted', async () => {
     mockActorRow();
-    paystackService.verifyBankAccount.mockResolvedValue({ status: false, data: null });
-    const res = mockRes();
-
-    await StoreBankingController.setDestination(mockReq(validBody()), res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(paystackService.createTransferRecipient).not.toHaveBeenCalled();
-    expect(StoreTransferRecipient.replaceForStore).not.toHaveBeenCalled();
-  });
-
-  test('a name mismatch is refused — this is the mistyped-digit guard', async () => {
-    mockActorRow();
-    mockBankResolves('PETER SMITH'); // a real account, but somebody else's
-    const res = mockRes();
-
-    await StoreBankingController.setDestination(mockReq(validBody()), res);
-
-    expect(res.status).toHaveBeenCalledWith(400);
-    expect(StoreTransferRecipient.replaceForStore).not.toHaveBeenCalled();
-  });
-
-  test('the bank-held name is NEVER echoed back on mismatch (no lookup oracle)', async () => {
-    // Returning it would let anyone submit an arbitrary account number with a
-    // deliberately wrong name and read the real holder's name out of the error.
-    mockActorRow();
-    mockBankResolves('PETER SMITH');
-    const res = mockRes();
-
-    await StoreBankingController.setDestination(mockReq(validBody()), res);
-
-    const body = JSON.stringify(res.json.mock.calls[0][0]);
-    expect(body).not.toMatch(/PETER/i);
-    expect(body).not.toMatch(/SMITH/i);
-  });
-
-  test('a bank formatting difference still succeeds', async () => {
-    // "MR N DLAMINI" is the same person as "Nomsa Dlamini". Rejecting this
-    // would lock legitimate owners out of their own accounts.
-    mockActorRow();
-    mockBankResolves('MR N DLAMINI');
     mockRecipientCreated();
+    await StoreBankingController.setDestination(mockReq(validBody()), mockRes());
+
+    // paystackService intentionally exposes no verifyBankAccount to this
+    // controller any more. If one is reintroduced, it must be /bank/validate
+    // with a conscious decision about its per-call cost, not /bank/resolve.
+    expect(paystackService.verifyBankAccount).toBeUndefined();
+  });
+
+  test('a name that would NOT match the real account holder is still accepted', async () => {
+    // Documents the actual consequence: a mistyped account number, or an
+    // account belonging to someone else, WILL be registered. The controls that
+    // remain are the password re-auth, the notification email and the audit
+    // row -- not a name check. Delete this test only when real verification
+    // exists to replace it.
+    mockActorRow();
+    mockRecipientCreated('RCP_x', { account_name: 'SOMEBODY ELSE ENTIRELY' });
     const res = mockRes();
 
     await StoreBankingController.setDestination(mockReq(validBody()), res);
@@ -208,8 +196,11 @@ describe('setDestination — the account must verifiably belong to this name', (
   });
 
   test('a provider outage is a 502, never a silent success', async () => {
+    // This is the EXPECTED production behaviour until a live key exists:
+    // paystackService throws on every call when NODE_ENV is production and the
+    // key is sk_test_. The owner must be told, not left believing it saved.
     mockActorRow();
-    paystackService.verifyBankAccount.mockRejectedValue(new Error('network down'));
+    paystackService.createTransferRecipient.mockRejectedValue(new Error('network down'));
     const res = mockRes();
 
     await StoreBankingController.setDestination(mockReq(validBody()), res);
@@ -222,7 +213,6 @@ describe('setDestination — the account must verifiably belong to this name', (
     // Persisting without a recipient_code would leave a destination that looks
     // set but cannot be paid.
     mockActorRow();
-    mockBankResolves();
     paystackService.createTransferRecipient.mockResolvedValue({ status: true, data: {} });
     const res = mockRes();
 
@@ -240,7 +230,6 @@ describe('setDestination — the account must verifiably belong to this name', (
 describe('setDestination — the account number is never persisted', () => {
   test('only the last four digits are stored, and the BANK\'s spelling of the name', async () => {
     mockActorRow();
-    mockBankResolves('NOMSA DLAMINI');
     mockRecipientCreated('RCP_abc');
     await StoreBankingController.setDestination(mockReq(validBody()), mockRes());
 
@@ -248,15 +237,14 @@ describe('setDestination — the account number is never persisted', () => {
     expect(payload.accountLast4).toBe('7890');
     // The full number must appear nowhere in what is persisted.
     expect(JSON.stringify(payload)).not.toContain('1234567890');
-    // The bank's own spelling is stored, not the submitted one — the bank is
-    // the authority on whose account it is.
-    expect(payload.accountName).toBe('NOMSA DLAMINI');
+    // Paystack's echoed details.account_name is preferred over the submitted
+    // value, so any normalisation the provider applies is what gets stored.
+    expect(payload.accountName).toBe('Nomsa Dlamini');
     expect(payload.recipientCode).toBe('RCP_abc');
   });
 
   test('the response never contains the account number or the recipient code', async () => {
     mockActorRow();
-    mockBankResolves();
     mockRecipientCreated('RCP_secret');
     const res = mockRes();
 
@@ -269,7 +257,6 @@ describe('setDestination — the account number is never persisted', () => {
 
   test('the change is audit-logged and the owner notified', async () => {
     mockActorRow();
-    mockBankResolves();
     mockRecipientCreated();
     await StoreBankingController.setDestination(mockReq(validBody()), mockRes());
 
@@ -286,7 +273,6 @@ describe('setDestination — the account number is never persisted', () => {
     // The write is already committed; an email cannot be rolled back, and the
     // owner successfully made a change they are entitled to make.
     mockActorRow();
-    mockBankResolves();
     mockRecipientCreated();
     emailService.sendStorePayoutDestinationChangedEmail.mockRejectedValue(new Error('mail down'));
     const res = mockRes();
