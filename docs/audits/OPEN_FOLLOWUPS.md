@@ -728,3 +728,61 @@ cancelled ones quietly accumulates beside it forever.
    credit to the store, while a post-settlement return is a debit. Both land in
    the next open cycle, so the sign convention on line items needs to handle
    both without ambiguity.
+
+---
+
+## 20. Cash orders: nobody records that the store is owed its item value
+
+**BLOCKER FOR PHASE 2c SCOPING.** Not a blocker for 2b, which ships
+independently of it.
+
+Found while tracing the completion path for commission stamping
+(`PHASE2B_COMMISSION_RECORD.md`).
+
+On a **card** order Flash receives the customer's money, so settling item value
+to the store is Flash paying out money it holds. On a **cash** order that is not
+what happens at all:
+
+1. The driver collects `subtotal + delivery_fee` from the customer in cash.
+2. `confirmCashReceived` marks the order paid and calls
+   `driverCommissionService.recordCashCommission`, which records that the driver
+   owes Flash the **delivery** commission — `max(10, 25% of delivery_fee)`.
+3. **Nothing records the `subtotal`.** That is the store's money, and it is
+   physically in the driver's pocket.
+
+So for a completed cash order there is no record that the store is owed
+anything, no record that the driver is holding it, and no mechanism by which it
+reaches the store. Flash cannot settle it, because Flash never received it.
+
+**Why this is urgent specifically for 2c:** every completed order in Flash's
+production history is cash — 2 of 2 completed, 19 of 19 overall. A settlement
+run built on the card assumption would either pay stores money Flash does not
+have, or silently skip every order that exists.
+
+**What 2b does about it:** stamps the commission regardless, because the
+arithmetic is identical — Flash has earned its share of item value however the
+customer paid. `orders.payment_method` is already on the row, so 2c can branch
+without a new column. 2b deliberately takes no position on settlement.
+
+**To close this out — a business decision first, then code:**
+
+1. Decide the real-world cash flow. The two plausible models:
+   - **Driver hands item value to the store.** Then Flash settles nothing for
+     cash orders, and needs to record the hand-over so a dispute is
+     reconstructable. Flash is still owed its commission, which the existing
+     `driver_commission_debts` mechanism could carry.
+   - **Driver owes Flash the full collected amount, Flash settles the store.**
+     Then `recordCashCommission` is recording only part of what the driver owes,
+     and the item value needs the same debt treatment — a much larger change to
+     the driver wallet model, and a much larger float sitting with drivers.
+2. Whichever is chosen, make it explicit in `FINANCIAL_DOMAIN_SPECIFICATION.md`
+   — the document currently describes Store Settlement without distinguishing
+   payment method, which is the gap that let this go unnoticed.
+3. Only then scope 2c. Settlement cannot be designed without knowing which of
+   the two above is true, because they produce completely different money flows
+   for the only order type that exists in production today.
+
+**Related:** OPEN_FOLLOWUPS #19 (`order_cancellation_store_shares` is
+write-only) is the same class of problem — money owed to a store that nothing
+pays. Both should be resolved in the same pass, since both land in the same
+settlement cycle.

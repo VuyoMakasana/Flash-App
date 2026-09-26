@@ -1121,6 +1121,16 @@ async function migrate() {
     throw err;
   } finally {
     client38.release();
+  }
+
+  const client39 = await pool.connect();
+  try {
+    await migrateV39(client39);
+  } catch (err) {
+    console.error('Migration v39 failed:', err.message);
+    throw err;
+  } finally {
+    client39.release();
     await pool.end();
   }
 
@@ -2487,4 +2497,66 @@ async function migrateV38(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38 };
+// STORE COMMISSION, STAMPED AT COMPLETION (Phase 2b).
+//
+// Flash's cut of item value, resolved and frozen onto the order at the moment
+// it completes. Still no money movement -- 2c does that -- but after this every
+// rand a store is owed becomes computable and independently auditable, which is
+// deliberately the step before anything is transferable.
+//
+// Three columns rather than one, because a bare amount is not auditable:
+//
+//   store_commission        the resolved amount. NUMERIC(10,2) to match every
+//                           other money column, and specifically to match
+//                           store_settlement_line_items.store_commission, which
+//                           2c copies this into -- a precision mismatch there
+//                           would round silently.
+//   commission_rate_applied the rate used, so subtotal x rate = commission is
+//                           verifiable by inspection years later.
+//   commission_rate_id      WHICH commission_rates row produced it, and so its
+//                           created_by and reason. Safe as a real FK because
+//                           that table is append-only by design (spec 2.4: a
+//                           rate change is a new row, never an edit), so the
+//                           referenced row is never deleted or mutated.
+//
+// ALL THREE ARE NULLABLE, and no historical backfill is performed. That is a
+// scope decision for 2b, not a claim that it would be impossible: the two
+// already-completed orders keep NULL, which reads correctly as "completed
+// before commission was computed". (One of them completed on 2026-07-16, two
+// weeks before the global rate row existed at all, so any backfilled value
+// there would have been invented outright -- but the decision stands
+// independently of that, since the other completed a day after the rate was
+// created and could in principle have been backfilled.)
+async function migrateV39(client) {
+  await client.query('BEGIN');
+  try {
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_commission NUMERIC(10,2)`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS commission_rate_applied NUMERIC(5,4)`);
+    await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS commission_rate_id UUID REFERENCES commission_rates(id)`);
+
+    // Backs 2c's "which completed orders fall in this cycle" query. Partial,
+    // because the only rows a settlement run will ever consider are those
+    // carrying a stamped commission.
+    //
+    // Keyed on delivered_at, NOT updated_at: delivered_at is written exactly
+    // once (COALESCE'd in updateOrderStatus so a later transition cannot
+    // overwrite it) and is already the immutable anchor the 48-hour returns
+    // window is computed from. updated_at is rewritten on every transition and
+    // would silently move an order between settlement cycles. There is no
+    // completed_at column -- confirmed against the live schema, not assumed.
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_orders_store_commission_pending
+        ON orders(store_id, delivered_at)
+        WHERE store_commission IS NOT NULL
+    `);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v39 completed: orders.store_commission + rate provenance columns');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v39 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39 };

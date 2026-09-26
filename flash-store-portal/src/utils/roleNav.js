@@ -13,6 +13,24 @@
 // calculation logic. Finance's real screen per FLASH_STORE_ADMIN_DESIGN.md
 // §5.3 ("Financial/analytics screens only"); Owner and Store Manager also
 // see it (the same RBAC table lists "financials" under both).
+// TEMPORARY — no Payout Details screen is listed for any role, including
+// Owner, and there is deliberately no /store-banking route in App.jsx either.
+//
+// The backend for it EXISTS and is live (Phase 2a: GET/POST
+// /api/store-banking, owner-only, password re-authenticated). It is hidden
+// because it cannot currently be completed: GET /api/store-banking/banks
+// returns 502 on production's sk_test_ Paystack key, so the bank dropdown a
+// payout form needs has nothing to populate it, and POST would 502 as well.
+//
+// Same treatment, and the same reasoning, as the customer app hiding the Card
+// option in flash-user-app/screens/PaymentScreen.js: a store owner tapping
+// "Payout Details" would hit a genuine dead end rather than a temporary
+// inconvenience, so no entry point is offered at all rather than a broken one.
+//
+// To restore once a live, ZA-configured Paystack key exists and /banks returns
+// real banks: add the route in App.jsx and a { path: '/banking', label:
+// 'Payout Details' } entry to owner below. See
+// docs/audits/PHASE2A_PAYOUT_DESTINATION_RECORD.md.
 export const ROLE_NAV = {
   owner: [
     { path: '/orders', label: 'Orders' },
