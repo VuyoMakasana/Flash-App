@@ -477,6 +477,7 @@ function escapeHtmlLite(value) {
 const EMAIL_SUBJECTS = {
   STORE_WELCOME: 'Your Flash Store Portal account is ready',
   STORE_PASSWORD_RESET: 'Reset your Flash store account password',
+  STORE_PAYOUT_DESTINATION_CHANGED: 'Your Flash payout account was changed',
 };
 
 // Maps a subject back to the store_users columns it should update. Used only by
@@ -492,6 +493,22 @@ const TRACKED_EMAIL_KINDS = {
     kind: 'password_reset',
     statusColumn: 'reset_email_status',
     timestampColumn: 'reset_email_status_at',
+  },
+  // Tracked, but LOG-ONLY: statusColumn null means a failure is recorded in
+  // email_events (and so is visible in the admin Email Events list) without
+  // being mirrored onto a store_users column.
+  //
+  // It is tracked at all because this is the security notification for a payout
+  // redirect -- if it bounces, an owner never learns where their settlement
+  // money was pointed, which is precisely the invisible failure the bounce work
+  // exists to remove. It gets no dedicated column because a third pair would
+  // establish a pattern that does not scale; if "which owners missed this
+  // specific warning" turns out to be a question worth answering in one read,
+  // promoting it is a small additive migration.
+  [EMAIL_SUBJECTS.STORE_PAYOUT_DESTINATION_CHANGED]: {
+    kind: 'payout_destination_changed',
+    statusColumn: null,
+    timestampColumn: null,
   },
 };
 
@@ -594,10 +611,64 @@ ${inviteToken}
   });
 }
 
+// Phase 2a — sent whenever a store's payout destination changes.
+//
+// This is a security notification, not a courtesy. It is the one signal a store
+// owner gets if somebody else redirected where their settlement money is sent,
+// so it deliberately states what changed and what to do about it.
+//
+// The account number is NOT in this email -- only the bank and the last four
+// digits, which is all that is needed to recognise the account. Flash does not
+// hold the full number anyway (see migration v38).
+async function sendStorePayoutDestinationChangedEmail(toEmail, { ownerName, storeName, bankName, accountLast4 }) {
+  const where = `${bankName || 'your bank'} ••••${accountLast4 || ''}`;
+
+  return sendEmail({
+    to:      toEmail,
+    subject: EMAIL_SUBJECTS.STORE_PAYOUT_DESTINATION_CHANGED,
+    text:    `Hi ${ownerName || 'there'},
+
+The payout account for ${storeName || 'your store'} was just changed.
+
+Future settlements will be sent to:
+${where}
+
+If you made this change, nothing further is needed.
+
+IF YOU DID NOT MAKE THIS CHANGE, contact Flash support immediately and change
+your password -- someone else may have access to your account.`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="display:inline-block;background:#0a0a0a;border-radius:16px;padding:16px">
+        <span style="color:#fff;font-size:28px;font-weight:900;letter-spacing:4px">FLASH</span>
+      </div>
+    </div>
+    <h2 style="color:#111827;margin-top:0">Your payout account was changed</h2>
+    <p style="color:#6b7280">Hi ${escapeHtmlLite(ownerName || 'there')}, the payout account for
+      <strong>${escapeHtmlLite(storeName || 'your store')}</strong> was just changed. Future settlements
+      will be sent to:</p>
+    <div style="text-align:center;margin:24px 0">
+      <code style="display:inline-block;background:#f3f4f6;color:#111827;padding:14px 20px;border-radius:12px;font-weight:700;font-size:15px">${escapeHtmlLite(where)}</code>
+    </div>
+    <p style="color:#6b7280;font-size:13px">If you made this change, nothing further is needed.</p>
+    <p style="color:#b91c1c;font-size:13px"><strong>If you did not make this change</strong>, contact Flash
+      support immediately and change your password &mdash; someone else may have access to your account.</p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
 module.exports = {
   EMAIL_SUBJECTS,
   TRACKED_EMAIL_KINDS,
   sendPasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
   sendSosAlertEmail, sendOrderEscalationEmail, sendOrderMissedEmail, sendMarketingLeadEmail,
   sendStorePasswordResetEmail, sendStoreWelcomeEmail,
+  sendStorePayoutDestinationChangedEmail,
 };

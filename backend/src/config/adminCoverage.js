@@ -105,6 +105,7 @@ module.exports = {
     email_tokens:    'Internal auth-flow infrastructure (email verification/reset tokens) — no business-visibility need.',
     webhook_events:  'Internal Paystack webhook-idempotency ledger (unique constraint on paystack_event_id) — infrastructure only, no content to view.',
 
+    store_transfer_recipients: 'Phase 2a — holds a PAYMENT CREDENTIAL (Paystack recipient_code), which is why it is excluded rather than browsable: an AdminJS resource exposes every column by default, and a transfer recipient code is the thing that authorises sending money to an account. The account number itself is deliberately not stored at all (migration v38), so the only genuinely useful support question -- "which account is on file for this store?" -- is answerable from bank_name + account_last4 + account_name. If that becomes a real support need, add a column-limited read-only view that excludes recipient_code, never a default resource over this table.',
     store_password_tokens: 'Internal auth-flow infrastructure (store-portal password reset tokens) — same reasoning as refresh_tokens/email_tokens above. Short-lived secrets, no business content.',
 
     // ── Store Admin Portal tables — a partner store\'s own tenant data ──────
