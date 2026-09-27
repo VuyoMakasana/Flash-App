@@ -210,12 +210,11 @@ exposure is mine, so the fix ships here.
 - **The backend integration suite was not run locally.** Docker Desktop will
   not start on this machine ("Docker Desktop is unable to start"), so no
   Postgres was available; `tests/integration/*` needs a live `DATABASE_URL`.
-  Only `tests/unit` ran (532 passing). CI runs both against its own
-  `postgres:15` service, and that is the gate. This change adds no integration
-  test and touches no integration-tested path, but I did not verify that
-  locally and am not claiming otherwise.
-- **Coverage thresholds were not checked locally** (60% branches / 70%
-  functions / lines / statements), for the same reason — CI enforces them on
-  the combined run.
+  Only `tests/unit` ran locally (532 passing).
+  **Since resolved by CI** — `Backend — Lint & Test` passed in 1m2s on run
+  `36349384465`, which runs migration + unit + integration against its own
+  `postgres:15` service and enforces the coverage thresholds (60% branches /
+  70% functions / lines / statements). All four jobs green, including
+  `Store Portal — Test & Build` in 20s.
 - **Cache invalidation is asserted as a call**, not observed evicting a real
   Redis key.
