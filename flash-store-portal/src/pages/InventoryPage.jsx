@@ -11,6 +11,7 @@ export default function InventoryPage() {
   const [accessDenied, setAccessDenied] = useState(false);
   const [actioningId, setActioningId] = useState(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingId, setEditingId] = useState(null);
 
   const loadProducts = useCallback(async () => {
     setError(null);
@@ -89,6 +90,45 @@ export default function InventoryPage() {
     }
   }
 
+  async function handleReactivate(productId) {
+    setActioningId(productId);
+    setError(null);
+    try {
+      await storeApi.reactivateProduct(productId);
+      await loadProducts();
+    } catch (err) {
+      setError(err.message || 'Failed to reactivate product.');
+    } finally {
+      setActioningId(null);
+    }
+  }
+
+  // Only the fields the owner actually changed are sent. The backend treats an
+  // absent key as "leave it alone", so submitting the whole form would blank
+  // every optional column the form does not render.
+  async function handleEdit(productId, fields) {
+    if (Object.keys(fields).length === 0) {
+      setEditingId(null);
+      return;
+    }
+    setActioningId(productId);
+    setError(null);
+    try {
+      await storeApi.updateProduct(productId, fields);
+      setEditingId(null);
+      await loadProducts();
+    } catch (err) {
+      // A validation failure arrives as per-field messages (api.js normalizes
+      // the backend's { errors: [{ path, msg }] }). Surfacing only "Failed to
+      // update" would hide which field was actually rejected, and the owner
+      // would have no way to tell a bad price from a bad name.
+      const detail = err.fieldErrors && Object.values(err.fieldErrors).join(' ');
+      setError(detail || err.message || 'Failed to update product.');
+    } finally {
+      setActioningId(null);
+    }
+  }
+
   const activeProducts = products.filter((p) => p.is_active);
   const inactiveProducts = products.filter((p) => !p.is_active);
 
@@ -118,9 +158,12 @@ export default function InventoryPage() {
                   key={product.id}
                   product={product}
                   actioning={actioningId === product.id}
+                  editing={editingId === product.id}
                   onStockChange={handleStockChange}
                   onImageChange={handleImageChange}
                   onDeactivate={handleDeactivate}
+                  onEditToggle={() => setEditingId(editingId === product.id ? null : product.id)}
+                  onEditSubmit={handleEdit}
                 />
               ))
             )}
@@ -130,7 +173,13 @@ export default function InventoryPage() {
             <section>
               <h2>Deactivated ({inactiveProducts.length})</h2>
               {inactiveProducts.map((product) => (
-                <ProductRow key={product.id} product={product} actioning={false} readOnly />
+                <ProductRow
+                  key={product.id}
+                  product={product}
+                  actioning={actioningId === product.id}
+                  onReactivate={handleReactivate}
+                  readOnly
+                />
               ))}
             </section>
           )}
@@ -140,7 +189,10 @@ export default function InventoryPage() {
   );
 }
 
-function ProductRow({ product, actioning, onStockChange, onImageChange, onDeactivate, readOnly }) {
+function ProductRow({
+  product, actioning, onStockChange, onImageChange, onDeactivate, readOnly,
+  editing, onEditToggle, onEditSubmit, onReactivate,
+}) {
   const stock = product.stock_by_size || {};
   const fileInputRef = useRef(null);
 
@@ -190,6 +242,9 @@ function ProductRow({ product, actioning, onStockChange, onImageChange, onDeacti
               style={{ display: 'none' }}
               onChange={handleFileSelected}
             />
+            <button className="btn-secondary" onClick={onEditToggle}>
+              {editing ? 'Cancel' : 'Edit Details'}
+            </button>
             <button className="btn-secondary" onClick={() => fileInputRef.current?.click()}>
               {product.image_url ? 'Change Image' : 'Add Image'}
             </button>
@@ -197,7 +252,56 @@ function ProductRow({ product, actioning, onStockChange, onImageChange, onDeacti
           </div>
         )
       )}
+      {/* A deactivated product keeps its stock inputs disabled — reactivating
+          is the only action that makes sense until it is back in the catalog. */}
+      {readOnly && onReactivate && (
+        actioning ? <span>Working…</span> : (
+          <div className="product-row-actions">
+            <button className="btn-secondary" onClick={() => onReactivate(product.id)}>Reactivate</button>
+          </div>
+        )
+      )}
+      {editing && !actioning && (
+        <EditProductForm product={product} onSubmit={onEditSubmit} />
+      )}
     </div>
+  );
+}
+
+// Seeded from the product's current values so the owner edits what they see,
+// and submits only what actually changed — an untouched field is left out of
+// the request entirely rather than re-sent, which keeps a no-op edit from
+// showing up in the audit trail as a price change.
+function EditProductForm({ product, onSubmit }) {
+  const [fields, setFields] = useState({
+    product_name: product.product_name ?? '',
+    price: String(product.price ?? ''),
+    category: product.category ?? '',
+    brand: product.brand ?? '',
+    description: product.description ?? '',
+  });
+
+  const set = (key) => (e) => setFields((f) => ({ ...f, [key]: e.target.value }));
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    const changed = {};
+    for (const [key, value] of Object.entries(fields)) {
+      const original = key === 'price' ? String(product.price ?? '') : (product[key] ?? '');
+      if (value !== original) changed[key] = value;
+    }
+    onSubmit(product.id, changed);
+  }
+
+  return (
+    <form className="add-product-form" onSubmit={handleSubmit}>
+      <label>Name<input value={fields.product_name} onChange={set('product_name')} minLength={2} maxLength={200} required /></label>
+      <label>Price (R)<input type="number" min="0.01" step="0.01" max="100000" value={fields.price} onChange={set('price')} required /></label>
+      <label>Category<input value={fields.category} onChange={set('category')} maxLength={100} /></label>
+      <label>Brand<input value={fields.brand} onChange={set('brand')} maxLength={100} /></label>
+      <label>Description<textarea value={fields.description} onChange={set('description')} maxLength={2000} /></label>
+      <button type="submit">Save Changes</button>
+    </form>
   );
 }
 

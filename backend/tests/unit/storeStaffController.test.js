@@ -20,6 +20,7 @@ jest.mock('../../src/models/StoreUser', () => ({
   listByStore: jest.fn(),
   create: jest.fn(),
   deactivate: jest.fn(),
+  reactivate: jest.fn(),
 }));
 jest.mock('../../src/models/StoreAction', () => ({ log: jest.fn() }));
 
@@ -152,8 +153,9 @@ describe('createStaff', () => {
 });
 
 describe('deactivateStaff', () => {
-  // There is no reactivate counterpart and only an owner can call this, so
-  // self-deactivation would lock the entire store out irrecoverably.
+  // A reactivate counterpart now exists, but only an owner can call either, so
+  // an owner who deactivated themselves would still have no self-service way
+  // back in — the guard stays necessary.
   test('an owner cannot deactivate their own account', async () => {
     const res = mockRes();
     await StoreStaffController.deactivateStaff(
@@ -191,6 +193,56 @@ describe('deactivateStaff', () => {
     StoreUser.deactivate.mockRejectedValue(new Error('connection lost'));
     const res = mockRes();
     await StoreStaffController.deactivateStaff(mockReq({ params: { staffId: STAFF_ID } }), res);
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+
+describe('reactivateStaff', () => {
+  test('reactivates a staff member within this store', async () => {
+    StoreUser.reactivate.mockResolvedValue({ id: STAFF_ID, is_active: true });
+    const res = mockRes();
+
+    await StoreStaffController.reactivateStaff(mockReq({ params: { staffId: STAFF_ID } }), res);
+
+    expect(StoreUser.reactivate).toHaveBeenCalledWith(STAFF_ID, MY_STORE);
+    expect(res.json).toHaveBeenCalledWith({ staff: { id: STAFF_ID, is_active: true } });
+  });
+
+  // Same shape as deactivate's cross-store case: the store_id in the UPDATE is
+  // the token's, so another store's staff id simply matches nothing.
+  test('another store\'s staff member is 404 and is not audit-logged', async () => {
+    StoreUser.reactivate.mockResolvedValue(null);
+    const res = mockRes();
+
+    await StoreStaffController.reactivateStaff(mockReq({ params: { staffId: STAFF_ID } }), res);
+
+    expect(res.status).toHaveBeenCalledWith(404);
+    expect(StoreAction.log).not.toHaveBeenCalled();
+  });
+
+  test('never passes the caller\'s own storeId from the body', async () => {
+    StoreUser.reactivate.mockResolvedValue({ id: STAFF_ID, is_active: true });
+    await StoreStaffController.reactivateStaff(
+      mockReq({ params: { staffId: STAFF_ID }, body: { storeId: OTHER_STORE } }), mockRes(),
+    );
+
+    expect(StoreUser.reactivate).toHaveBeenCalledWith(STAFF_ID, MY_STORE);
+    expect(StoreUser.reactivate).not.toHaveBeenCalledWith(STAFF_ID, OTHER_STORE);
+  });
+
+  test('audit-logs the reactivation, so restoring access is not silent', async () => {
+    StoreUser.reactivate.mockResolvedValue({ id: STAFF_ID, is_active: true });
+    await StoreStaffController.reactivateStaff(mockReq({ params: { staffId: STAFF_ID } }), mockRes());
+
+    expect(StoreAction.log).toHaveBeenCalledWith(
+      OWNER_ID, MY_STORE, 'store_staff_reactivate', 'store_users', STAFF_ID,
+    );
+  });
+
+  test('a failure is a 500', async () => {
+    StoreUser.reactivate.mockRejectedValue(new Error('connection lost'));
+    const res = mockRes();
+    await StoreStaffController.reactivateStaff(mockReq({ params: { staffId: STAFF_ID } }), res);
     expect(res.status).toHaveBeenCalledWith(500);
   });
 });

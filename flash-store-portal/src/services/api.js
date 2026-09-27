@@ -95,10 +95,18 @@ export const storeApi = {
     request(`/api/store-inventory/${productId}/stock`, { method: 'PATCH', body: JSON.stringify({ stock_by_size: stockBySize }) }),
   updateProductImage: (productId, formData) =>
     request(`/api/store-inventory/${productId}/image`, { method: 'PATCH', body: formData }),
+  // JSON, not FormData: the image is its own endpoint, so nothing here is a
+  // file. `fields` carries only the keys the owner actually changed — the
+  // backend treats an absent key as "leave it alone", so sending the whole
+  // product would blank anything the form does not render.
+  updateProduct: (productId, fields) =>
+    request(`/api/store-inventory/${productId}`, { method: 'PATCH', body: JSON.stringify(fields) }),
   deactivateProduct: (productId) => request(`/api/store-inventory/${productId}/deactivate`, { method: 'PATCH' }),
+  reactivateProduct: (productId) => request(`/api/store-inventory/${productId}/reactivate`, { method: 'PATCH' }),
   getStaff: () => request('/api/store-staff'),
   createStaff: (data) => request('/api/store-staff', { method: 'POST', body: JSON.stringify(data) }),
   deactivateStaff: (staffId) => request(`/api/store-staff/${staffId}/deactivate`, { method: 'PATCH' }),
+  reactivateStaff: (staffId) => request(`/api/store-staff/${staffId}/reactivate`, { method: 'PATCH' }),
   getAnalytics: (days) => request(`/api/store-analytics${days ? `?days=${encodeURIComponent(days)}` : ''}`),
   // Admin Platform Phase 3 — own independent forgot/change-password flow,
   // matching the /api/store-auth/* contract exactly (storeAuthRoutes.js).

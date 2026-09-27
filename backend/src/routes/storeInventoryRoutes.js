@@ -40,6 +40,12 @@ router.get('/:productId', validateId, StoreInventoryController.getProduct);
 router.post('/', storeWriteLimiter, uploadImage.single('image'), StoreInventoryController.addProduct);
 router.patch('/:productId/stock', storeWriteLimiter, validateId, StoreInventoryController.updateStock);
 router.patch('/:productId/image', storeWriteLimiter, validateId, uploadImage.single('image'), StoreInventoryController.updateImage);
+// Correcting a product after creation. Same guards as every other write on
+// this router -- validateId first, so a malformed id is a 400 before any
+// handler runs, and the store-scoped SELECT ... FOR UPDATE inside the handler
+// is what enforces tenant isolation.
+router.patch('/:productId', storeWriteLimiter, validateId, StoreInventoryController.updateProduct);
 router.patch('/:productId/deactivate', storeWriteLimiter, validateId, StoreInventoryController.deactivateProduct);
+router.patch('/:productId/reactivate', storeWriteLimiter, validateId, StoreInventoryController.reactivateProduct);
 
 module.exports = router;

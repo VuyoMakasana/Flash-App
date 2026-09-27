@@ -57,6 +57,28 @@ class StoreUser extends BaseModel {
     return result.rows[0] || null;
   }
 
+  // The inverse of deactivate. Until this existed, a staff member deactivated
+  // by mistake could only be restored with direct database access — the
+  // account was still there, still correct, and simply unreachable.
+  //
+  // Scoped by store_id exactly as deactivate is, so one store can never
+  // reactivate another's staff, and returns null rather than throwing when
+  // nothing matches so the controller can answer 404 without revealing
+  // whether the id exists elsewhere.
+  //
+  // Deliberately does NOT touch password_hash or force_password_reset: a
+  // reactivated account keeps the credentials it had. Reactivation is
+  // "undo the deactivation", not "issue a new account".
+  static async reactivate(id, storeId) {
+    const result = await this.query(
+      `UPDATE store_users SET is_active = true, updated_at = NOW()
+       WHERE id = $1 AND store_id = $2
+       RETURNING id, store_id, name, email, role, is_active`,
+      [id, storeId],
+    );
+    return result.rows[0] || null;
+  }
+
   // Anonymize, never hard-delete — same real pattern already proven for
   // users/drivers (User.deleteAccount): a guaranteed-unique anonymized
   // email (satisfies the real UNIQUE constraint), a real but permanently

@@ -61,6 +61,19 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleReactivate(staffId) {
+    setActioningId(staffId);
+    setError(null);
+    try {
+      await storeApi.reactivateStaff(staffId);
+      await loadStaff();
+    } catch (err) {
+      setError(err.message || 'Failed to reactivate staff.');
+    } finally {
+      setActioningId(null);
+    }
+  }
+
   const activeStaff = staff.filter((s) => s.is_active);
   const inactiveStaff = staff.filter((s) => !s.is_active);
 
@@ -97,7 +110,13 @@ export default function SettingsPage() {
             <section>
               <h2>Deactivated ({inactiveStaff.length})</h2>
               {inactiveStaff.map((member) => (
-                <StaffRow key={member.id} member={member} readOnly />
+                <StaffRow
+                  key={member.id}
+                  member={member}
+                  actioning={actioningId === member.id}
+                  onReactivate={handleReactivate}
+                  readOnly
+                />
               ))}
             </section>
           )}
@@ -107,7 +126,7 @@ export default function SettingsPage() {
   );
 }
 
-function StaffRow({ member, isSelf, actioning, onDeactivate, readOnly }) {
+function StaffRow({ member, isSelf, actioning, onDeactivate, onReactivate, readOnly }) {
   return (
     <div className="product-row">
       <div className="product-row-main">
@@ -118,6 +137,14 @@ function StaffRow({ member, isSelf, actioning, onDeactivate, readOnly }) {
       {!readOnly && !isSelf && (
         actioning ? <span>Working…</span> : (
           <button className="btn-deactivate" onClick={() => onDeactivate(member.id)}>Deactivate</button>
+        )
+      )}
+      {/* No isSelf guard needed here, unlike Deactivate: reaching Settings at
+          all requires an active session, so a deactivated account can never be
+          the one looking at this list. */}
+      {readOnly && onReactivate && (
+        actioning ? <span>Working…</span> : (
+          <button className="btn-secondary" onClick={() => onReactivate(member.id)}>Reactivate</button>
         )
       )}
     </div>

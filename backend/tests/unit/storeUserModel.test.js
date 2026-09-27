@@ -117,6 +117,33 @@ describe('store scoping on reads and writes', () => {
     pool.query.mockResolvedValue({ rows: [] }); // scoped UPDATE matched nothing
     await expect(StoreUser.deactivate(USER_ID, STORE_B)).resolves.toBeNull();
   });
+
+  test('reactivate scopes by store in the UPDATE itself', async () => {
+    pool.query.mockResolvedValue({ rows: [{ id: USER_ID }] });
+    await StoreUser.reactivate(USER_ID, STORE_A);
+
+    const [sql, params] = pool.query.mock.calls[0];
+    expect(sql).toMatch(/SET is_active = true/);
+    expect(sql).toMatch(/WHERE id = \$1 AND store_id = \$2/);
+    expect(params).toEqual([USER_ID, STORE_A]);
+  });
+
+  test('reactivating another store\'s staff member affects no row and returns null', async () => {
+    pool.query.mockResolvedValue({ rows: [] });
+    await expect(StoreUser.reactivate(USER_ID, STORE_B)).resolves.toBeNull();
+  });
+
+  // Reactivation restores access; it must not also hand out new credentials.
+  // Touching password_hash or force_password_reset here would silently turn an
+  // undo into an account re-issue.
+  test('reactivate touches neither the password nor the reset flag', async () => {
+    pool.query.mockResolvedValue({ rows: [{ id: USER_ID }] });
+    await StoreUser.reactivate(USER_ID, STORE_A);
+
+    const [sql] = pool.query.mock.calls[0];
+    expect(sql).not.toMatch(/password_hash/);
+    expect(sql).not.toMatch(/force_password_reset/);
+  });
 });
 
 describe('anonymize — deletion without destroying the audit trail', () => {

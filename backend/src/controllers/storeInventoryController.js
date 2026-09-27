@@ -187,6 +187,123 @@ class StoreInventoryController {
     }
   }
 
+  // PATCH /:productId — correct a product's details after creation.
+  //
+  // Until this existed a store could add a product but never fix it. A
+  // mistyped price could only be resolved by deactivating and re-adding,
+  // which loses the product's id and its order history. In a marketplace
+  // whose commission is a percentage OF THAT PRICE, an uncorrectable price
+  // is the sharpest gap in the portal.
+  //
+  // WHITELISTED FIELDS ONLY, built as a parameterised SET list. The column
+  // names come from EDITABLE_FIELDS below and never from the request, so a
+  // caller cannot reach store_id, is_active, id or the timestamps by adding
+  // keys to the body. Deliberately excluded:
+  //   stock_by_size / image_url — own endpoints, with their own semantics
+  //   is_active                 — deactivate/reactivate, so the change is audited as itself
+  //   store_id                  — reassigning a product to another store is not an edit
+  static async updateProduct(req, res) {
+    const { productId } = req.params;
+
+    const EDITABLE_FIELDS = {
+      product_name: (v) => (typeof v === 'string' && v.trim().length >= 2 && v.trim().length <= 200
+        ? { ok: true, value: v.trim() } : { ok: false, msg: 'product_name must be 2-200 characters' }),
+      // Parsed and range-checked rather than passed through: price drives
+      // commission, so a NaN or a negative reaching NUMERIC(10,2) would be a
+      // money bug, not a validation nicety. The 100000 ceiling matches the
+      // sanity cap Order.create already applies to line items.
+      price: (v) => {
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 && n <= 100000
+          ? { ok: true, value: Math.round(n * 100) / 100 }
+          : { ok: false, msg: 'price must be a number greater than 0 and at most 100000' };
+      },
+      cost_price: (v) => {
+        if (v === null || v === '') return { ok: true, value: null };
+        const n = Number(v);
+        return Number.isFinite(n) && n >= 0 && n <= 100000
+          ? { ok: true, value: Math.round(n * 100) / 100 }
+          : { ok: false, msg: 'cost_price must be a number between 0 and 100000, or empty' };
+      },
+      category: (v) => (v === null || v === '' || (typeof v === 'string' && v.length <= 100)
+        ? { ok: true, value: v === '' ? null : v } : { ok: false, msg: 'category must be at most 100 characters' }),
+      brand: (v) => (v === null || v === '' || (typeof v === 'string' && v.length <= 100)
+        ? { ok: true, value: v === '' ? null : v } : { ok: false, msg: 'brand must be at most 100 characters' }),
+      description: (v) => (v === null || v === '' || (typeof v === 'string' && v.length <= 2000)
+        ? { ok: true, value: v === '' ? null : v } : { ok: false, msg: 'description must be at most 2000 characters' }),
+    };
+
+    const setFragments = [];
+    const values = [];
+    const errors = [];
+
+    for (const [field, validate] of Object.entries(EDITABLE_FIELDS)) {
+      // Only fields actually present are touched, so a partial PATCH cannot
+      // blank out a column the caller never mentioned.
+      if (!Object.prototype.hasOwnProperty.call(req.body, field)) continue;
+      const result = validate(req.body[field]);
+      if (!result.ok) {
+        // `path`/`msg`, deliberately matching express-validator's wire shape
+        // rather than inventing a second one: the portal's api.js already
+        // normalizes that shape into per-field messages, so hand-rolled
+        // validation here renders next to the offending input for free.
+        errors.push({ path: field, msg: result.msg });
+        continue;
+      }
+      values.push(result.value);
+      setFragments.push(`${field} = $${values.length}`);
+    }
+
+    if (errors.length) return res.status(400).json({ errors });
+    if (!setFragments.length) {
+      return res.status(400).json({ error: 'No editable fields supplied.' });
+    }
+
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Locked and store-scoped before the write, matching updateStock. 404
+      // rather than 403 so another store's product id is not confirmed to
+      // exist.
+      const existing = await client.query(
+        `SELECT id, price FROM flash_inventory WHERE id = $1 AND store_id = $2 FOR UPDATE`,
+        [productId, req.storeId],
+      );
+      if (!existing.rows.length) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Product not found" });
+      }
+
+      values.push(productId, req.storeId);
+      const result = await client.query(
+        `UPDATE flash_inventory SET ${setFragments.join(', ')}, updated_at = NOW()
+         WHERE id = $${values.length - 1} AND store_id = $${values.length} RETURNING *`,
+        values,
+      );
+
+      await client.query("COMMIT");
+
+      await clearCache("cache:*/inventory*");
+      // The previous price is recorded in the audit metadata, because "why did
+      // this order's commission not match the current price" is answerable
+      // only if the price at the time is recoverable. Orders already freeze
+      // their own unit_price, so this is for reconstructing the store's
+      // intent, not the order's maths.
+      StoreAction.log(
+        req.storeUserId, req.storeId, "product_update", "flash_inventory", productId,
+        { fields: setFragments.map((f) => f.split(' = ')[0]), previous_price: existing.rows[0].price },
+      );
+      res.json({ product: result.rows[0] });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error("[StoreInventory] updateProduct error:", err.message);
+      res.status(500).json({ error: "Failed to update product" });
+    } finally {
+      client.release();
+    }
+  }
+
   static async deactivateProduct(req, res) {
     const { productId } = req.params;
     try {
@@ -203,6 +320,32 @@ class StoreInventoryController {
     } catch (err) {
       console.error("[StoreInventory] deactivateProduct error:", err.message);
       res.status(500).json({ error: "Failed to deactivate product" });
+    }
+  }
+
+  // The inverse of deactivateProduct. Without it a product deactivated by
+  // mistake was gone from the catalogue permanently — the row still there,
+  // still correct, and only restorable with direct database access.
+  //
+  // Mirrors deactivateProduct exactly, including clearing the inventory cache:
+  // a reactivated product must reappear on the customer storefront, and a
+  // stale cache would make the button look broken.
+  static async reactivateProduct(req, res) {
+    const { productId } = req.params;
+    try {
+      const result = await db.query(
+        `UPDATE flash_inventory SET is_active = true, updated_at = NOW()
+         WHERE id = $1 AND store_id = $2 RETURNING *`,
+        [productId, req.storeId],
+      );
+      if (!result.rows.length) return res.status(404).json({ error: "Product not found" });
+
+      await clearCache("cache:*/inventory*");
+      StoreAction.log(req.storeUserId, req.storeId, "product_reactivate", "flash_inventory", productId);
+      res.json({ product: result.rows[0] });
+    } catch (err) {
+      console.error("[StoreInventory] reactivateProduct error:", err.message);
+      res.status(500).json({ error: "Failed to reactivate product" });
     }
   }
 }
