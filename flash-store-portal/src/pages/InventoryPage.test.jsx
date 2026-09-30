@@ -170,3 +170,117 @@ describe('A2 — reactivating a product', () => {
     expect(await screen.findByText('Product not found')).toBeInTheDocument();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The Add Product form's field errors.
+//
+// #21 gave addProduct real price/cost_price validation answering with
+// { errors: [{ path, msg }] }, which api.js normalizes into err.fieldErrors.
+// But this page's add branch only ever read err.message, so every rejected
+// price surfaced as the generic "Failed to add product." — correct on the
+// backend, useless to the store owner. That is the gap these cover.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function fieldErrorRejection(fieldErrors) {
+  const err = new Error('Request failed');
+  err.status = 400;
+  err.fieldErrors = fieldErrors;
+  return err;
+}
+
+async function openAddForm(user) {
+  await screen.findByText('Denim Jacket');
+  await user.click(screen.getByRole('button', { name: 'Add Product' }));
+  return screen.findByRole('button', { name: 'Add' });
+}
+
+describe('Add Product — backend field errors reach the owner', () => {
+  test("a rejected price shows the server's reason, not 'Failed to add product.'", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(storeApi, 'addProduct').mockRejectedValue(
+      fieldErrorRejection({ price: 'price must be a number greater than 0 and at most 100000' }),
+    );
+    renderPage();
+    const submit = await openAddForm(user);
+
+    await user.type(screen.getByLabelText(/^Name/), 'Cap');
+    await user.type(screen.getByLabelText(/Price/), '1');
+    await user.click(submit);
+
+    expect(await screen.findByText(/price must be a number greater than 0/)).toBeInTheDocument();
+    expect(screen.queryByText('Failed to add product.')).toBeNull();
+  });
+
+  test('a rejected cost_price is reported too, not just price', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(storeApi, 'addProduct').mockRejectedValue(
+      fieldErrorRejection({ cost_price: 'cost_price must be a number between 0 and 100000, or empty' }),
+    );
+    renderPage();
+    const submit = await openAddForm(user);
+
+    await user.type(screen.getByLabelText(/^Name/), 'Cap');
+    await user.type(screen.getByLabelText(/Price/), '1');
+    await user.click(submit);
+
+    expect(await screen.findByText(/cost_price must be a number between 0/)).toBeInTheDocument();
+  });
+
+  test('both field messages are shown when both are rejected', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(storeApi, 'addProduct').mockRejectedValue(
+      fieldErrorRejection({ price: 'bad price', cost_price: 'bad cost' }),
+    );
+    renderPage();
+    const submit = await openAddForm(user);
+
+    await user.type(screen.getByLabelText(/^Name/), 'Cap');
+    await user.type(screen.getByLabelText(/Price/), '1');
+    await user.click(submit);
+
+    expect(await screen.findByText(/bad price bad cost/)).toBeInTheDocument();
+  });
+
+  // Without fieldErrors there is nothing better to show, so the generic
+  // message must still appear rather than an empty banner.
+  test('a non-validation failure still shows a usable message', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(storeApi, 'addProduct').mockRejectedValue(new Error('Failed to add product.'));
+    renderPage();
+    const submit = await openAddForm(user);
+
+    await user.type(screen.getByLabelText(/^Name/), 'Cap');
+    await user.type(screen.getByLabelText(/Price/), '1');
+    await user.click(submit);
+
+    expect(await screen.findByText('Failed to add product.')).toBeInTheDocument();
+  });
+
+  // The owner must be able to correct the value rather than retype the product.
+  test('the form stays open with its values after a rejection', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(storeApi, 'addProduct').mockRejectedValue(
+      fieldErrorRejection({ price: 'bad price' }),
+    );
+    renderPage();
+    const submit = await openAddForm(user);
+
+    await user.type(screen.getByLabelText(/^Name/), 'Cap');
+    await user.type(screen.getByLabelText(/Price/), '1');
+    await user.click(submit);
+
+    await screen.findByText(/bad price/);
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Name/)).toHaveValue('Cap');
+  });
+
+  test('the price input enforces the same lower bound as the server', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await openAddForm(user);
+
+    const priceInput = screen.getByLabelText(/Price/);
+    expect(priceInput).toHaveAttribute('min', '0.01');
+    expect(priceInput).toHaveAttribute('max', '100000');
+  });
+});

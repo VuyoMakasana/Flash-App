@@ -42,7 +42,14 @@ export default function InventoryPage() {
       setShowAddForm(false);
       await loadProducts();
     } catch (err) {
-      setError(err.message || 'Failed to add product.');
+      // Same handling as handleEdit below. addProduct now validates price and
+      // cost_price (OPEN_FOLLOWUPS #21) and answers with the same
+      // { errors: [{ path, msg }] } shape, which api.js normalizes into
+      // fieldErrors — but this branch only ever showed err.message, so a
+      // rejected price read as the generic "Failed to add product." and the
+      // owner had no way to tell which field was wrong.
+      const detail = err.fieldErrors && Object.values(err.fieldErrors).join(' ');
+      setError(detail || err.message || 'Failed to add product.');
     }
   }
 
@@ -330,7 +337,11 @@ function AddProductForm({ onSubmit }) {
   return (
     <form className="add-product-form" onSubmit={handleSubmit}>
       <label>Name<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
-      <label>Price (R)<input type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} required /></label>
+      {/* min 0.01, not 0: the server rejects a zero price (a zero-price item
+          would hand a customer free goods), and v40's CHECK (price > 0) makes
+          it impossible at the database level. Matching the bound here means the
+          browser catches it before a round trip, same as EditProductForm. */}
+      <label>Price (R)<input type="number" min="0.01" max="100000" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} required /></label>
       <label>Category<input value={category} onChange={(e) => setCategory(e.target.value)} /></label>
       <label>Brand<input value={brand} onChange={(e) => setBrand(e.target.value)} /></label>
       <label>
