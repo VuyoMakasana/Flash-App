@@ -5,6 +5,7 @@ const StoreAction = require("../models/StoreAction");
 const { clearCache } = require("../middleware/cache");
 const s3Service = require("../services/s3Service");
 const { detectRealMimeType } = require("../utils/fileSignature");
+const { validateProductPrice, validateProductCostPrice } = require("../utils/helpers");
 
 // Admin Platform Phase 3 (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §5.3/§6.2) —
 // the Store Admin Portal's real Inventory screen backend, mirroring
@@ -79,6 +80,19 @@ class StoreInventoryController {
       return res.status(400).json({ error: "product_name and price are required" });
     }
 
+    // OPEN_FOLLOWUPS #21. Presence was the only check here, so a product could
+    // be CREATED at any price even though it could not be EDITED to one — and
+    // nothing downstream catches it: the schema has no CHECK beyond v40's, and
+    // checkout trusts an inventory row's price rather than re-validating it.
+    // Same validator as updateProduct, reported in the same
+    // { errors: [{ path, msg }] } shape the portal already renders per-field.
+    const priceCheck = validateProductPrice(price);
+    const costCheck = validateProductCostPrice(cost_price);
+    const errors = [];
+    if (!priceCheck.ok) errors.push({ path: 'price', msg: priceCheck.msg });
+    if (!costCheck.ok) errors.push({ path: 'cost_price', msg: costCheck.msg });
+    if (errors.length) return res.status(400).json({ errors });
+
     try {
       // Image is optional at creation time — real magic-byte verification,
       // not just multer's client-declared mimetype, same discipline as
@@ -97,7 +111,12 @@ class StoreInventoryController {
         `INSERT INTO flash_inventory (store_id, product_name, category, brand, price, cost_price, sizes, stock_by_size, image_url, description)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
         [
-          req.storeId, product_name, category || null, brand || null, price, cost_price || null,
+          // priceCheck.value / costCheck.value, not the raw body values: these
+          // are the parsed, cent-rounded numbers. costCheck.value also fixes a
+          // real bug — `cost_price || null` turned a submitted 0 into NULL,
+          // because 0 is falsy, so the same input meant "free to us" through
+          // updateProduct and "cost unknown" through here.
+          req.storeId, product_name, category || null, brand || null, priceCheck.value, costCheck.value,
           JSON.stringify(sizes), JSON.stringify(stock_by_size), imageUrl, description || null,
         ],
       );
@@ -210,21 +229,14 @@ class StoreInventoryController {
         ? { ok: true, value: v.trim() } : { ok: false, msg: 'product_name must be 2-200 characters' }),
       // Parsed and range-checked rather than passed through: price drives
       // commission, so a NaN or a negative reaching NUMERIC(10,2) would be a
-      // money bug, not a validation nicety. The 100000 ceiling matches the
-      // sanity cap Order.create already applies to line items.
-      price: (v) => {
-        const n = Number(v);
-        return Number.isFinite(n) && n > 0 && n <= 100000
-          ? { ok: true, value: Math.round(n * 100) / 100 }
-          : { ok: false, msg: 'price must be a number greater than 0 and at most 100000' };
-      },
-      cost_price: (v) => {
-        if (v === null || v === '') return { ok: true, value: null };
-        const n = Number(v);
-        return Number.isFinite(n) && n >= 0 && n <= 100000
-          ? { ok: true, value: Math.round(n * 100) / 100 }
-          : { ok: false, msg: 'cost_price must be a number between 0 and 100000, or empty' };
-      },
+      // money bug, not a validation nicety.
+      //
+      // Shared with addProduct below and with the legacy admin REST route
+      // (OPEN_FOLLOWUPS #21) — one rule, three call sites, so they cannot
+      // drift. The reasoning about why the write path is the only place a
+      // bound can be enforced lives with the function in utils/helpers.js.
+      price: validateProductPrice,
+      cost_price: validateProductCostPrice,
       category: (v) => (v === null || v === '' || (typeof v === 'string' && v.length <= 100)
         ? { ok: true, value: v === '' ? null : v } : { ok: false, msg: 'category must be at most 100 characters' }),
       brand: (v) => (v === null || v === '' || (typeof v === 'string' && v.length <= 100)

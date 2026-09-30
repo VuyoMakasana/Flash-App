@@ -1131,6 +1131,18 @@ async function migrate() {
     throw err;
   } finally {
     client39.release();
+  }
+
+  // pool.end() moved from v39's finally to here when v40 was added — it must
+  // stay on whichever migration runs last, or the process would not drain.
+  const client40 = await pool.connect();
+  try {
+    await migrateV40(client40);
+  } catch (err) {
+    console.error('Migration v40 failed:', err.message);
+    throw err;
+  } finally {
+    client40.release();
     await pool.end();
   }
 
@@ -2623,4 +2635,90 @@ async function migrateV39(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39 };
+// ─────────────────────────────────────────────────────────────────────────────
+// v40 — OPEN_FOLLOWUPS #21: make a non-positive product price impossible at
+// the schema level.
+//
+// Why the schema and not only the application: flash_inventory is one of only
+// two AdminJS resources with new/edit ENABLED (drivers is the other), by
+// design, because admins are expected to edit inventory. AdminJS's generic
+// form writes columns directly, so NO application validator can ever cover
+// that path. This constraint is the only possible guard on it.
+//
+// Nothing downstream would catch a bad value either. For a Flash inventory
+// item, Order.create reads the row and trusts it
+// (`serverPrice = parseFloat(invRow.rows[0].price)`, Order.js:174-176) --
+// correctly, since the price is server-owned. validateExternalItemPrice's
+// bounds apply only to external/partner items. So price flows straight into
+// subtotal -> total -> store_commission.
+//
+// price > 0, but NO upper bound (founder-confirmed): a non-positive price is
+// an invariant, never valid under any business model, and belongs here. The
+// 100_000 ceiling is policy -- a genuinely expensive item is conceivable --
+// and stays in the application, where changing it is a deploy rather than a
+// migration.
+//
+// cost_price >= 0, not > 0: zero-cost stock (donated, gifted, promotional) is
+// real, and unlike price it is never charged to anyone. NULL stays allowed --
+// it means "not recorded".
+//
+// LOCK AND SCAN: ALTER TABLE ... ADD CONSTRAINT ... CHECK takes ACCESS
+// EXCLUSIVE and scans the table to validate existing rows, blocking all reads
+// and writes for the duration -- and GET /api/inventory is the highest-traffic
+// read in the app. At the current table size (~16 rows) that scan is
+// sub-millisecond and the endpoint's 60s cache masks it entirely, so the plain
+// form is correct here. The NOT VALID + VALIDATE CONSTRAINT split, which takes
+// only SHARE UPDATE EXCLUSIVE and does not block traffic, starts earning its
+// extra complexity at tens of thousands of rows upward -- revisit then.
+//
+// FAILURE MODE: if any row violated either constraint, ADD CONSTRAINT fails
+// outright and this transaction rolls back. No row is altered, coerced or
+// deleted; the migration throws and stops. Verified beforehand against
+// production (SELECT ... WHERE price <= 0 returned zero rows, 2026-09-30) and
+// against a fresh database -- this file seeds no flash_inventory rows and no
+// integration test touches the table, so CI's table is empty.
+//
+// No deploy-ordering hazard (cf. OPEN_FOLLOWUPS #16): the validators are safe
+// without this constraint and this constraint is safe without them, so either
+// order is consistent.
+async function migrateV40(client) {
+  await client.query('BEGIN');
+  try {
+    // ADD CONSTRAINT has no IF NOT EXISTS, so both are guarded explicitly --
+    // same pattern as v36's stores_status_check. migrate.js must stay safe to
+    // re-run; without the guard a second run would fail with 42710.
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'flash_inventory_price_positive'
+        ) THEN
+          ALTER TABLE flash_inventory
+            ADD CONSTRAINT flash_inventory_price_positive CHECK (price > 0);
+        END IF;
+      END $$;
+    `);
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'flash_inventory_cost_price_non_negative'
+        ) THEN
+          ALTER TABLE flash_inventory
+            ADD CONSTRAINT flash_inventory_cost_price_non_negative
+              CHECK (cost_price IS NULL OR cost_price >= 0);
+        END IF;
+      END $$;
+    `);
+
+    await client.query('COMMIT');
+    console.log('Flash database migration v40 completed: flash_inventory price/cost_price CHECK constraints');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v40 failed:', err.message);
+    throw err;
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40 };

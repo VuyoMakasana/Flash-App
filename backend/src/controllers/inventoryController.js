@@ -1,6 +1,7 @@
 const Inventory = require("../models/Inventory");
 const AdminAction = require("../models/AdminAction");
 const { clearCache } = require("../middleware/cache");
+const { validateProductPrice, validateProductCostPrice } = require("../utils/helpers");
 const FLASH_STORE_ID = "flash_closet";
 
 class InventoryController {
@@ -45,13 +46,27 @@ class InventoryController {
       return res.status(400).json({ error: "product_name and price required" });
     }
 
+    // OPEN_FOLLOWUPS #21. `!price` above rejects 0 (falsy) but accepts -5, and
+    // this route writes the same flash_inventory.price that feeds
+    // store_commission. Same shared validator as the store portal's two
+    // paths, so one rule covers all three.
+    //
+    // This is not redundant with v40's CHECK (price > 0): without it, a
+    // negative here reaches Postgres, raises, and is caught by the generic
+    // handler below as a 500 — a client error reported as a server fault.
+    // Validating first keeps it a 400 and says which field.
+    const priceCheck = validateProductPrice(price);
+    if (!priceCheck.ok) return res.status(400).json({ error: priceCheck.msg });
+    const costCheck = validateProductCostPrice(cost_price);
+    if (!costCheck.ok) return res.status(400).json({ error: costCheck.msg });
+
     try {
       const product = await Inventory.addProduct({
         product_name,
         category,
         brand,
-        price,
-        cost_price,
+        price: priceCheck.value,
+        cost_price: costCheck.value,
         sizes,
         stock_by_size,
         image_url,

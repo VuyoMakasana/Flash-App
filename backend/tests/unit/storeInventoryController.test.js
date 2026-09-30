@@ -582,3 +582,140 @@ describe('reactivateProduct', () => {
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OPEN_FOLLOWUPS #21 — addProduct's price gate.
+//
+// Before this, addProduct checked only that price was PRESENT. So a product
+// could be CREATED at any price even though it could not be EDITED to one, and
+// nothing downstream catches it: checkout trusts an inventory row's price
+// rather than re-validating it. The asymmetry was the whole bug.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('addProduct — price validation (#21)', () => {
+  test.each([
+    ['zero', 0],
+    ['negative', -5],
+    ['non-numeric', 'free'],
+    ['above the cap', 100001],
+  ])('rejects a %s price without writing anything', async (_label, price) => {
+    const res = mockRes();
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket', price } }), res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(db.query).not.toHaveBeenCalled();
+    expect(clearCache).not.toHaveBeenCalled();
+    expect(StoreAction.log).not.toHaveBeenCalled();
+  });
+
+  // The specific hole #21 describes: creating what you could not edit into.
+  test('a negative price is refused on create exactly as it is on edit', async () => {
+    const createRes = mockRes();
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket', price: -5 } }), createRes,
+    );
+    expect(createRes.status).toHaveBeenCalledWith(400);
+
+    const editRes = mockRes();
+    await StoreInventoryController.updateProduct(
+      mockReq({ params: { productId: PRODUCT_ID }, body: { price: -5 } }), editRes,
+    );
+    expect(editRes.status).toHaveBeenCalledWith(400);
+  });
+
+  // Same wire shape as updateProduct, which the portal already renders
+  // per-field — a bare { error } would leave the form with nothing to attach.
+  test('reports errors as { errors: [{ path, msg }] }', async () => {
+    const res = mockRes();
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket', price: -5 } }), res,
+    );
+
+    expect(res.json).toHaveBeenCalledWith({
+      errors: [expect.objectContaining({ path: 'price', msg: expect.any(String) })],
+    });
+  });
+
+  test('reports a bad price and a bad cost_price together', async () => {
+    const res = mockRes();
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket', price: -5, cost_price: -1 } }), res,
+    );
+
+    const { errors } = res.json.mock.calls[0][0];
+    expect(errors.map((e) => e.path).sort()).toEqual(['cost_price', 'price']);
+  });
+
+  test('a missing price is still the pre-existing required-field 400', async () => {
+    const res = mockRes();
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket' } }), res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json.mock.calls[0][0].error).toMatch(/required/);
+  });
+
+  test('writes the parsed, cent-rounded price rather than the raw body value', async () => {
+    db.query.mockResolvedValue({ rows: [{ id: PRODUCT_ID }] });
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket', price: '450.005' } }), mockRes(),
+    );
+
+    // price is the 5th INSERT parameter.
+    expect(db.query.mock.calls[0][1][4]).toBe(450.01);
+  });
+});
+
+describe('addProduct — cost_price 0 is not null (#21)', () => {
+  // The bug: `cost_price || null` turned a submitted 0 into NULL, because 0 is
+  // falsy. NULL means "cost not recorded" and 0 means "free to us" — the same
+  // input meant different things through addProduct and updateProduct.
+  test('a cost_price of 0 is stored as 0, not NULL', async () => {
+    db.query.mockResolvedValue({ rows: [{ id: PRODUCT_ID }] });
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket', price: 450, cost_price: 0 } }), mockRes(),
+    );
+
+    expect(db.query.mock.calls[0][1][5]).toBe(0);
+  });
+
+  test('an omitted cost_price is still NULL', async () => {
+    db.query.mockResolvedValue({ rows: [{ id: PRODUCT_ID }] });
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket', price: 450 } }), mockRes(),
+    );
+
+    expect(db.query.mock.calls[0][1][5]).toBeNull();
+  });
+
+  test('an empty-string cost_price is NULL, not 0', async () => {
+    db.query.mockResolvedValue({ rows: [{ id: PRODUCT_ID }] });
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket', price: 450, cost_price: '' } }), mockRes(),
+    );
+
+    expect(db.query.mock.calls[0][1][5]).toBeNull();
+  });
+
+  test('create and edit agree on what a cost_price of 0 means', async () => {
+    db.query.mockResolvedValue({ rows: [{ id: PRODUCT_ID }] });
+    await StoreInventoryController.addProduct(
+      mockReq({ body: { product_name: 'Jacket', price: 450, cost_price: 0 } }), mockRes(),
+    );
+    const created = db.query.mock.calls[0][1][5];
+
+    jest.clearAllMocks();
+    const client = mockClient({ lockedRead: { rows: [{ id: PRODUCT_ID, price: '450.00' }] } });
+    await StoreInventoryController.updateProduct(
+      mockReq({ params: { productId: PRODUCT_ID }, body: { cost_price: 0 } }), mockRes(),
+    );
+    const edited = client.query.mock.calls
+      .find(([s]) => String(s).includes('UPDATE flash_inventory'))[1][0];
+
+    expect(created).toBe(0);
+    expect(edited).toBe(0);
+  });
+});
