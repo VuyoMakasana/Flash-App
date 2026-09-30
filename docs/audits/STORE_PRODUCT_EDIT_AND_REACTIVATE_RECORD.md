@@ -31,13 +31,48 @@ return Number.isFinite(n) && n > 0 && n <= 100000
 customer free goods. Rounding to whole cents happens here rather than letting
 `NUMERIC(10,2)` truncate silently.
 
-The bounds are **deliberately identical to `Order.create`'s**, verified
-against the source rather than assumed (`backend/src/models/Order.js:48-58`
-rejects `price <= 0` and `price > 100_000`). That gives a property worth
-stating: **any price a store can save is a price an order can accept.** Had
-this validator been looser, a store could save a product that then threw at
-every checkout — a product visible in the catalog and impossible to buy, with
-the error surfacing on the customer, not the store that caused it.
+The bounds are numerically identical to `validateExternalItemPrice`'s in
+`backend/src/models/Order.js:39-61`:
+
+```js
+if (price <= 0)        { throw new Error(/* price must be greater than zero */); }
+if (price > 100_000)   { throw new Error(/* price exceeds maximum allowed value */); }
+```
+
+### Correcting an earlier, wrong claim in this record
+
+An earlier version of this section said the matching bounds meant
+"any price a store can save is a price an order can accept", implying
+`Order.create` would reject an out-of-range inventory price. **It would not,
+and the reasoning was wrong.** `validateExternalItemPrice` is called only on
+the two *external/partner* paths (`Order.js:202` and `:209`) — items with no
+matching `flash_inventory` row. Its own header comment says so: "The
+flash_inventory path already validates against a trusted server price and is
+not affected."
+
+For a Flash inventory item — exactly what `updateProduct` edits — checkout
+does this (`Order.js:174-176`):
+
+```js
+// ── FLASH INVENTORY PATH: use server price, ignore client price ──
+serverPrice = parseFloat(invRow.rows[0].price);
+```
+
+No bounds check, correctly so: the value is server-owned, not client-supplied.
+The two validators therefore guard **disjoint** paths and can never disagree,
+which is a different and weaker statement than the one made before.
+
+The consequence runs the opposite way to what was implied, and strengthens the
+case for this validator rather than weakening it: **`updateProduct`'s check is
+the only gate on an edited inventory price, not a mirror of a downstream one.**
+There is no safety net beneath it. A bad value here flows straight into
+`subtotal` → `total` → `store_commission`. Keeping the bounds aligned with the
+external-item rule is still worth doing — one business rule, consistently
+applied at both entry points — but it is consistency, not defence in depth.
+
+Caught because a reviewer asked for the `Order.create` line to be quoted so
+the claim could be checked directly instead of taken as stated. It could not
+be, and was wrong.
 
 **Editing a price does not alter any existing order.** Orders freeze their own
 `unit_price` at checkout and completed orders freeze `store_commission`. A

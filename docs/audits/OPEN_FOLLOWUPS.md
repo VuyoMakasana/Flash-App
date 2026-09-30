@@ -786,3 +786,62 @@ without a new column. 2b deliberately takes no position on settlement.
 write-only) is the same class of problem — money owed to a store that nothing
 pays. Both should be resolved in the same pass, since both land in the same
 settlement cycle.
+
+---
+
+## 21. `addProduct` accepts any price — a store can create a negative one
+
+**Severity: HIGH.** Not introduced by A1/A2 (PR #26); found while verifying one
+of that PR's own claims, and pre-existing on `main`.
+
+`updateProduct` (PR #26) validates `price` as a finite number `> 0` and
+`<= 100000`. **`addProduct` validates only that it is present:**
+
+```js
+if (!product_name || price === undefined || price === null) {
+  return res.status(400).json({ error: "product_name and price are required" });
+}
+```
+
+The value then goes straight into the `INSERT`. Nothing below it catches a bad
+one either:
+
+| Layer | Guard on an inventory item's price |
+|---|---|
+| `addProduct` | presence only — no range, no type |
+| `flash_inventory` schema | `price DECIMAL(10,2) NOT NULL`, **no `CHECK`** |
+| Checkout (`Order.js:174-176`) | none — `parseFloat(row.price)`, server-owned and trusted |
+| `validateExternalItemPrice` | **does not apply** — external/partner paths only (`Order.js:202`, `:209`) |
+
+So a store can create a product priced `-5.00` today. `DECIMAL(10,2)` rejects a
+non-numeric string (a 500, not a stored value) and anything over
+99,999,999.99, but permits **any negative** and any value up to that ceiling.
+
+A negative unit price flows into `subtotal` → `total` → `store_commission`.
+Worth checking whether it can drive an order total below the delivery fee, or
+produce a negative commission that a settlement run would treat as money Flash
+owes the store.
+
+**Why it went unnoticed:** the natural assumption is that checkout re-validates
+prices. It does — but only for items it does *not* own. For Flash inventory it
+deliberately trusts the database row, which is correct, and which is exactly
+what makes the *write* path the only place a bound can be enforced.
+
+### Fix
+
+Extract PR #26's `EDITABLE_FIELDS.price` validator and apply it in
+`addProduct` too — same function, same bounds, no new abstraction. Consider a
+`CHECK (price > 0)` on `flash_inventory` as a backstop, after auditing existing
+rows for violations (a migration adding a `CHECK` fails if any row breaks it).
+
+Deliberately **not** bundled into PR #26: that PR was reviewed and approved on
+a stated scope, and widening it at merge time would put an unreviewed money-path
+change into an approved diff. Small enough to be its own PR.
+
+### Not verified
+
+- **No production row has been checked** for an existing bad price. Worth a
+  `SELECT id, store_id, price FROM flash_inventory WHERE price <= 0` before
+  deciding urgency.
+- The downstream impact of a negative price on `total` and `store_commission`
+  is reasoned from the code, **not** observed — no such order has been placed.
