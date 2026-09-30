@@ -794,6 +794,12 @@ settlement cycle.
 **Severity: HIGH.** Not introduced by A1/A2 (PR #26); found while verifying one
 of that PR's own claims, and pre-existing on `main`.
 
+> **RESOLVED** — shared validator on all three application write paths plus
+> migration v40's `CHECK (price > 0)` for the AdminJS path, which no
+> application validator can reach. Full reasoning:
+> `PRODUCT_PRICE_INTEGRITY_RECORD.md`. Production confirmed to have zero
+> violating rows before the constraint was added.
+
 `updateProduct` (PR #26) validates `price` as a finite number `> 0` and
 `<= 100000`. **`addProduct` validates only that it is present:**
 

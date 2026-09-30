@@ -47,6 +47,54 @@ const computeCommission = (deliveryFee) => {
   return { flashCommission, driverPayout };
 };
 
+// ─── PRODUCT PRICE VALIDATION ────────────────────────────────────────────────
+// OPEN_FOLLOWUPS #21. `flash_inventory.price` feeds subtotal → total →
+// store_commission, and checkout does NOT re-validate it: for a Flash
+// inventory item, Order.create reads the row and trusts it
+// (`serverPrice = parseFloat(invRow.rows[0].price)`, Order.js:174-176), which
+// is correct because the value is server-owned. validateExternalItemPrice
+// guards only the external/partner paths. So the WRITE path is the only place
+// a bound can be enforced, and this is it.
+//
+// Lives here rather than in a controller because three separate write paths
+// need it: the store portal's addProduct and updateProduct, and the legacy
+// admin REST addProduct. A fourth path — AdminJS's generic new/edit form on
+// flash_inventory — writes columns directly and cannot be reached by any
+// application validator; that one is covered by migration v40's
+// CHECK (price > 0) instead.
+//
+// Bounds match validateExternalItemPrice's (> 0, <= 100_000) so one business
+// rule is applied consistently at every entry point. Deliberately NOT the same
+// as v40's constraint: > 0 is an invariant and belongs in the schema, while
+// 100_000 is policy and stays here, where changing it is a deploy rather than
+// a migration (founder-confirmed).
+const MAX_PRODUCT_PRICE = 100000;
+
+// Returns { ok: true, value } or { ok: false, msg }. Callers decide the
+// response shape — the store portal answers { errors: [{ path, msg }] }, the
+// legacy admin route a single { error }.
+const validateProductPrice = (raw) => {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 && n <= MAX_PRODUCT_PRICE
+    ? { ok: true, value: Math.round(n * 100) / 100 }
+    : { ok: false, msg: `price must be a number greater than 0 and at most ${MAX_PRODUCT_PRICE}` };
+};
+
+// cost_price is optional, and >= 0 rather than > 0: genuinely zero-cost stock
+// (donated, gifted, promotional) is real, and unlike price it is never charged
+// to anyone. null and '' both mean "not recorded".
+//
+// The distinction matters and was a live bug: addProduct used `cost_price ||
+// null`, so a submitted 0 became NULL because 0 is falsy. NULL reads as "cost
+// unknown" and 0 as "free to us" — different inputs to any margin figure.
+const validateProductCostPrice = (raw) => {
+  if (raw === null || raw === undefined || raw === '') return { ok: true, value: null };
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 && n <= MAX_PRODUCT_PRICE
+    ? { ok: true, value: Math.round(n * 100) / 100 }
+    : { ok: false, msg: `cost_price must be a number between 0 and ${MAX_PRODUCT_PRICE}, or empty` };
+};
+
 // ─── CURRENCY ────────────────────────────────────────────────────────────────
 const formatCurrency = (amount) =>
   new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", minimumFractionDigits: 2 }).format(amount);
@@ -101,6 +149,7 @@ const retry = async (fn, maxRetries = 3, delay = 1000) => {
 module.exports = {
   generateToken, generateRefreshToken,
   computeCommission,
+  validateProductPrice, validateProductCostPrice, MAX_PRODUCT_PRICE,
   formatCurrency, calculateDistance, estimateDeliveryTime,
   generateOrderNumber, sanitizePhoneNumber, isValidEmail,
   maskData, deepClone, sleep, retry,
