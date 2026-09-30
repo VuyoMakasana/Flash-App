@@ -851,3 +851,75 @@ change into an approved diff. Small enough to be its own PR.
   deciding urgency.
 - The downstream impact of a negative price on `total` and `store_commission`
   is reasoned from the code, **not** observed — no such order has been placed.
+
+---
+
+## 22. `migrate.js` runs every migration merely by being `require`d
+
+**Severity: MEDIUM** (latent, not currently triggered). Found while building
+#21's fix — deliberately kept out of PR #27, since it changes the migration
+runner itself.
+
+`src/db/migrate.js:1152` calls `migrate()` at **module scope**, with no
+`require.main === module` guard:
+
+```js
+migrate().catch((err) => { ... });
+```
+
+So `require('./src/db/migrate')` — from a test, a helper script, or a stray
+import while refactoring — executes **every migration** against whatever
+`DATABASE_URL` happens to be set. Against a developer's shell that could be
+production.
+
+**It also makes migrations untestable**, which is the concrete cost being paid
+today: #21's v40 coverage is five *source-text* assertions rather than
+behavioural ones, precisely because no test can import this module. I hit it
+trying to dump v40's SQL by running `migrateV40` against a recording client,
+and checked the module's shape before forcing the import.
+
+### Invocation audit — done before proposing the guard
+
+The guard is only safe if every *real* invocation runs the file directly, so
+that `require.main === module` is true. Every invocation found:
+
+| Where | Command | `require.main === module`? |
+|---|---|---|
+| `package.json` | `"migrate": "node src/db/migrate.js"` | **true** |
+| `.github/workflows/ci.yml:63` | `node src/db/migrate.js` | **true** |
+| `scripts/ensure-docker.ps1:54` | `docker compose exec backend npm run migrate` | **true** (execs the same node command) |
+| `docker-compose.yml:17` (comment) | `docker compose exec backend node src/db/migrate.js` | **true** |
+
+**Nothing requires it as a module.** A repo-wide search for
+`require(...db/migrate...)` returns only prose in docs and #21's test, which
+reads the file with `fs.readFileSync` — text, not an import. The `module.exports`
+line at the bottom is currently exercised by nothing.
+
+`migrate.js` is **not** part of the deploy: `start` is `node server.js`, and
+neither entry point references migrations (the single `migrate` hit in
+`src/server.js` is a comment). This matches #16 — Render deploys ahead of
+migrations precisely because migrations are applied manually.
+
+So the guard blocks only the accidental-require path, which is exactly the
+intent.
+
+### Not verified
+
+- **Render's dashboard build and start commands were not inspected** — there is
+  no `render.yaml` or `Procfile` in the repo, so that configuration lives only
+  in Render's UI and is not readable from here. The conclusion rests on
+  `package.json`, CI, and the absence of any module-style import. **Confirm the
+  Render build/start command does not `require` this file before merging the
+  guard.**
+
+### Fix
+
+```js
+if (require.main === module) {
+  migrate().catch((err) => { ... });
+}
+```
+
+Its own PR. With the guard in place, `migrate.js` becomes importable, so v40's
+constraints — and every future migration's — can be tested behaviourally
+against a real Postgres instead of by reading the source.
