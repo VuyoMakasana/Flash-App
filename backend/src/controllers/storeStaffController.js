@@ -57,10 +57,12 @@ class StoreStaffController {
 
   static async deactivateStaff(req, res) {
     const { staffId } = req.params;
-    // A real, deliberate safety guard beyond what was literally asked for:
-    // this endpoint has no reactivate counterpart, and only 'owner' role can
-    // ever call it — an Owner deactivating their own account would be an
-    // unrecoverable-via-self-service lockout for the whole store.
+    // Self-deactivation guard. A reactivate counterpart now exists, but that
+    // does NOT make this guard redundant and the distinction matters: only the
+    // 'owner' role can call reactivate, so an Owner who deactivates themselves
+    // cannot log back in to undo it. The lockout is still unrecoverable via
+    // self-service — the reason is now "only you could have reversed it", not
+    // "nothing can reverse it".
     if (String(staffId) === String(req.storeUserId)) {
       return res.status(400).json({ error: "You cannot deactivate your own account" });
     }
@@ -73,6 +75,28 @@ class StoreStaffController {
     } catch (err) {
       console.error("[StoreStaff] deactivateStaff error:", err.message);
       res.status(500).json({ error: "Failed to deactivate staff account" });
+    }
+  }
+
+  // The inverse of deactivateStaff. Without it, a staff member deactivated in
+  // error could only be restored with direct database access.
+  //
+  // No self-reactivate guard is needed here, unlike deactivate: reaching this
+  // endpoint at all requires an active session, so a caller cannot be
+  // deactivated and acting simultaneously. authenticateStore re-checks
+  // is_active live on every request, so a deactivated account's token stops
+  // working immediately rather than at expiry.
+  static async reactivateStaff(req, res) {
+    const { staffId } = req.params;
+    try {
+      const reactivated = await StoreUser.reactivate(staffId, req.storeId);
+      if (!reactivated) return res.status(404).json({ error: "Staff account not found" });
+
+      StoreAction.log(req.storeUserId, req.storeId, "store_staff_reactivate", "store_users", staffId);
+      res.json({ staff: reactivated });
+    } catch (err) {
+      console.error("[StoreStaff] reactivateStaff error:", err.message);
+      res.status(500).json({ error: "Failed to reactivate staff account" });
     }
   }
 }

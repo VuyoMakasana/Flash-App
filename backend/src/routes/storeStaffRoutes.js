@@ -20,5 +20,6 @@ router.use(authenticateStore, requireOwnStore, requireStorePasswordCurrent, requ
 router.get('/', StoreStaffController.listStaff);
 router.post('/', storeWriteLimiter, StoreStaffController.createStaff);
 router.patch('/:staffId/deactivate', storeWriteLimiter, validateId, StoreStaffController.deactivateStaff);
+router.patch('/:staffId/reactivate', storeWriteLimiter, validateId, StoreStaffController.reactivateStaff);
 
 module.exports = router;
