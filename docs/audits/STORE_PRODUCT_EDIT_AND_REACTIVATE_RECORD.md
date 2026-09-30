@@ -136,12 +136,13 @@ No new dependency, no new component file, no styling beyond existing classes.
 
 Backend unit total **502 → 535**, 39 suites, all passing.
 
-PR #26's description says 532. That is a **stale** number rather than a
-miscount: the full-suite run behind it happened *before* the last two
-inventory tests were added, and I confirmed those per-file without re-running
-the whole suite. Caught by re-running the suite rather than adding one to the
-old figure, and it reconciles exactly — 502 + 24 (inventory) + 5 (staff) +
-3 (model) = 534 at commit `b09adcf`, plus the mid-transaction test = 535.
+Earlier versions of this record and of PR #26's description said 532 (both
+since corrected). That was a **stale** number rather than a miscount: the
+full-suite run behind it happened *before* the last two inventory tests were
+added, and I had confirmed those per-file without re-running the whole suite.
+Caught by re-running the suite rather than adding one to the old figure, and
+it reconciles exactly — 502 + 24 (inventory) + 5 (staff) + 3 (model) = 534 at
+commit `b09adcf`, plus the mid-transaction test = 535.
 
 ### Mutation testing — 13 mutations, one genuine survivor
 
