@@ -129,12 +129,26 @@ No new dependency, no new component file, no styling beyond existing classes.
 
 | Suite | Before | After |
 |---|---|---|
-| `storeInventoryController.test.js` | 20 | 44 |
+| `storeInventoryController.test.js` | 20 | 45 |
 | `storeStaffController.test.js` | 17 | 22 |
 | `storeUserModel.test.js` | 13 | 16 |
 | `InventoryPage.test.jsx` (portal, new) | — | 9 |
 
-### Mutation testing — 12 mutations, one genuine survivor
+Backend unit total **502 → 535**, 39 suites, all passing.
+
+PR #26's description says 532. That is a **stale** number rather than a
+miscount: the full-suite run behind it happened *before* the last two
+inventory tests were added, and I confirmed those per-file without re-running
+the whole suite. Caught by re-running the suite rather than adding one to the
+old figure, and it reconciles exactly — 502 + 24 (inventory) + 5 (staff) +
+3 (model) = 534 at commit `b09adcf`, plus the mid-transaction test = 535.
+
+### Mutation testing — 13 mutations, one genuine survivor
+
+(One per row of the table below, so the count is self-checking. Earlier drafts
+of this record and PR #26's description said "12"; that was a miscount on my
+part — the re-runs of anchor-failed mutations are the same mutations, not
+additional ones.)
 
 Every mutation asserts its own anchor count first, because a mutation that
 fails to apply is indistinguishable from a passing suite. That check earned its
@@ -155,6 +169,8 @@ multi-line anchors used `\n`. Re-run with normalised anchors, all five applied.
 | `StoreUser.reactivate` not scoped by `store_id` | **SURVIVED** → fixed |
 | `StoreUser.reactivate` also clears `force_password_reset` | caught (after fix) |
 | `StoreUser.reactivate` sets `is_active = false` | caught (after fix) |
+| `updateProduct` catch no longer rolls back | caught |
+| `updateProduct` never releases the client (pool leak) | caught |
 
 **The survivor was real and is worth stating plainly.**
 `storeStaffController.test.js` mocks `StoreUser` wholesale, so no controller
@@ -162,6 +178,15 @@ test could ever see the model's SQL — a tenant-isolation invariant had zero
 coverage while looking fully covered. Closed by three tests at the model layer,
 where `storeUserModel.test.js` already pins `deactivate` the same way. All
 three mutations are caught now.
+
+The last two rows came from a later self-review, not from a failure.
+`updateProduct` had no mid-transaction-failure test although `updateStock` has
+one for the identical `BEGIN` / `FOR UPDATE` / `COMMIT` shape. The 500 is the
+least interesting part of it; what the test actually protects is that a
+rolled-back edit leaves behind **neither a cache flush nor an audit entry**. A
+stray `product_update` row there would be worse evidence than none — a record
+of a price change the database discarded, sitting in the exact table a store
+would cite in a commission dispute.
 
 Both mutation rounds verified the source files byte-identical (`md5sum -c`)
 after restore.
@@ -210,7 +235,7 @@ exposure is mine, so the fix ships here.
 - **The backend integration suite was not run locally.** Docker Desktop will
   not start on this machine ("Docker Desktop is unable to start"), so no
   Postgres was available; `tests/integration/*` needs a live `DATABASE_URL`.
-  Only `tests/unit` ran locally (532 passing).
+  Only `tests/unit` ran locally (**535 passing**, 39 suites).
   **Since resolved by CI** — `Backend — Lint & Test` passed in 1m2s on run
   `36349384465`, which runs migration + unit + integration against its own
   `postgres:15` service and enforces the coverage thresholds (60% branches /

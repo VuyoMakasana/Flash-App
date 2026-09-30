@@ -503,6 +503,33 @@ describe('updateProduct — cache and audit', () => {
     expect(clearCache).toHaveBeenCalledWith('cache:*/inventory*');
   });
 
+  // Parity with updateStock's own mid-transaction test. The assertions that
+  // matter are the last two: a failed edit must leave behind neither a cache
+  // flush nor an audit entry claiming a change that never landed. A stray
+  // audit row here would be worse than no row at all — it would be evidence
+  // of a price change that the database rolled back.
+  test('a mid-transaction failure rolls back, releases the client, and 500s', async () => {
+    const client = {
+      query: jest.fn(async (sql) => {
+        if (/BEGIN|ROLLBACK/i.test(String(sql))) return { rows: [] };
+        throw new Error('deadlock detected');
+      }),
+      release: jest.fn(),
+    };
+    db.connect.mockResolvedValue(client);
+    const res = mockRes();
+
+    await StoreInventoryController.updateProduct(
+      mockReq({ params: { productId: PRODUCT_ID }, body: { price: 50 } }), res,
+    );
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(client.query.mock.calls.some(([s]) => String(s).includes('ROLLBACK'))).toBe(true);
+    expect(client.release).toHaveBeenCalled();
+    expect(clearCache).not.toHaveBeenCalled();
+    expect(StoreAction.log).not.toHaveBeenCalled();
+  });
+
   test('records the PREVIOUS price in the audit metadata', async () => {
     // "Why does this order's commission not match the current price" is only
     // answerable if the prior price is recoverable.
