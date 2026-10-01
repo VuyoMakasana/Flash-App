@@ -458,7 +458,7 @@ question, not a technical one.
 | R8 | Refund-issued notification to the customer |
 | R9 | Close the `CLAUDE.md` cron-count drift (7 documented vs 16 real) |
 | R10 | **Validate `price`/`cost_price` in AdminJS's `before` hooks** (§11) — the last uncovered write path. v40 guards the range but not the *type*; a non-numeric value still raises `22P02`. Reuse `validateProductPrice` beside `nullifyEmptyNonTextFields` |
-| R11 | **Investigate the recurring backend CORS rejection** in Sentry (§11) — 1 of 5 unresolved issues; a persistent CORS failure usually means a real client is being refused |
+| R11 | **Downgrade the CORS rejection's Sentry severity** — see §12. **Not a defect:** investigated and closed as test traffic. This is noise reduction, not a fix |
 
 ### Deliberately deferred — do not do before launch
 
@@ -543,3 +543,62 @@ non-numeric value passes straight through.
 `validateProductPrice` / `validateProductCostPrice` from `utils/helpers.js`.
 That would make all four write paths consistent and is the only remaining
 gap in #21's coverage. Tracked as a follow-up, not folded into any open PR.
+
+---
+
+## §12 — Sentry triage, and why B2/B3 cannot be automated
+
+### NODE-D (CORS rejection) — closed, not a defect
+
+Vuyo pulled the full event on 2026-10-01. **Origin: `https://evil.example.com`,
+via `curl`.** The 74 occurrences cluster in tight timestamp bursts consistent
+with security/adversarial testing, not with an attacker or a real
+misconfiguration.
+
+**This is the CORS middleware working correctly.** A rejected cross-origin
+request from a deliberately hostile origin is the intended outcome, and the
+burst pattern is a test harness, not traffic.
+
+R11 is therefore **downgraded from "possible bug" to noise reduction**: log
+CORS rejections **below error severity** so a working control stops consuming
+the error budget. The reason that matters at launch is signal, not tidiness —
+74 benign events in a 5-issue list is most of the list, and an error channel
+that is mostly noise is one a real issue hides in.
+
+**Correction to this audit's §11,** which recorded this as "a recurring CORS
+rejection worth its own investigation." The investigation happened and found
+nothing wrong. §11's wording reflects what was known before the event was
+pulled; this section supersedes it.
+
+### NODE-N (`22P02` on a `flash_inventory` update) — still open
+
+Distinct from NODE-D and **not yet triaged.** The analysis in §11's
+correction stands: `22P02` is a type-coercion failure raised **before** any
+`CHECK` is evaluated, so **v40 does not prevent it**. Eight days before
+2026-10-01, `updateProduct` did not exist, leaving AdminJS's generic form as
+the only path that could have `UPDATE`d `price`/`cost_price`.
+
+**Recommendation: read the stack trace before resolving.** If it originates
+in AdminJS, the error is still reachable today and resolving it would close
+something live. R10 is the fix.
+
+### B2 and B3 cannot be verified by API — by design
+
+Confirmed on 2026-10-01: **Render's API exposes only a *write* for
+environment variables, with no read.** Neither this audit nor Vuyo can read
+them programmatically, and that asymmetry looks deliberate rather than an
+oversight — a read endpoint would make every integration token a secrets
+exfiltration path.
+
+The practical consequence is that **B2, B3, and B1's confirmation are
+irreducibly manual dashboard checks.** No amount of tooling closes them;
+there is no point attempting it again.
+
+**B2 is the more time-sensitive of the two**, and more so now that the target
+is a real public launch rather than a pilot. `Driver.js:44` reads
+`process.env.DRIVER_TEST_MODE === "true"`; when true, `Driver.create()` grants
+a brand-new signup **auto-generated documents and a real
+`driver_subscriptions` row**. If it is true in production at launch, **every
+public signup becomes an approved, subscribed driver** — no document review,
+no payment. That is a one-glance check with a worst case that compromises
+driver onboarding entirely, which is why it is ranked above B3.

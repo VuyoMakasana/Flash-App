@@ -860,6 +860,16 @@ change into an approved diff. Small enough to be its own PR.
 #21's fix — deliberately kept out of PR #27, since it changes the migration
 runner itself.
 
+> **RESOLVED** — `if (require.main === module)` guard added in PR #31
+> (`b044466`), unblocked by confirming Render's build/start commands make no
+> reference to this file. The payoff was the point: with the module
+> importable, `tests/unit/migrateModule.test.js` now asserts migration v40
+> **behaviourally** rather than by reading its source. Mutation-tested 4/4,
+> and that run caught three defects in the *verification* — including a
+> vacuous mock that passed 8/8 with the guard deleted, and an idempotency
+> test that counted guards without checking each named its own constraint
+> (a real bug: the `cost_price` constraint would have been silently skipped).
+
 `src/db/migrate.js:1152` calls `migrate()` at **module scope**, with no
 `require.main === module` guard:
 
