@@ -441,7 +441,7 @@ question, not a technical one.
 | **B4** | **Decide masked calling** (gate 3) | Customers and drivers exchange real phone numbers today. A launch decision, not a bug | Founder |
 | **B5** | **Driver payout path must actually work** | Drivers cannot be paid. Needs B1 **and** the `/bank/resolve` → ZAR decision (§9.2) | Founder + eng |
 | **B6** | **Store settlement decision** (#20) | The store cannot be paid. Manual at 1 store is acceptable *if explicitly chosen* | Founder |
-| **B7** | **Fix crash visibility** — `SENTRY_AUTH_TOKEN` + remove `SENTRY_DISABLE_AUTO_UPLOAD`; register the Sentry Expo plugin in the driver app | First real-user crash is otherwise unreadable | Founder + eng |
+| **B7** | **Mobile crash reporting is absent, not merely degraded** — `SENTRY_AUTH_TOKEN` + remove `SENTRY_DISABLE_AUTO_UPLOAD`; register the Sentry Expo plugin in the driver app | **Upgraded in severity (§11).** The apps' Sentry project shows **zero issues in 90 days** — two apps in real use producing no events at all is not plausible, so this is very likely total absence rather than unreadable stacks. Launching blind to mobile crashes | Founder + eng |
 | **B8** | **Rotate out the leaked Google Maps keys**; finish iOS builds | Known exposure left deliberately open | Founder |
 
 ### Strongly recommended before launch (not strictly blocking)
@@ -457,6 +457,8 @@ question, not a technical one.
 | R7 | `migrate.js` `require.main` guard (#22) — makes every future migration testable |
 | R8 | Refund-issued notification to the customer |
 | R9 | Close the `CLAUDE.md` cron-count drift (7 documented vs 16 real) |
+| R10 | **Validate `price`/`cost_price` in AdminJS's `before` hooks** (§11) — the last uncovered write path. v40 guards the range but not the *type*; a non-numeric value still raises `22P02`. Reuse `validateProductPrice` beside `nullifyEmptyNonTextFields` |
+| R11 | **Investigate the recurring backend CORS rejection** in Sentry (§11) — 1 of 5 unresolved issues; a persistent CORS failure usually means a real client is being refused |
 
 ### Deliberately deferred — do not do before launch
 
@@ -479,20 +481,65 @@ credentials, decisions, and notifications.**
 
 ---
 
-## §11 — What this audit could not verify
+## §11 — Verification status
 
-Stated plainly rather than left implicit. All require dashboard or database
-access unavailable from this environment:
+### Closed since this audit was first written
+
+Verified by Vuyo with direct Render / Supabase / Sentry access on
+2026-10-01. Recorded here as confirmed fact, attributed — not as this
+audit's own finding.
+
+| Previously unknown | Now confirmed |
+|---|---|
+| Supabase RLS live state | **RLS is disabled on all 66 tables.** Matches the repo (zero `ROW LEVEL SECURITY` / `CREATE POLICY` statements) — now confirmed live, not inferred |
+| Render build / start commands | **`npm install` / `node server.js`, with no `migrate.js` reference anywhere.** Migrations are therefore entirely manual, confirming #16's premise — and **unblocking #22's `require.main` guard**, since no deploy path imports that module |
+| Render health check | **No health-check path is configured on the service.** Gate 7 confirmed outstanding: a bad deploy cannot be caught before it takes traffic |
+| Is Sentry receiving events? | **Backend: yes** — 5 unresolved issues, including a **recurring CORS rejection** worth its own investigation. **Mobile: no** — the apps' Sentry project has **zero issues in 90 days**, which corroborates gate 5 from the other direction: crash reporting is very likely not working on either app |
+
+**The mobile Sentry silence is the significant one.** §7 reasoned from
+configuration that the user app would produce unreadable (minified) stacks
+and the driver app would miss native crashes. Zero issues in 90 days across
+both is stronger evidence than the config analysis: it suggests **nothing is
+arriving at all**, not merely arriving degraded. Two apps in real use for
+90 days producing zero events is not plausible as a true absence of errors.
+**Gate B7 should be treated as "crash reporting is absent," not "degraded."**
+
+### Still unverified
 
 - **Live values of every Render environment variable** — including whether
   the Paystack key has since been replaced, and `DRIVER_TEST_MODE`'s actual
   value. The `sk_test_` finding comes from a live API probe earlier in this
-  engagement, not from reading the dashboard.
-- **Supabase RLS live state** — only that nothing in the repo enables it.
-- **Render health-check configuration** and build/start commands (no
-  `render.yaml` or `Procfile` in the repo).
-- **Whether Sentry is receiving events** from either app.
+  engagement, not from reading the dashboard. **B2 and B3 remain open.**
 - **Google Maps key status** in Google Cloud Console; iOS build state.
 - **Any production row counts or data distribution.**
-- **Nothing in §1–§4 was exercised through a deployed UI during this audit** —
-  it is read-only code analysis plus prior live results, as scoped.
+- **Nothing in §1–§4 was exercised through a deployed UI** — this audit is
+  read-only code analysis plus prior live results, as scoped.
+
+### Correction to this audit: the AdminJS path is only partly covered
+
+§3 and §4 describe `flash_inventory`'s AdminJS write path as "covered by
+v40's CHECK constraint." **That is true for the range invariant and false
+for the type one**, and the distinction is load-bearing:
+
+- `CHECK (price > 0)` rejects a **valid number** that is non-positive →
+  `23514 check_violation`.
+- A **non-numeric** value (`'abc'`, or — far more likely in South Africa —
+  `'12,50'` with a comma decimal separator) fails during **type coercion**,
+  raising `22P02 invalid input syntax for type numeric` **before any CHECK
+  constraint is evaluated**. v40 does nothing for this.
+
+`flash_inventory` has exactly two numeric columns, `price DECIMAL(10,2) NOT
+NULL` and `cost_price DECIMAL(10,2)`. The three application write paths now
+reject non-numeric input via `validateProductPrice` (`Number.isFinite`), so
+they cannot produce `22P02`. **AdminJS's generic form still can**, because it
+writes columns directly. `nullifyEmptyNonTextFields`
+(`adminPanel.js:773`, added 2026-09-22 in `e0d4386`) converts `''` → `NULL`
+for non-text fields and closes the empty-string case only — a non-empty,
+non-numeric value passes straight through.
+
+**Recommended fix (not built):** add a price/`cost_price` check to the same
+`before` hooks that already run `nullifyEmptyNonTextFields` on
+`flash_inventory`'s `new` and `edit` (`adminPanel.js:1695-1696`), reusing
+`validateProductPrice` / `validateProductCostPrice` from `utils/helpers.js`.
+That would make all four write paths consistent and is the only remaining
+gap in #21's coverage. Tracked as a follow-up, not folded into any open PR.
