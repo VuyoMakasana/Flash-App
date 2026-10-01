@@ -457,7 +457,7 @@ question, not a technical one.
 | R7 | `migrate.js` `require.main` guard (#22) — makes every future migration testable |
 | R8 | Refund-issued notification to the customer |
 | R9 | Close the `CLAUDE.md` cron-count drift (7 documented vs 16 real) |
-| R10 | **Validate `price`/`cost_price` in AdminJS's `before` hooks** (§11) — the last uncovered write path. v40 guards the range but not the *type*; a non-numeric value still raises `22P02`. Reuse `validateProductPrice` beside `nullifyEmptyNonTextFields` |
+| R10 | ~~Validate `price`/`cost_price` in AdminJS's `before` hooks~~ — **DONE.** `validateInventoryPrices` added beside `nullifyEmptyNonTextFields` on `flash_inventory`'s `new`/`edit`, reusing the same validators as the other three write paths. All four now agree on one rule. **Not credited with closing NODE-N** — that was the empty-string case, already fixed on 2026-09-22 (see §12) |
 | R11 | **Downgrade the CORS rejection's Sentry severity** — see §12. **Not a defect:** investigated and closed as test traffic. This is noise reduction, not a fix |
 
 ### Deliberately deferred — do not do before launch
