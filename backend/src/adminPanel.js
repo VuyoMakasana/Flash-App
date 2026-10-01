@@ -28,6 +28,9 @@ const Store = require('./models/Store');
 // for why they must never be written out separately again.
 const { STORE_STATUS_TRANSITIONS } = require('./models/Store');
 const Return = require('./models/Return');
+// OPEN_FOLLOWUPS #21 R10 -- the same validators the store portal's three
+// write paths use, so all four agree on one rule.
+const { validateProductPrice, validateProductCostPrice } = require('./utils/helpers');
 const {
   acceptOrder,
   rejectPendingAcceptance,
@@ -770,6 +773,88 @@ function suppressReference(resourceMetadata, propertyName) {
 // actual text column, so those are passed through exactly as submitted.
 // A required (NOT NULL) column left blank still fails, as it should, but now
 // with Postgres's clear not-null-violation instead of a syntax error.
+// OPEN_FOLLOWUPS #21, R10 — the fourth and last write path to
+// flash_inventory.price. The store portal's addProduct/updateProduct and the
+// legacy admin REST addProduct all validate via utils/helpers; AdminJS's
+// generic form writes columns directly, so no controller-level validator can
+// reach it.
+//
+// Migration v40 is NOT a substitute here, and the distinction is the whole
+// reason this exists:
+//
+//   CHECK (price > 0) rejects a VALID number that is non-positive -> 23514.
+//   A NON-NUMERIC value ('abc', or '12,50' with a comma decimal -- the
+//   likely form in South Africa) fails during type COERCION -> 22P02,
+//   raised BEFORE any CHECK is evaluated. v40 does nothing for it.
+//
+// Not justified by Sentry issue NODE-N, despite the resemblance. NODE-N was
+// `invalid input syntax for type numeric: ""` -- the EMPTY-STRING case, which
+// nullifyEmptyNonTextFields below already fixed on 2026-09-22, 4m43s after
+// that issue's last occurrence, and which has not recurred in the nine days
+// since. Crediting this hook with closing NODE-N would misattribute the fix.
+// The gap it actually closes is real but has never been observed in
+// production, which is why it is ranked with the R-items rather than as a
+// launch blocker.
+//
+// Runs after nullifyEmptyNonTextFields for consistency with every other
+// resource, but the order is NOT load-bearing -- I first claimed it was and a
+// test disproved it. validateProductCostPrice independently treats "" as
+// "not recorded" (returns null), and validateProductPrice rejects "" either
+// way since Number('') is 0. So both orders produce identical results for
+// these two columns. Keeping nullify first is defensive, not required.
+//
+// Side benefit on `price`, which is NOT NULL: a cleared price is refused here
+// with a readable field message rather than reaching Postgres and returning a
+// raw 23502 not-null violation.
+// Set by mountAdminPanel, which already loads adminjs. NOT required inside the
+// hook: `require('adminjs')` works under plain node but throws
+// "SyntaxError: Cannot use import statement outside a module" under jest,
+// which this file's own tests hit. The first version of this hook did require
+// it inline, and the result was worse than a crash — the SyntaxError satisfied
+// every `expect(...).toThrow()` assertion, so validation tests passed without
+// validating anything. Capturing the class at mount keeps production using the
+// real AdminJS error while leaving the hook testable.
+let AdminValidationError = null;
+
+// Shape matches AdminJS's own ValidationError (name + propertyErrors +
+// statusCode) so the fallback is inspectable in tests. Production always has
+// the real class, because mountAdminPanel sets it before any request is served.
+function buildValidationError(propertyErrors) {
+  if (AdminValidationError) return new AdminValidationError(propertyErrors);
+  const err = new Error('Validation failed');
+  err.name = 'ValidationError';
+  err.propertyErrors = propertyErrors;
+  err.statusCode = 400;
+  return err;
+}
+
+function validateInventoryPrices(request) {
+  const payload = request?.payload;
+  if (!payload) return request;
+
+  const errors = {};
+
+  // hasOwnProperty, not truthiness: an edit payload carries only the fields
+  // the form submitted, and 0 is a meaningful cost_price.
+  if (Object.prototype.hasOwnProperty.call(payload, 'price')) {
+    const result = validateProductPrice(payload.price);
+    if (result.ok) payload.price = result.value;
+    else errors.price = { message: result.msg };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'cost_price')) {
+    const result = validateProductCostPrice(payload.cost_price);
+    if (result.ok) payload.cost_price = result.value;
+    else errors.cost_price = { message: result.msg };
+  }
+
+  // AdminJS renders a ValidationError's keys against their own form fields,
+  // so the admin sees which input was wrong instead of a 500.
+  if (Object.keys(errors).length) throw buildValidationError(errors);
+
+  return request;
+}
+
 function nullifyEmptyNonTextFields(request, context) {
   const payload = request?.payload;
   if (!payload) return request;
@@ -1692,8 +1777,17 @@ function buildResources(db) {
             // Real forms, real writes -- see clearInventoryCacheAfter's own
             // comment for why the after-hook is required here, unlike every
             // other resource in this file.
-            new: { before: [nullifyEmptyNonTextFields], after: [clearInventoryCacheAfter] },
-            edit: { before: [nullifyEmptyNonTextFields], after: [clearInventoryCacheAfter] },
+            // validateInventoryPrices runs SECOND, deliberately: the first
+            // hook turns a cleared field's "" into null, and only then is a
+            // null cost_price correctly "not recorded" rather than invalid.
+            new: {
+              before: [nullifyEmptyNonTextFields, validateInventoryPrices],
+              after: [clearInventoryCacheAfter],
+            },
+            edit: {
+              before: [nullifyEmptyNonTextFields, validateInventoryPrices],
+              after: [clearInventoryCacheAfter],
+            },
             // Generic delete would be a real, permanent DELETE FROM --
             // Inventory.deleteProduct is a soft delete (is_active=false),
             // matching this codebase's "never drop data unless explicitly
@@ -2006,6 +2100,10 @@ function buildResources(db) {
 async function mountAdminPanel(app) {
   const AdminJSModule = require('adminjs');
   const AdminJS = AdminJSModule.default;
+  // Capture the real ValidationError for validateInventoryPrices (R10).
+  // Done here because adminjs is already loaded, and because requiring it
+  // inside the hook breaks under jest -- see buildValidationError.
+  AdminValidationError = AdminJSModule.ValidationError;
   const { ComponentLoader } = AdminJSModule;
   const { buildAuthenticatedRouter } = await import('@adminjs/express');
   const { Adapter, Database, Resource } = await import('@adminjs/sql');
@@ -2317,4 +2415,11 @@ async function mountAdminPanel(app) {
   console.log(`[AdminPanel] Mounted at ${ADMIN_PANEL_PATH} (${resources.map((r) => r.resource.tableName).join(', ')})`);
 }
 
-module.exports = { mountAdminPanel, ADMIN_PANEL_PATH, buildResources };
+module.exports = {
+  mountAdminPanel, ADMIN_PANEL_PATH, buildResources,
+  // Exported for direct unit testing without booting the Express app or a
+  // session -- same rationale as buildResources. The hook ORDER these two
+  // run in is load-bearing (see validateInventoryPrices' comment), and
+  // adminInventoryPriceValidation.test.js asserts it.
+  nullifyEmptyNonTextFields, validateInventoryPrices,
+};
