@@ -2,6 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> ## ⚠️ START HERE IF YOU HAVE NO MEMORY OF PRIOR WORK
+>
+> **Read [`docs/audits/HANDOFF_OCT_2026.md`](docs/audits/HANDOFF_OCT_2026.md) first.**
+>
+> It is a single dated, self-sufficient catch-up document: everything merged
+> (PRs #12–#32), the full launch-readiness picture, the one unfixed bug that
+> blocks public launch (cash orders hang forever when no driver is available),
+> every open founder decision, what is deliberately paused and why, and what an
+> AI session structurally *cannot* verify here (Render env vars are write-only
+> via API — `DRIVER_TEST_MODE` and the Paystack key are permanently manual
+> dashboard checks).
+>
+> Two known stale points **in this file**, corrected there: it documents 7 cron
+> jobs (there are 16 active), and it describes a `moduleNameMapper` →
+> `tests/__mocks__/database.js` that does not exist.
+
 ## What this repo is
 
 Flash — a two-sided same-day clothing delivery marketplace for South Africa. Three independent apps in one repo:
