@@ -1149,10 +1149,34 @@ async function migrate() {
   console.log('All Flash database migrations completed successfully.');
 }
 
-migrate().catch((err) => {
-  console.error('Fatal migration error:', err.message);
-  process.exit(1);
-});
+// OPEN_FOLLOWUPS #22. Guarded so that merely REQUIRING this file does not run
+// every migration against whatever DATABASE_URL happens to be set. Before
+// this, `require('./src/db/migrate')` -- from a test, a helper script, or a
+// stray import during a refactor -- executed the entire chain, which against a
+// developer's shell could have been production.
+//
+// Safe because every real invocation runs the file directly, so
+// require.main === module is true in all of them:
+//   package.json           "migrate": "node src/db/migrate.js"
+//   .github/workflows/ci.yml  node src/db/migrate.js
+//   scripts/ensure-docker.ps1 docker compose exec backend npm run migrate
+// and Render's own build/start commands are `npm install` / `node server.js`
+// with no reference to this file at all (confirmed in the Render dashboard,
+// 2026-10-01) -- migrations there are applied manually, which is #16's
+// premise. Nothing anywhere imports this module: a repo-wide search for
+// require(...db/migrate...) returns only prose in docs and a test that reads
+// the file with fs.readFileSync.
+//
+// The payoff is larger than the diff: with the module importable, a migration
+// can be tested BEHAVIOURALLY against a real Postgres instead of by reading
+// its source, which is all v40's constraints could get (see
+// PRODUCT_PRICE_INTEGRITY_RECORD.md §7).
+if (require.main === module) {
+  migrate().catch((err) => {
+    console.error('Fatal migration error:', err.message);
+    process.exit(1);
+  });
+}
 
 // ─── v9: order_stops table (multi-mall / multi-shop support) ─────────────────
 async function migrateV9(client) {
