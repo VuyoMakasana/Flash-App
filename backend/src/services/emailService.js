@@ -91,7 +91,7 @@ async function sendViaResendApi({ to, subject, html, text }) {
       Authorization: `Bearer ${RESEND_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ from: FROM_ADDRESS, to: [to], subject, html, text }),
+    body: JSON.stringify({ from: FROM_ADDRESS, to: Array.isArray(to) ? to : [to], subject, html, text }),
     // Belt and braces: fetch has no default timeout either, and this runs in a
     // fire-and-forget path where a hung request would leak quietly.
     signal: AbortSignal.timeout(15_000),
