@@ -6,6 +6,7 @@
 - Re-checked every Critical, High and Medium finding from the earlier read-only audit, which was run against branch `docs/project-state-and-launch-readiness` @ `03ad623`, 44 commits behind `main`.
 - Re-checked the four production-log findings.
 - Read the new store-portal code and every backend file changed since `03ad623`.
+- Completion pass (same branch, PR #34): read `adminPanel.js`, migrations v34–v40, `HANDOFF_OCT_2026.md` and `OPEN_FOLLOWUPS.md` in full. Added §3.1, §3.2, §6.1 and findings N-14 to N-19.
 
 > This document describes what the code **does**. Where something could not be
 > verified from the source (runtime env values, device behaviour, production
@@ -105,12 +106,88 @@ AdminJS (browser, cookie) ──────────┘        ├──> Cl
 
 | Integration | Where | State |
 |---|---|---|
-| Paystack | `services/paystackService.js` (raw REST) | `sk_test_` key in prod (per HANDOFF; unverifiable from here). `/bank/resolve` does not support ZAR. The transfer recipient type is `nuban` (Nigeria); see N-3. |
+| Paystack | `services/paystackService.js` (raw REST) | `sk_test_` key in prod (per HANDOFF; unverifiable from here). `/bank/resolve` does not support ZAR. The transfer recipient type is `nuban` (Nigeria); see N-2. |
 | Resend | `services/emailService.js` | Preferred when `RESEND_API_KEY` is set or `SMTP_HOST` is resend.com. Webhook in `webhookController.handleResend`: Svix HMAC, 300 s tolerance, `email_events` deduplicated on `svix_id`. |
 | Cloudinary | `services/s3Service.js` | `uploadPublicFile` added for product images. |
 | Webhooks | `routes/webhookRoutes.js`, mounted before `express.json()` | Paystack (HMAC-SHA512), Payflex, Resend. |
 
-### Store portal → backend endpoints
+### 3.1 How AdminJS connects to the order state machine and the store portal
+
+AdminJS is mounted inside the same Express process at `/admin-panel` (`adminPanel.js:2100-2416`). It talks to Postgres in two ways:
+- through its own `@adminjs/sql` adapter, using `DATABASE_URL` with `schema: 'public'` (`:2212`);
+- through the app's `pg` pool, for virtual fields and custom actions.
+
+**Three paths can change an order's store stage.** All three converge on the same three state-machine functions.
+
+| Caller | Accept | Reject | Mark ready | Passes `io`? | Audit trail |
+|---|---|---|---|---|---|
+| Store portal (`storeOrderController.js:112-146`) | `acceptOrder` | `rejectPendingAcceptance` (reason "Rejected by store via Store Admin Portal") | `markReadyForPickup` | **yes** | `store_actions` |
+| AdminJS `orders` actions (`adminPanel.js:1146-1194`) | `acceptOrder` | `rejectPendingAcceptance` (reason "Rejected by store via admin panel") | `markReadyForPickup` | **no** (N-14) | `admin_actions` |
+| Crons (`orderStateMachineService.js:766`, `:824`, `:897`) | — | timeout → `rejectPendingAcceptance`, `cancelledByRole: 'system'` | — | yes | console + escalation email |
+
+**What the three functions do:**
+- `acceptOrder` moves the order `pending_store_acceptance → preparing` (`orderStateMachineService.js:655`).
+- `rejectPendingAcceptance` (`:555`) locks the order, cancels it, and inserts an `order_cancellations` row with a `full_refund` split. Only a **card-paid** order then gets a Paystack refund (`:618`). It defaults `cancelledByRole` to `'store'` (`:565`), so an **admin** rejection is recorded as a store rejection.
+- `markReadyForPickup` (`:676`) moves the order `preparing → waiting_for_driver`. Then:
+  - if it has `io`, it emits `order_update` to the customer and `new_order_available` to the preferred driver or `driver_pool`;
+  - it always calls `autoAssignNearestDriver` and push-notifies drivers.
+
+**The actions' button visibility** (`isAccessible`) reads `record.param('status')`. The real guard is the state machine's own `FOR UPDATE` plus `ALLOWED_TRANSITIONS` check.
+
+**What reaches the store portal: nothing, whichever path acted.** No path emits to a store room (N-1), so the portal sees a change only when it refetches.
+
+**What AdminJS can mutate** (every other resource is read-only):
+
+| Resource | Writes | Via |
+|---|---|---|
+| `drivers` | approve / reject | `Admin.updateDriverStatus`. Generic new/edit also enabled; `status` is hidden from the edit form (`:984`). |
+| `orders` | accept / reject / mark ready | State-machine functions above. Generic edit, new and delete are disabled. |
+| `return_requests` | approve / reject / finalize refund | `Return.approveReturn` / `rejectReturn` / `finalizeRefund`. Finalize issues a real Paystack refund. |
+| `sos_alerts`, `chat_reports` | acknowledge / resolve | `SosAlert.acknowledge`, `ChatReport.resolve` |
+| `flash_inventory` | **generic new/edit** + deactivate | Hooks run `nullifyEmptyNonTextFields` → `validateInventoryPrices` → `clearInventoryCacheAfter`. `store_id` is an editable plain-text field (its reference is suppressed, `:1760`). `stock_by_size` is unvalidated (N-15). |
+| `stores` | approve / reject / suspend / reactivate, plus generic edit of details | `StoreOnboardingService.approve` (7-day invite token + welcome email), `.reject`, `Store.suspend`, `Store.reactivate`, gated by `STORE_STATUS_TRANSITIONS`. Status and review columns are hidden from edit. |
+| `marketing_*` (3 tables) | **generic delete left enabled** | N-16 |
+
+**Not registered at all** (confirms audit item A5):
+- `store_users`, so an admin cannot fix an owner's email, unlock an account or release a squatted address;
+- `store_transfer_recipients`;
+- `store_password_tokens`;
+- `users` (it collides with Supabase's `auth.users`, `:106-120`);
+- `admins`.
+
+`commission_rates` and `email_events` are registered but **read-only**. A rate change requires SQL (A4).
+
+**Cross-cutting AdminJS mechanics:**
+- `stripSensitive` removes `password_hash`, `cash_otp_hash` and `cash_otp_plain` from every response, including populated references (`:83-104`).
+- `suppressReferencesToUnregisteredTables` (`:910`) suppresses every foreign key that points at an unregistered table.
+- A runtime prototype patch on `@adminjs/sql` `Resource.filterQuery` (`:2132`) fixes date-range filters.
+- CSP is removed for `/admin-panel` only (`:2389`).
+- `adminLimiter` sits in front of `POST /login` (`:2411`).
+- The session uses default MemoryStore, no explicit cookie `secure`/`sameSite`, and reuses `ADMIN_JWT_SECRET` as both cookie password and session secret (`:2358-2371`).
+
+### 3.2 Schema facts from migrations v34–v40 (`db/migrate.js:2182-2746`)
+
+Each migration runs in its own transaction on its own client (`migrate.js:1076-1147`), and `pool.end()` must stay on the last one. **Migrations are applied manually on Render.** The service auto-deploys `main` and does **not** run migrations (`OPEN_FOLLOWUPS` #16), so a merge can deploy code ahead of the schema it needs.
+
+| Ver | Objects | Facts that matter |
+|---|---|---|
+| v34 | `stores`, `store_users`, `store_actions` (CREATE IF NOT EXISTS); `flash_inventory.store_id UUID` + FK → `stores` (nullable); `store_users.force_password_reset`, `password_changed_at`; `store_password_tokens` | Written to **mirror production's existing shape**: these tables first reached prod from another branch. `store_users.email` is `UNIQUE` and **case-sensitive** (N-7). `role` CHECK has six roles. `store_password_tokens.token VARCHAR(128) UNIQUE` is stored **plaintext** (N-6). Cascades on `store_users`/`store_actions` from `stores`. |
+| v35 | `idx_orders_store_id_created_at` | Named to avoid the `IF NOT EXISTS` name-only trap (an older `idx_orders_store_id` exists). The redundant old index is left in place. |
+| v36 | `stores.status` (NOT NULL, default `pending`, CHECK of 5 states), `reviewed_by` → `admins`, `reviewed_at`, `rejection_reason`, `idx_stores_status_created` | Existing stores backfilled to `approved` via `WHERE status IS NULL` (idempotent). |
+| v37 | `email_events` (`svix_id UNIQUE`), `store_users.{welcome,reset}_email_status[_at]` | Covers every recipient; dedupe on `svix_id`. |
+| v38 | `store_transfer_recipients` | **No account number stored.** Only `recipient_code`, `bank_code`, `bank_name`, `account_last4`, `account_name`. A partial unique index enforces **one active destination per store**. The driver table (`transfer_recipients`) has neither property (`OPEN_FOLLOWUPS` #17). |
+| v39 | `commission_rates` (created here only for fresh DBs; production's came from an unmerged "v31"); seeds a global `0.1000` where none is active; `orders.store_commission NUMERIC(10,2)`, `commission_rate_applied NUMERIC(5,4)`, `commission_rate_id` → `commission_rates`; partial index `(store_id, delivered_at) WHERE store_commission IS NOT NULL` | CHECKs: scope ∈ {global, store, promotional}; `0 ≤ rate ≤ 1`; a global rate has no store and the other scopes need one; a promotional rate needs a window. Unique partial index: one active global. **No historical backfill**: the two older completed orders stay NULL. |
+| v40 | `flash_inventory_price_positive CHECK (price > 0)`, `flash_inventory_cost_price_non_negative` | Guarded `DO $$` blocks. Plain `ADD CONSTRAINT` (an ACCESS EXCLUSIVE scan) was judged fine at about 16 rows. The ≤ 100,000 ceiling stays in application code. |
+
+**Schema drift: a fresh database is not identical to production** (N-18). The code comments themselves record objects in production that `migrate.js` never created:
+- the `orders.store_id → stores` FK (`adminPanel.js:1073-1078`);
+- `flash_inventory.store_id` existing before v34 (`:1755-1758`);
+- `commission_rates` from an unmerged v31;
+- `stores.onboarding_verified_by` in one environment but not another (`:896-898`).
+
+`orders.store_id` itself became UUID in v26/v27 (`migrate.js:1822-1840`).
+
+### 3.3 Store portal → backend endpoints
 All calls go through `flash-store-portal/src/services/api.js`.
 
 | Area | Endpoints |
@@ -134,7 +211,7 @@ Change these only with characterization tests in place.
 2. **Crons in `src/server.js`.** They are registered **twice** in production (C-5). They are timing-sensitive and they move money and stock.
 3. **`DriverWallet` + `payoutService` + `driverCommissionService`.** These three are mutually inconsistent today (C-1, C-2, C-3).
 4. **`authController` + `middleware/auth.js`.** All four principals depend on them.
-5. **`db/migrate.js`.** A monolith of more than 2,000 lines. `CREATE … IF NOT EXISTS` matches on name only: a past drift broke v34, as documented in the file. It has **no production-URL guard** (`migrate.js:17`). Its `pool.end()` placement is load-bearing (v40 comment).
+5. **`db/migrate.js`.** A monolith of 2,748 lines. It is applied **manually** while Render auto-deploys `main` (`OPEN_FOLLOWUPS` #16), and a fresh database differs from production (N-18). `CREATE … IF NOT EXISTS` matches on name only: a past drift broke v34, as documented in the file. It has **no production-URL guard** (`migrate.js:17`). Its `pool.end()` placement is load-bearing (v40 comment).
 6. **`adminPanel.js`.** It monkey-patches `@adminjs/sql` internals, and the postinstall patch script also rewrites the adapter. An adapter upgrade will break it.
 7. **`Order.create`.** It owns pricing, stock decrement, `store_id` derivation and the mixed-store rejection.
 8. **Both mobile apps' `services/api.js` `request()`.** It handles token refresh with no single-flight (H-7).
@@ -248,7 +325,7 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 | N-1 | **High** | **Store portal never receives real-time order updates.** See the detail below. | `socketServer.js:100-125`, `flash-store-portal/src/hooks/useStoreSocket.js`, `OrdersPage.jsx:17,41` | Confirmed by reading; runtime not observed |
 | N-2 | High (latent) | **Store transfer recipient uses `type: "nuban"`** (Nigerian NUBAN). South African accounts need `basa`, so creating a store recipient will likely fail even with a live key. The portal has no route to it today, which is why it's latent. | `paystackService.js:370`, `storeBankingController` | Likely; not tested against Paystack |
 | N-3 | Medium | **Store `updateStock` doesn't validate values.** Only "is an object" is checked, so negative, fractional, string or `NaN`-producing values are stored. `Order.create` treats a non-numeric count as unlimited stock. The portal sends `Number(e.target.value)`, which can be negative or fractional, and the API is callable directly. | `storeInventoryController.js:169-190` | Confirmed (code) |
-| N-4 | Medium | **Admin-added inventory has `store_id = NULL`.** `Inventory.addProduct` doesn't set `store_id`, so orders for such products get `store_id NULL`: invisible in the portal, never commission-stamped (`if (order.store_id …)`), and unattributed for settlement. | `models/Inventory.js:39-52`; `orderStateMachineService.js:266` | Confirmed (code); production data not checked |
+| N-4 | Medium | **Admin-added inventory has `store_id = NULL`.** `Inventory.addProduct` (the legacy admin REST path) never sets `store_id`; the AdminJS form leaves it as optional free text (N-15). Orders for such products get `store_id NULL`: invisible in the portal, never commission-stamped (`if (order.store_id …)`), and unattributed for settlement. | `models/Inventory.js:39-52`; `orderStateMachineService.js:266` | Confirmed (code); production data not checked |
 | N-5 | Medium | **`/api/store-auth/reset-password` has no rate limiter** (`forgot-password` has one). Already logged as `OPEN_FOLLOWUPS` #13; still present. | `routes/storeAuthRoutes.js:32-36` | Confirmed |
 | N-6 | Low | **Store reset token is double-spendable.** The token is looked up without a row lock, and the consume UPDATE has no `used_at IS NULL` guard, so two concurrent requests with one token both succeed. Tokens are stored **plaintext**, so a DB read leak yields usable tokens. | `storeAuthController.js:231-247`, `:207` | Confirmed (code) |
 | N-7 | Low | **Store email case.** `StoreUser.findByEmail` is case-sensitive and `createStaff` doesn't normalize email, so `Bob@x` and `bob@x` can be two accounts, or a login can fail on case. | `models/StoreUser.js:14`, `storeStaffController` | Confirmed (code) |
@@ -258,6 +335,12 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 | N-11 | Low | The portal stock input fires a PATCH on every keystroke (`onChange` → `updateStock`), so typing "12" sends 1 then 12. Each request is full-replace, so out-of-order responses can persist a stale value. | `InventoryPage.jsx:59-63,236` | Confirmed (code) |
 | N-12 | Low | The store JWT (8 h, no refresh) lives in `localStorage`, so any XSS in the portal yields a full 8 h session. Common trade-off, noted for the record. | `StoreAuthContext.jsx`, `services/api.js` | — |
 | N-13 | Info | `Store.getDefaultStoreId` appears unused on `main`. | `models/Store.js` | Not exhaustively verified |
+| N-14 | Medium | **AdminJS store-order actions send no socket events.** See the detail below. | `adminPanel.js:1153,1172,1189`; `orderStateMachineService.js:94-95,565,655-701` | Confirmed (code) |
+| N-15 | Low | **AdminJS `flash_inventory` new/edit has gaps.** `stock_by_size` is written through the generic key-value editor with no validation, the same class as N-3. `store_id` is a free-text field, so a product can be created with no store or with a mistyped UUID; an FK violation surfaces as a raw error. New/edit is **not** logged to `admin_actions`; only `deactivateProduct` is. | `adminPanel.js:1760-1811` | Confirmed (code); key-value value types not verified at runtime |
+| N-16 | Low | The three `marketing_*` resources disable new/edit but leave AdminJS's generic **delete / bulkDelete** enabled, which is a hard `DELETE`. Every other resource disables delete. | `adminPanel.js:1814-1941` | Confirmed (code) |
+| N-17 | Info | Stale comment: it says `'suspended'` "is reachable only by a direct database change today", but the `suspendStore` action exists. | `adminPanel.js:172-175` vs `:2041` | Confirmed |
+| N-18 | Medium (process) | **A fresh-DB schema is not production's schema** (§3.2). CI and any local test DB built from `migrate.js` lack production-only objects such as the `orders.store_id` FK. Tests can pass on a schema that differs from prod. Matters for Phases 4–5. | `adminPanel.js:896-898,1073-1078,1755-1758`; `migrate.js:2569-2578` | Confirmed from code comments; production schema not inspected |
+| N-19 | Info | `orders.cash_otp_plain VARCHAR(6)` holds the cash OTP in plaintext alongside its hash. It is time-boxed and nulled on verification, deliberately so the customer can re-view it. That makes it readable by anyone with DB access during the window. | `migrate.js:626`, `cashOtpService.js:50-57,154` | Confirmed (code); design choice, not necessarily a bug |
 
 **N-1 in detail:**
 - `useStoreSocket` connects with the `STORE_JWT_SECRET`-signed token.
@@ -267,6 +350,41 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 - `OrdersPage` loads once and otherwise relies on the socket. There's no polling.
 - With a **15-minute acceptance timeout** that auto-rejects, a store watching the portal can miss new orders unless it refreshes manually.
 - The admin escalation email is the only safety net.
+
+**N-14 in detail:**
+- Accept, reject and mark-ready are called without `io`, and `emitOrderUpdate` returns early when `io` is missing.
+- When an admin acts, the customer gets no `order_update` socket event, and drivers get no `new_order_available` socket broadcast.
+- Push notifications and auto-assignment still run, so nothing is lost; the customer and driver apps simply don't update in real time.
+- An admin rejection is recorded as `cancelled_by_role = 'store'`, which is wrong attribution.
+
+### 6.1 Overlap with `OPEN_FOLLOWUPS.md` (read in full)
+
+**Status of the 22 items:**
+- **Resolved:** #3, #21, #22.
+- **Open:** all the rest.
+- **Deliberately not pre-launch gates:** #4–#12.
+
+**Items that bear directly on this document:**
+
+| Item | Relation |
+|---|---|
+| #13 reset-password unthrottled | **= N-5**, still present |
+| #14 no per-account store session revocation | still present; `authenticateStore` re-checks `is_active` live, so deactivation is the only lever |
+| #15 suspension notifies nobody; pending orders then time out as "store didn't respond" | still present (`Store.suspend` unchanged) |
+| #16 Render auto-deploys ahead of manual migrations | still present; see §3.2 |
+| #17 driver `transfer_recipients.account_number` plaintext | still present (`driverController.js:640`, file unchanged) |
+| #18 `orders.store_paid` means "card captured" | still present; a trap for settlement work |
+| #19 `order_cancellation_store_shares` never paid | still present |
+| #20 cash orders: store item value unrecorded | still present; **blocks Phase 2c** |
+| #1, #2 mobile Sentry symbolication | still present (mobile apps unchanged) |
+
+**From `HANDOFF_OCT_2026.md` (read in full)**, recorded there and not re-verified here because they are runtime or dashboard facts:
+- `DRIVER_TEST_MODE` is still `true` in production, so every driver signup is auto-approved and auto-subscribed (§3.1).
+- Operational rate limiters are keyed on IP. `otpLimiter` (3/60 s) sits on the only working checkout path, behind carrier CGNAT (§3.4).
+- There is no pre-expiry driver subscription warning, and the subscription is enforced only on `getAvailableOrders`, not on going online (§3.5).
+- RLS is disabled on all 66 tables (§3.6; judged acceptable at current scale).
+- R10 has not been verified through a real AdminJS submission (§3.8).
+- On Render's free tier, crons don't run while the service sleeps and fire late on wake (§6).
 
 ---
 
@@ -308,7 +426,9 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 
 **For the engineering setup (needed before Phase 4):**
 
-7. **Docker status.** The approval message left this placeholder unfilled: "working" / "installing native PostgreSQL 15 instead" / "rely on CI only for now". I need the actual answer before any local DB work.
+7. **Docker status: answered.** Docker is running, but it is not to be used before Phase 4. In Phase 4 the first step is to show evidence that `docker compose` and every test command use only the local Postgres and receive no real third-party keys, and to get approval before running anything.
+   - Note: `HANDOFF_OCT_2026.md` §8 says Docker Desktop would not start on this machine as of 2026-10-01. That is now superseded by the founder.
+   - Also: the founder moved `backend/.env` out of the repo, so it must not be recreated until Phase 4, and only pointing at local Postgres.
 8. **Render values I cannot read.** `NODE_ENV`, `DRIVER_TEST_MODE`, the Paystack key mode, `CASH_OTP_SECRET` strength, `APP_URL`. These stay manual dashboard checks.
 9. **Production data I cannot check.** How many `flash_inventory` rows and orders have `store_id IS NULL` (N-4)? How many orders are stuck in `waiting_for_driver` with `pending_cash` (P-2)?
 
@@ -326,13 +446,15 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 - The `Order.js` diff.
 - The `socketServer.js` auth handshake.
 
-**Read by diff outline, not line-by-line:**
-- `adminPanel.js` (+477 lines: store approve/reject/suspend actions, `commission_rates`, `email_events`, price validation).
-- `migrate.js` v34–v40: table, column, index and constraint statements read, prose comments skimmed.
+**Read in full in the Phase 1 completion pass** (requested on PR #34):
+- `backend/src/adminPanel.js`: all 2,425 lines. AdminJS lives in this single file; there is no `src/admin/` directory. Results are in §3.1, N-14 to N-17, and the AdminJS session row in §5.
+- `backend/src/db/migrate.js` v34–v40: the `migrateV34`–`migrateV40` bodies and their comments (`:2182-2746`), plus the runner block that invokes them (`:1060-1179`). Results are in §3.2 and N-18.
+- `docs/audits/HANDOFF_OCT_2026.md`: all 470 lines.
+- `docs/audits/OPEN_FOLLOWUPS.md`: all 935 lines. Results are in §6.1.
+- Supporting reads: `orderStateMachineService.js:90-105`, `:548-721` (store-stage functions, `emitOrderUpdate`) and `storeOrderController.js` imports and dispatch (`:3-146`).
 
-**Docs:**
-- `HANDOFF_OCT_2026.md`: §1, §2, §3.9, §4 and §5 read in full; the rest by outline.
-- `OPEN_FOLLOWUPS.md`: by outline and status lines.
-- The other ~40 audit docs: **not read in full in this phase**. They are referenced here only where HANDOFF cites them.
+**Docs not read in full:** the other ~38 files in `docs/audits/`. They are referenced only where HANDOFF or OPEN_FOLLOWUPS cites them.
+
+**AdminJS facts that are not verified at runtime:** no AdminJS session was opened, because there are no credentials and none should be guessed. Everything in §3.1 comes from the source.
 
 **Not done (by rule):** no tests run, no app started, no database or dashboard contacted. Untracked files `docs/audits/SECURITY_SELF_PENTEST_REPORT.md` and `flash-store-portal/.env` were left untouched; only the variable name was read from the latter.
