@@ -62,4 +62,4 @@
 | `SECTION_2.13_FULL_ADMIN_VISIBILITY_AUDIT.md` | Superseded | same | 2026-09-19 | 1 (0) |
 | `SECTION_2.15_FINAL_CONSOLIDATED_REPORT.md` | Superseded | `PROJECT_STATE.md`, `FOUND_ISSUES.md` | 2026-09-19 | 3 (0) |
 
-Not listed: `SECURITY_SELF_PENTEST_REPORT.md`, which is untracked by founder decision and must never be committed.
+Not listed: `SECURITY_SELF_PENTEST_REPORT.md`. **It is kept outside the repo by the founder**: both copies (the main folder's untracked file and a worktree's version) were moved to the founder's own secrets folder on 2026-11-20. `.gitignore` blocks `SECURITY_SELF_PENTEST_REPORT*.md` anywhere, so a copy can never be committed.

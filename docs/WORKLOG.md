@@ -21,6 +21,17 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 - **Docs** (List E): added `docs/audits/INDEX.md` and historical-log banners on `README.md` and `HOW_TO_RUN.md`; **no files moved**.
 - **GitHub:** 8 labels to be created; 27 issues drafted for founder approval (List F).
 - **Remote merged branches** (List B) are left for the founder to delete in the GitHub UI.
+- **Follow-up (2026-11-20, founder-approved):**
+  - The founder moved **both** pentest-report copies out of the repo. `.gitignore` now blocks `SECURITY_SELF_PENTEST_REPORT*.md`, and INDEX.md and PROJECT_STATE.md note that the report is kept outside the repo.
+  - Worktree `agent-acb9bacfac06dd01a` and its branch removed, without `--force`, clean.
+  - `multi-tester-readiness` deleted with `-D` after `git cherry` showed 0 outstanding commits.
+- **Context recorded:**
+  - A live Paystack key exists (Render env only); card payments stay OFF in the apps. FI-041 and FI-062 now read "latent until card payments are switched on in the app".
+  - iOS-only launch: FI-019's Android `FOREGROUND_SERVICE` part is out of scope for launch, and FI-033's iOS external-checkout item is flagged as launch-relevant.
+- **GitHub:**
+  - Milestone **iOS launch** (#1) created, with no issues assigned.
+  - **29 issues created (#40–#68)** with labels, verified against GitHub (29 open, 0 on a milestone, labels match exactly).
+  - Issue numbers added to `FOUND_ISSUES.md`.
 
 ## 2026-11-19 — Phase 2: guardrails (`foundation/guardrails`)
 - **Added:**

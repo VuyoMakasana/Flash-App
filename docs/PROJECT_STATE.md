@@ -502,7 +502,7 @@ Production today is the opposite: cash-only, 19 of 19 orders, no card payment ev
 
 **AdminJS facts that are not verified at runtime:** no AdminJS session was opened, because there are no credentials and none should be guessed. Everything in §3.1 comes from the source.
 
-**Not done (by rule):** no tests run, no app started, no database or dashboard contacted. Untracked files `docs/audits/SECURITY_SELF_PENTEST_REPORT.md` and `flash-store-portal/.env` were left untouched; only the variable name was read from the latter.
+**Not done (by rule):** no tests run, no app started, no database or dashboard contacted. Untracked files `docs/audits/SECURITY_SELF_PENTEST_REPORT.md` and `flash-store-portal/.env` were left untouched; only the variable name was read from the latter. *(2026-11-20: the founder has since moved every copy of the pentest report outside the repo; `.gitignore` now blocks `SECURITY_SELF_PENTEST_REPORT*.md`.)*
 
 ---
 
