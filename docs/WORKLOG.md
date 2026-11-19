@@ -6,12 +6,14 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ## 2026-11-19 — Phase 2: guardrails (`foundation/guardrails`)
 - **Added:**
-  - `docs/WORKFLOW.md`, `docs/FOUND_ISSUES.md` (67 items: condition-5 hazards, re-verified audit findings, N-1–N-21, schema-baseline items, founder-reported Render findings), `docs/APP_STATES.md` (money/order app-state standard, with today's backend and client error behaviour documented first), `docs/WORKLOG.md`;
+  - `docs/WORKFLOW.md`, `docs/FOUND_ISSUES.md` (68 items: condition-5 hazards, re-verified audit findings, N-1–N-21, schema-baseline items, founder-reported Render findings), `docs/APP_STATES.md` (money/order app-state standard, with today's backend and client error behaviour documented first), `docs/WORKLOG.md`;
   - PR and issue templates;
   - `.claude/settings.json` deny/ask rules;
   - a "Read first" pointer in `CLAUDE.md`.
 - **Plan change:** Phase 5A (app state inventory, read-only) added after Phase 5.
 - **Found while writing APP_STATES.md:** FI-059 (`validate()` uses `err.param`, undefined on express-validator 7.3.2).
+- **Found checking why Render did not deploy PR #36:** FI-077. The CI Secrets Scan fails on **every push to `main`** (TruffleHog base == head); 8 of 8 recent `main` runs failed on that job alone. Reported, not fixed (CI change needs approval).
+- **Started `docs/LAUNCH_INFRA_CHECKLIST.md`** (L-1 branch protection on `main`, L-2 fix the Secrets Scan, …).
 - **Verification:** documentation and config only, so no runtime change. The deny rules' effect was confirmed via `/permissions`, run by the founder.
 
 ## 2026-11-19 — Schema baseline, fix N-18 (PR #36, merged)

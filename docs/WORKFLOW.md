@@ -82,15 +82,27 @@ Each phase has its own branch and PR, and **stops for the founder's "approved"**
 
 ## 6. Guardrails in `.claude/settings.json`
 
-Project-level **deny** rules block the most dangerous commands for every Claude Code session in this repo:
-- force-push and history rewrites, pushes to `main`, remote branch deletion, PR merges;
-- the two hazard scripts;
-- reading or editing real `.env` files and the raw production dumps;
-- the Supabase and Render MCP tools.
+Project-level rules for every Claude Code session in this repo.
 
-Running `migrate.js` directly is **ask** (it needs explicit confirmation), not deny, because Phase 4 runs it against local Postgres.
+**Deny (never allowed):**
+- force-push; pushes to `main`; remote branch deletion; history rewrites (`rebase`, `commit --amend`, `filter-branch`/`filter-repo`);
+- `git reset --hard`, `git clean`, `rm -r` / `rm -rf`;
+- PR merges and repo deletion;
+- the two hazard scripts;
+- the Supabase / Render CLIs (`supabase`, `npx supabase`, `render`) and the Supabase / Render MCP tools;
+- the Read / Edit / Write tools on real `.env` files and the raw production dumps.
+
+**Ask (needs explicit confirmation each time):**
+- **every `git push`**;
+- `git branch -D`, `git restore`, `git checkout --`;
+- `psql`, `pg_dump`, `pg_restore`;
+- running `migrate.js` directly. That's ask, not deny, because Phase 4 runs it against local Postgres.
+
+Deny always wins over ask and allow.
 
 **Limits, stated honestly:**
-- Bash rules match the **command prefix**. They can't stop every equivalent spelling (for example a different shell or a wrapper script).
-- Rules are a backstop; the rules in §1 remain the primary control.
+- **Bash rules match how a command starts.** They can't stop every equivalent spelling, for example `git push origin mybranch --force` with the flag at the end, a different shell, or a wrapper script.
+- **`Read(...)` rules do not block shell reads.** They govern Claude Code's Read tool only; a shell command such as `cat backend/.env` is not covered. **The real protection is that no production `.env` exists in the repo**: the founder moved `backend/.env` out, and Phase 4 recreates it pointing at local Postgres only, with no real keys. Keep it that way.
+- **These rules are client-side and can be bypassed.** The server-side control is **GitHub branch protection on `main`** (require PRs, passing checks and no force-push). Turning it on is in `docs/LAUNCH_INFRA_CHECKLIST.md`.
+- Rules are a backstop; §1 remains the primary control.
 - Personal `.claude/settings.local.json` files may add allows, but **deny rules win**.
