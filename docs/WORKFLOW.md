@@ -47,7 +47,11 @@
    - update any doc the change makes inaccurate.
 8. **PR** using the template (summary, impact analysis, verification, docs, rollback). Wait for CI on the run's own head SHA, report, and **stop**.
 
-**Deploys:** Render auto-deploys `main` **only after CI passes** (founder, 2026-11-19). Migrations are **not** part of a deploy: they're manual and founder-run. Any PR that needs a schema change must say so at the top.
+**Deploy rules** (founder-confirmed from Render, 2026-11-20):
+- **Backend (`Flash-App` on Render, `rootDir=backend`) auto-deploys only for commits on `main` that change something under `backend/` _and_ pass CI.** A commit that touches only docs, `.github/`, `.claude/`, the apps or the portal does **not** redeploy the backend. That is by design, not a failure. Examples: `4de9d57` (`ci.yml` only) and `abcfa49` (docs/settings only) were skipped; `9b20249` (backend) was correctly blocked by the then-failing Secrets Scan (FI-077).
+- The **store portal** (a static site) redeploys on every `main` commit, within seconds.
+- **Migrations are not part of any deploy.** They're manual and founder-run, and `migrate.js` is never run against production. Any PR that needs a schema change must say so at the top.
+- If a GitHub check run is ever stuck `in_progress` on a backend commit (FI-079), Render will keep waiting. Check the commit's check runs first.
 
 ## 4. Money and order actions
 
@@ -75,7 +79,7 @@ Each phase has its own branch and PR, and **stops for the founder's "approved"**
 | 4 | Local test DB isolation: `.env.test.example`, local-host guard, seed data, `docs/TESTING.md`, `docs/ENVIRONMENT.md`. First prove docker compose and every test command use only local Postgres and get no real third-party keys. | |
 | 5 | Integration characterization tests on money and order paths (`test.failing` with issue numbers) | |
 | **5A** | **App state inventory (read-only).** For every action in both apps and the portal that touches money, orders, OTP, payouts, refunds, returns, auth or delivery photos, trace button → API → backend → DB → response → screen. Record today's behaviour on success, each error type, timeout, double-tap, app backgrounded and offline (file:line), and every gap against `APP_STATES.md`, in `docs/APP_STATES_INVENTORY.md`. **No code changes.** Draft one GitHub issue per gap for founder approval. | **Added 2026-11-19** |
-| 6 | CI hardening: pinned actions, `docs/CI_CD.md`, **`schema_check.sh` in CI**, **CI Postgres 15 → 17** | |
+| 6 | CI hardening: pinned actions, `docs/CI_CD.md`, **`schema_check.sh` in CI**, **CI Postgres 15 → 17**, and **remove the stale `production-hardening-final` push trigger** in `ci.yml` (a June branch, 80 commits off `main`) | |
 | 7 | Cron start/finish logging; kill switches (`PAYOUTS_ENABLED`, `CARD_PAYMENTS_ENABLED`, unset = today's behaviour); `/health` analysis; Sentry doc; `docs/RUNBOOK.md` | |
 | 8 | Secrets hygiene; `docs/SECRETS.md` | |
 | 9 | `CLAUDE.md` rewrite; `docs/LAUNCH_INFRA_CHECKLIST.md`; final report | |
