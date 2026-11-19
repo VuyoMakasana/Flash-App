@@ -171,7 +171,7 @@ Each migration runs in its own transaction on its own client (`migrate.js:1076-1
 
 | Ver | Objects | Facts that matter |
 |---|---|---|
-| v34 | `stores`, `store_users`, `store_actions` (CREATE IF NOT EXISTS); `flash_inventory.store_id UUID` + FK → `stores` (nullable); `store_users.force_password_reset`, `password_changed_at`; `store_password_tokens` | Written to **mirror production's existing shape**: these tables first reached prod from another branch. `store_users.email` is `UNIQUE` and **case-sensitive** (N-7). `role` CHECK has six roles. `store_password_tokens.token VARCHAR(128) UNIQUE` is stored **plaintext** (N-6). Cascades on `store_users`/`store_actions` from `stores`. |
+| v34 | `stores`, `store_users`, `store_actions` (CREATE IF NOT EXISTS); `flash_inventory.store_id UUID` + FK → `stores` (nullable); `store_users.force_password_reset`, `password_changed_at`; `store_password_tokens` | Written to **mirror production's existing shape**: these tables first reached prod from another branch. `store_users.email` is `UNIQUE` and **case-sensitive** (N-7). `role` CHECK has six roles. `store_password_tokens.token VARCHAR(128) UNIQUE` is stored **plaintext** (N-6). In a **fresh** DB, `store_users`/`store_actions` cascade-delete from `stores`. **Production differs:** `store_users_store_id_fkey` there has **no** `ON DELETE CASCADE`, per the live-schema read in `STORE_EMAIL_SQUATTING_PROPOSAL.md` §1 (see N-18). |
 | v35 | `idx_orders_store_id_created_at` | Named to avoid the `IF NOT EXISTS` name-only trap (an older `idx_orders_store_id` exists). The redundant old index is left in place. |
 | v36 | `stores.status` (NOT NULL, default `pending`, CHECK of 5 states), `reviewed_by` → `admins`, `reviewed_at`, `rejection_reason`, `idx_stores_status_created` | Existing stores backfilled to `approved` via `WHERE status IS NULL` (idempotent). |
 | v37 | `email_events` (`svix_id UNIQUE`), `store_users.{welcome,reset}_email_status[_at]` | Covers every recipient; dedupe on `svix_id`. |
@@ -183,7 +183,8 @@ Each migration runs in its own transaction on its own client (`migrate.js:1076-1
 - the `orders.store_id → stores` FK (`adminPanel.js:1073-1078`);
 - `flash_inventory.store_id` existing before v34 (`:1755-1758`);
 - `commission_rates` from an unmerged v31;
-- `stores.onboarding_verified_by` in one environment but not another (`:896-898`).
+- `stores.onboarding_verified_by` in one environment but not another (`:896-898`);
+- **a different definition:** `store_users_store_id_fkey` is `ON DELETE CASCADE` in `migrate.js:2249` but has no `ON DELETE` clause in production (`STORE_EMAIL_SQUATTING_PROPOSAL.md` §1). Deleting a store therefore behaves differently in tests than in production.
 
 `orders.store_id` itself became UUID in v26/v27 (`migrate.js:1822-1840`).
 
@@ -251,7 +252,7 @@ Change these only with characterization tests in place.
 - `fleetIntelligenceService.js`
 - all of `flash-user-app/` and `flash-driver-app/`
 
-For those files, the earlier audit's line references are still exact.
+For those files the *code* is unchanged. **Correction (verification pass):** that does not make the earlier audit's line references exact. Some were wrong in the original audit (C-2, H-8, H-10, H-16, H-17). The rows below carry the corrected, independently verified lines; see §10.
 
 ### Production-log findings
 
@@ -266,8 +267,8 @@ For those files, the earlier audit's line references are still exact.
 
 | # | Finding | Status | Location |
 |---|---|---|---|
-| C-1 | Driver payout debits the wallet twice, or loses the money | **Present** | `DriverWallet.js:129`, `payoutService.js:37`, `:186` |
-| C-2 | Commission debt forgiven on partial payouts; misleading rollback | **Present** | `driverCommissionService.js:540`, `:512` |
+| C-1 | Driver payout debits the wallet twice, or loses the money | **Present** | `DriverWallet.js:129-134`, `payoutService.js:16,37`, `:186-191`. The failure path (`:165-172`) never re-credits. **Worse than stated:** on an instant Paystack success, finalize hits C-3's 31-char insert, rolls back, and the request is marked `failed` although the money was sent. |
+| C-2 | Commission debt forgiven on partial payouts; misleading rollback | **Present** | `driverCommissionService.js:187-248` (the file is 340 lines; the earlier `:512`/`:540` were wrong). Partial path `:229-247`; misleading message `:224`. |
 | C-3 | `'payout_debit_reconcile_required'` (31 chars) into `VARCHAR(30)` | **Present** | `migrate.js:402`, `payoutService.js:207` |
 | C-4 | OAuth account takeover (no `email_verified`; Apple trusts client `email`) | **Present** | `authController.js:322`, `:384`, `:614`, `:672` |
 | C-5 | Crons twice (= P-1). Duplicate escalation emails. | **Changed** | Escalation now selects `… IS NULL` (`orderStateMachineService.js:965`, `:994`), but the UPDATE at `:973` / `:1002` has no `IS NULL` guard. Two cron copies can both select before either updates. Root cause (P-1) present. |
@@ -278,16 +279,16 @@ For those files, the earlier audit's line references are still exact.
 | # | Finding | Status | Location |
 |---|---|---|---|
 | H-7 | Token refresh race → reuse detection revokes all sessions | **Present** | `flash-user-app/services/api.js:93`, `flash-driver-app/services/api.js:89` |
-| H-8 | Driver location broken in real conditions (background token expiry, no foreground reporting, Android FGS permissions) | **Present** (code; device behaviour not verified) | `flash-driver-app/.../backgroundLocationTask.js:417` |
+| H-8 | Driver location broken in real conditions | **Partially correct, corrected** (device behaviour not verified) | `flash-driver-app/tasks/backgroundLocationTask.js:85-114` (the file is 240 lines). The task re-reads `FLASH_DRIVER_TOKEN` from SecureStore on each ping, so a foreground refresh **does** reach it. "Never refreshed" was overstated: the task cannot refresh by itself, so its POSTs 401 silently after about 15 min of background-only use. No foreground reporting: `driverApi.updateLocation` is never called. `app.config.js:81-90` lacks FOREGROUND_SERVICE. |
 | H-9 | Driver can cancel a paid order with no refund or penalty | **Present** | `orderController.js:291` area (driver path unchanged in the diff); `orderStateMachineService.js:59–61` allow `→ cancelled` pre-pickup |
-| H-10 | `markCashFailed` repeatable → abuse flag in two calls | **Present** | `paymentController.js:676` |
-| H-11 | Driver dashboard socket never reconnects after `auth_expired` (~14 min) | **Present** | `flash-driver-app/app/driver/dashboard.js:159`, `socketServer.js` 14-min re-verify |
+| H-10 | `markCashFailed` repeatable → abuse flag in two calls | **Present** | `paymentController.js:523-575` (the file is 584 lines; `:676` was wrong). The only precondition is `status === 'delivered'` (`:550`); the flag is set at 2 or more (`:557-567`). |
+| H-11 | Driver dashboard socket never reconnects after `auth_expired` | **Present** (timing corrected) | `flash-driver-app/app/driver/dashboard.js:151-182`; the context token is only set at `DriverContext.js:81,165,211,221`. The server checks every 14 min (`socketServer.js:139-155`), and a 15-min token is still valid at the first check, so the disconnect comes at about **28 min**, not about 14. |
 | H-12 | User TrackingScreen leaks a 10 s poller per `connect_error` | **Present** | `flash-user-app/screens/TrackingScreen.js:252` |
 | H-13 | OrderStatusScreen crashes with only `orderId` | **Present** | `OrderStatusScreen.js:131` |
 | H-14 | Pending drivers can't log back in to finish onboarding | **Present** | `authController.js:575`, `flash-driver-app/app/auth/login.js:74` |
 | H-15 | Fabricated line items: non-inventory UUID accepts a client price; the no-`productId` path always 500s | **Present** | `Order.js:196-213` (partner/external paths use `validateExternalItemPrice(item.price)`, a bound, not a server price); `order_items.product_id VARCHAR(100) NOT NULL` (`migrate.js:220`) |
-| H-16 | Cash returns can never be refunded; duplicate `order_item_id` inflates refunds | **Present** | `refundService.js:271`, `Return.js:76` |
-| H-17 | Customers can see driver live location and phone on any historical order | **Present** (partly mitigated) | `Order.js:386-391`, `:439-442` still select `driver_phone` / `current_lat` with no status gate. `Order.js:430-432` now nulls the phone only for a **blocked** pair. `User.js:152`, `Tracking.js:537` unchanged. |
+| H-16 | Cash returns can never be refunded | **Partially correct, corrected** | Cash part present: `refundService.js:59` (the file is 267 lines) throws for anything but card; `Return.finalizeRefund` (`Return.js:295`) calls it. **The duplicate-inflation half was wrong:** `return_request_items` has `UNIQUE (return_id, order_item_id)` (`migrate.js:1438`), so a duplicate insert rolls back the whole request. *Caveat:* that holds for a fresh DB. Whether production has this constraint is checked in the schema-baseline work (N-18). |
+| H-17 | Customers can see the driver's live location and phone on **their own** historical orders, at any status | **Present** (scope corrected) | `Order.js:385-390` (`getByIdWithDetails`), `:438-441` (`getUserOrders`), `User.js:~147-150`, `Tracking.js:6-7` (the file is 26 lines; `:537` was wrong). The phone is nulled for a blocked pair only in `getByIdWithDetails` (`Order.js:430-432`); the other three queries don't. |
 | H-18 | Real-time admin alerts reach no one (admin tokens ≠ `JWT_SECRET`) | **Present** | `socketServer.js:108` verifies only `JWT_SECRET`. The `admin` room join exists, but an admin token never authenticates. |
 
 ### Medium
@@ -323,10 +324,10 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 | # | Sev | Finding | Evidence | Confidence |
 |---|---|---|---|---|
 | N-1 | **High** | **Store portal never receives real-time order updates.** See the detail below. | `socketServer.js:100-125`, `flash-store-portal/src/hooks/useStoreSocket.js`, `OrdersPage.jsx:17,41` | Confirmed by reading; runtime not observed |
-| N-2 | High (latent) | **Store transfer recipient uses `type: "nuban"`** (Nigerian NUBAN). South African accounts need `basa`, so creating a store recipient will likely fail even with a live key. The portal has no route to it today, which is why it's latent. | `paystackService.js:370`, `storeBankingController` | Likely; not tested against Paystack |
+| N-2 | High (latent) | **Transfer recipients use `type: "nuban"`** with `currency: "ZAR"`. Paystack's NUBAN is Nigerian, and South Africa uses `basa` (Paystack API knowledge, not shown in the repo). Affects **both store and driver** bank registration: `storeBankingController.js:126` **and** `driverController.js:617`. Latent until a live key exists. | `paystackService.js:368-376` | Code confirmed; Paystack behaviour not tested |
 | N-3 | Medium | **Store `updateStock` doesn't validate values.** Only "is an object" is checked, so negative, fractional, string or `NaN`-producing values are stored. `Order.create` treats a non-numeric count as unlimited stock. The portal sends `Number(e.target.value)`, which can be negative or fractional, and the API is callable directly. | `storeInventoryController.js:169-190` | Confirmed (code) |
 | N-4 | Medium | **Admin-added inventory has `store_id = NULL`.** `Inventory.addProduct` (the legacy admin REST path) never sets `store_id`; the AdminJS form leaves it as optional free text (N-15). Orders for such products get `store_id NULL`: invisible in the portal, never commission-stamped (`if (order.store_id …)`), and unattributed for settlement. | `models/Inventory.js:39-52`; `orderStateMachineService.js:266` | Confirmed (code); production data not checked |
-| N-5 | Medium | **`/api/store-auth/reset-password` has no rate limiter** (`forgot-password` has one). Already logged as `OPEN_FOLLOWUPS` #13; still present. | `routes/storeAuthRoutes.js:32-36` | Confirmed |
+| N-5 | Low (downgraded) | **`/api/store-auth/reset-password` has no route-level limiter** (`forgot-password` has `storePasswordResetLimiter`). It **is** covered by the global `app.use("/api/", limiter)` (100 requests per 15 min per IP, `server.js:188`), so "no rate limiter" was overstated. `OPEN_FOLLOWUPS` #13. | `routes/storeAuthRoutes.js:27-37` | Confirmed |
 | N-6 | Low | **Store reset token is double-spendable.** The token is looked up without a row lock, and the consume UPDATE has no `used_at IS NULL` guard, so two concurrent requests with one token both succeed. Tokens are stored **plaintext**, so a DB read leak yields usable tokens. | `storeAuthController.js:231-247`, `:207` | Confirmed (code) |
 | N-7 | Low | **Store email case.** `StoreUser.findByEmail` is case-sensitive and `createStaff` doesn't normalize email, so `Bob@x` and `bob@x` can be two accounts, or a login can fail on case. | `models/StoreUser.js:14`, `storeStaffController` | Confirmed (code) |
 | N-8 | Low | `reactivateStaff` can reactivate an anonymized (deleted) store account. | `storeStaffController` | Confirmed (code) |
@@ -356,6 +357,35 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 - When an admin acts, the customer gets no `order_update` socket event, and drivers get no `new_order_available` socket broadcast.
 - Push notifications and auto-assignment still run, so nothing is lost; the customer and driver apps simply don't update in real time.
 - An admin rejection is recorded as `cancelled_by_role = 'store'`, which is wrong attribution.
+
+### 6.0 Findings checked against the confirmed payment model
+
+The source is `docs/audits/PAYMENT_MODEL_AND_PORTAL_AUDIT.md` (PR #25, merged and read in full). It defines the confirmed target model:
+1. The **item price is always paid by card**.
+2. The **delivery fee** is the customer's choice: card, or cash to the driver.
+3. **Stores receive only item earnings**, never delivery money or anything a driver collected.
+
+Production today is the opposite: cash-only, 19 of 19 orders, no card payment ever processed. The audit says the target model cannot ship before a live Paystack key, because with `sk_test_` no order could be placed at all (its B2).
+
+| Finding here | Effect of the target model | Changed? |
+|---|---|---|
+| P-2 cash order with no driver hangs | Still true and still launch-blocking **today**, because today every order is cash. Under the target model every order's item is card-paid, so the cron's `payment_status = 'paid'` filter may match once item-paid is recorded that way. **The fix must not hard-code today's cash-means-whole-order assumption.** | Recommendation refined; severity unchanged |
+| C-1 / C-2 / C-3 driver payout and commission debt | Unaffected. The audit confirms driver earnings already derive only from `delivery_fee` (`utils/helpers.js:43`). | No |
+| H-10 `markCashFailed` repeatable | Still present. Under the target model, cash covers only the delivery fee, so the money at stake per abuse is smaller; the customer-flagging harm is unchanged. | Description refined |
+| H-16 cash returns can never be refunded | Still true today. Under the target model the item is always card-paid, so returns use the card refund path and the cash half becomes moot. (The duplicate-inflation half was found incorrect in §10.) | Description refined; severity unchanged until the model ships |
+| Medium: cash orders inflate `pending_balance` | Unaffected (driver-side accounting). | No |
+| M-2 commission stamp without SAVEPOINT | Unaffected. Commission is a share of item value under either model. | No |
+| N-2 `nuban` for SA recipients | Unaffected and still latent. Store payouts are unblocked only by a live key, and become **more** important under the target model, because Flash then holds all item money and must settle it. | Importance up once the key exists |
+| N-4 admin-added products have no store | Unaffected, but more consequential: under the target model, settlement aggregates stamped `store_commission`, and NULL-store orders would be silently excluded. | Consequence sharpened |
+| §7 "Store settlement (2c) blocked on key **and** #20" | The audit (§4) says the target model **dissolves** #20's settlement question: Flash always receives item money, so 2c needs no payment-method branch. #20 should be **re-scoped, not closed**: driver cash custody is untracked until `cash_to_collect` becomes `delivery_fee` (B4). | Yes, see §7 |
+| `computeCancellationSplit` (not previously a finding here) | **Becomes wrong under the target model** (B5). Its `isCash` branch assumes no item money was collected. It must change **with** the model change, not before (HANDOFF §5). | New, latent |
+
+**Payment-model gaps from the audit, all still open** and all gated on a live Paystack key (B2):
+- **B1:** the app offers only cash.
+- **B3:** `delivery_payment_method` only ever says `'cash'`, in lockstep with `payment_method`.
+- **B4:** `cash_to_collect = order.total`; it should be `delivery_fee`.
+- **B5:** see the table above.
+- **B6:** `delivery_payment_status` is a driver-payout lifecycle despite its name.
 
 ### 6.1 Overlap with `OPEN_FOLLOWUPS.md` (read in full)
 
@@ -401,8 +431,9 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 | Store suspension (per-request) | **Built** | Notifies nobody (`OPEN_FOLLOWUPS` #15). |
 | Store commission stamping (v39) | **Built** | No-SAVEPOINT risk; null `store_id` orders skipped (N-4); rate changes need SQL (A4). |
 | Store payout destination (v38) | **Partial, hidden** | Unverified registration; `nuban` (N-2); no portal route. |
-| Store settlement (Phase 2c) | **Not started (paused)** | Blocked on a live Paystack key and `OPEN_FOLLOWUPS` #20 (cash item value owed to store is unrecorded). |
-| Card-only checkout rewrite / cancellation split | **Not started (paused)** | Blocked on a live key. |
+| Store settlement (Phase 2c) | **Not started (paused)** | Blocked on a live Paystack key. Under the confirmed target model, `OPEN_FOLLOWUPS` #20's settlement question dissolves (§6.0). #20 is re-scoped to the untracked driver cash custody. |
+| Target payment model: item always card, delivery card or cash | **Not started (paused)** | Gaps B1, B3–B6 (§6.0); blocked on a live key (B2). `computeCancellationSplit` must change with it. |
+| Store portal finish line (`PAYMENT_MODEL_AND_PORTAL_AUDIT.md` §5.A) | **Partial** | **Shipped:** A1 product edit and A2 reactivate (PR #26). **Open:** **A3** a store cannot edit its own profile (name, address, logo, banner, description; admin-only workaround); **A4** a commission-rate change needs SQL; **A5** `store_users` has no admin surface (see §8 for PR #16's proposal); **A6** bounce visibility has no alerting. |
 | Product price integrity (v40) | **Built** | All four write paths and a DB CHECK. |
 | Email (Resend) + bounce visibility (v37) | **Built** | — |
 | Customer email verification | **Not reachable** | C-6. |
@@ -422,6 +453,14 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 3. **ZAR bank verification for drivers and stores.** Adopt Paystack `/bank/validate`, or ship unverified for drivers too? Confirm the recipient type (`basa`) once a live key exists.
 4. **Store settlement at one store.** Settle manually for launch, or block on Phase 2c? (`OPEN_FOLLOWUPS` #20.)
 5. **Should store staff see customer/driver phone numbers** (N-10)?
+5a. **Squatted store-owner emails** (`STORE_EMAIL_SQUATTING_PROPOSAL.md`, PR #16, merged as a document; **nothing is built**).
+   - **The problem:** `/apply` creates real `stores` and `store_users` rows, and `store_users.email` is globally unique. Anyone can therefore permanently block a business's email, and only hand-written SQL against production can undo it.
+   - **Your decision:**
+     - **Option C (recommended by the proposal):** separate `store_applications` from accounts. Cheapest now, at 1 store and 0 pending applications.
+     - **Option A (stopgap):** an admin "release email" tombstone action.
+     - **Option B:** status-scoped uniqueness. The proposal rejects it.
+   - **Also open:** whether applicants get an acknowledgement email, which would need a per-address throttle.
+   - **Related:** PROJECT_STATE A5 and N-7.
 6. **The other open decisions** in `docs/audits/HANDOFF_OCT_2026.md` §4: premium tier, masked calling, admin sub-roles, subscription enforcement, refund notification, `store_boosts`, commission-rate UI.
 
 **For the engineering setup (needed before Phase 4):**
@@ -453,8 +492,63 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 - `docs/audits/OPEN_FOLLOWUPS.md`: all 935 lines. Results are in §6.1.
 - Supporting reads: `orderStateMachineService.js:90-105`, `:548-721` (store-stage functions, `emitOrderUpdate`) and `storeOrderController.js` imports and dispatch (`:3-146`).
 
+**Read in full in the verification pass** (`foundation/verify-phase1`, after PRs #16 and #25 merged):
+- `docs/audits/PAYMENT_MODEL_AND_PORTAL_AUDIT.md`: all 416 lines. Results are in §6.0 and §7.
+- `docs/audits/STORE_EMAIL_SQUATTING_PROPOSAL.md`: all 262 lines. Results are in §8 item 5a and the N-18 FK difference.
+
 **Docs not read in full:** the other ~38 files in `docs/audits/`. They are referenced only where HANDOFF or OPEN_FOLLOWUPS cites them.
 
 **AdminJS facts that are not verified at runtime:** no AdminJS session was opened, because there are no credentials and none should be guessed. Everything in §3.1 comes from the source.
 
 **Not done (by rule):** no tests run, no app started, no database or dashboard contacted. Untracked files `docs/audits/SECURITY_SELF_PENTEST_REPORT.md` and `flash-store-portal/.env` were left untouched; only the variable name was read from the latter.
+
+---
+
+## 10. Verification (independent re-check, 2026-11-19)
+
+**How it was done:**
+- A fresh subagent with no access to this document or the session that wrote it was given only a one-line claim with `file:line` for each Critical, production and High finding (C-1–C-6, P-2, H-7–H-18), the two new Highs (N-1, N-2) and five Medium spot-checks (M-1–M-5).
+- It checked each claim read-only against `main` @ `8ceaa5a`. It opened nothing under `docs/` and no `.env` files.
+- Every disagreement with this document was then re-checked by hand with `grep`/`wc`/`sed` on the same tree, and the corrected rows above carry the verified lines.
+
+**Results** (25 claims: 18 confirmed as written, 4 confirmed with wrong lines or timing, 3 partially correct):
+
+| Claim | Subagent verdict | Re-check | Evidence / correction |
+|---|---|---|---|
+| C-1 payout double-debit | CONFIRMED | agree | `DriverWallet.js:129-134`, `payoutService.js:16,37,186-191`; no re-credit on failure. Plus a compounding case with C-3 (row updated). |
+| C-2 debt forgiven | CONFIRMED, wrong lines | agree, **lines fixed** | `driverCommissionService.js:187-248` (340-line file) |
+| C-3 31-char into VARCHAR(30) | CONFIRMED | agree | `migrate.js:402`, `payoutService.js:207` |
+| C-4 OAuth takeover | CONFIRMED | agree | `authController.js:322-329,384-392,614,672`; `emailVerified` is used only for new users (`googleAuthService.js:46`) |
+| C-5 crons twice | CONFIRMED | agree | `src/server.js:979,1002`; escalation `orderStateMachineService.js:965/973,994/1002` |
+| C-6 verification unreachable | CONFIRMED | agree | only `POST /api/auth/user/verify-email` exists (`authRoutes.js:48`); the email button uses an unregistered `flash://` link; the user app never calls verify. What `APP_URL` serves is still unverifiable. |
+| P-2 cash no-driver hang | CONFIRMED | agree | `server.js:652-662` vs `Payment.js:194` `pending_cash` |
+| H-7 refresh race | CONFIRMED | agree | `flash-user-app/services/api.js:92-118`, `flash-driver-app/services/api.js:88-114`, `authController.js:450-470` |
+| H-8 driver location | PARTIALLY CORRECT | agree, **row corrected** | the task re-reads the token per ping; it cannot refresh by itself (`backgroundLocationTask.js:85-114`, 240-line file) |
+| H-9 driver cancels paid order | CONFIRMED | agree | `orderController.js:283-334`; `orderStateMachineService.js:60-61,196,211-221` |
+| H-10 markCashFailed | CONFIRMED, wrong lines | agree, **lines fixed** | `paymentController.js:523-575` |
+| H-11 socket after auth_expired | CONFIRMED, timing differs | agree, **timing fixed** | about 28 min, not about 14 |
+| H-12 poller leak | CONFIRMED | agree | `TrackingScreen.js:252-292` |
+| H-13 OrderStatusScreen crash | CONFIRMED | agree | `OrderStatusScreen.js:57-60,131`; `PaymentScreen.js:86` navigates with `{ orderId }` only |
+| H-14 pending driver login | CONFIRMED | agree | `authController.js:575-586`, `login.js:72-75`, `driverRoutes.js:62-67`. Caveat: a stale SecureStore token on the same device might still allow onboarding (not verified). |
+| H-15 client-priced items | CONFIRMED | agree | `Order.js:196-213,319-323`; `migrate.js:220` |
+| H-16 cash returns / duplicates | PARTIALLY CORRECT | agree, **row corrected** | the cash half holds (`refundService.js:59`); the duplicate half is wrong because of `UNIQUE (return_id, order_item_id)` (`migrate.js:1438`), pending a production-schema check |
+| H-17 driver phone/location | CONFIRMED, lines off | agree, **row corrected** | scope is the customer's own orders; `Tracking.js` is 26 lines |
+| H-18 admin sockets | CONFIRMED | agree | `socketServer.js:100,108` vs `adminController.js:35` |
+| N-1 store portal no live updates | CONFIRMED | agree | `useStoreSocket.js`, `storeAuthController.js:68-76`, `OrdersPage.jsx:35,41` |
+| N-2 `nuban` | CONFIRMED (code) | agree, **scope widened** | also used for **driver** recipients (`driverController.js:617`). The SA `basa` rule is external Paystack knowledge. |
+| M-1 rate-limit-redis | CONFIRMED | agree | not in `backend/package.json` |
+| M-2 commission without SAVEPOINT | CONFIRMED | agree | no `SAVEPOINT` anywhere in `backend/src` |
+| M-3 store updateStock | CONFIRMED | agree | `storeInventoryController.js:170-193`; arrays pass too |
+| M-4 AdminJS session | CONFIRMED | agree | `adminPanel.js:2358-2371` |
+| M-5 reset-password limiter | PARTIALLY CORRECT | agree, **N-5 downgraded to Low** | the global `/api/` limiter covers it (`server.js:188`) |
+
+**Still not verifiable from the repo:**
+- device behaviour (H-8, H-12, H-13);
+- the generated Android manifest;
+- whether `STORE_JWT_SECRET` or `ADMIN_JWT_SECRET` happen to equal `JWT_SECRET` in production (that would change N-1 and H-18);
+- `REDIS_URL`;
+- what `APP_URL` serves;
+- Paystack's real response to `nuban`/ZAR;
+- whether production has the `return_request_items` UNIQUE constraint.
+
+**Not re-verified in this pass:** the Low items and the Medium items beyond M-1 to M-5.
