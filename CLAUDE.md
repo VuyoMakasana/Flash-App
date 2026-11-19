@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> ## 📌 Read first (added 2026-11-19, foundation Phase 2)
+>
+> 1. **[`docs/WORKFLOW.md`](docs/WORKFLOW.md)**: the absolute rules (production is off-limits; `migrate.js` is never run against production), the change process, and the phase plan.
+> 2. [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md): the current state of the codebase.
+> 3. [`docs/FOUND_ISSUES.md`](docs/FOUND_ISSUES.md): every known open issue. Record new ones there; don't fix them on the spot.
+> 4. [`docs/SCHEMA_BASELINE.md`](docs/SCHEMA_BASELINE.md): production schema, migration rules, and the schema check.
+> 5. [`docs/APP_STATES.md`](docs/APP_STATES.md): the standard for every money/order action in the apps and the portal.
+>
+> Project deny rules live in [`.claude/settings.json`](.claude/settings.json). Some statements below are stale; where they conflict, the docs above win.
+
 > ## ⚠️ START HERE IF YOU HAVE NO MEMORY OF PRIOR WORK
 >
 > **Read [`docs/audits/HANDOFF_OCT_2026.md`](docs/audits/HANDOFF_OCT_2026.md) first.**
