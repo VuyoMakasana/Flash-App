@@ -34,3 +34,6 @@ backend/logs/
 # ── Build output ──────────────────────────────────────────────────────────
 dist/
 build/
+# Schema-baseline inputs produced by the founder from production (never commit raw)
+schema-baseline-input/
+scripts/schema-baseline/.schema-check-tmp/

@@ -1,0 +1,6 @@
+# Shell scripts run inside Linux containers: they must keep LF line endings
+# even on Windows checkouts with core.autocrlf=true (CRLF breaks `sh`).
+scripts/schema-baseline/*.sh text eol=lf
+# Committed production schema baseline: byte-stable for hashing and diffing.
+scripts/schema-baseline/*.sql text eol=lf
+scripts/schema-baseline/*.py text eol=lf
