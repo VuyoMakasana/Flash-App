@@ -159,10 +159,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # FI-077: base was the default branch and head was HEAD, so on every
+      # push to main base == head and TruffleHog exited 1 without scanning.
+      # Now: pull_request scans base.sha..head.sha; push scans before..sha;
+      # a new branch (before = all zeros) scans with no base, never failing
+      # for lack of one. Pinned to v3.99.8 (action by commit SHA, scanner
+      # image by matching `version`; the action alone defaults to :latest).
       - name: Scan for committed secrets
-        uses: trufflesecurity/trufflehog@main
+        uses: trufflesecurity/trufflehog@ea68ca03c865c5f324e86e849ced20ed3cf9dbbb # v3.99.8
         with:
           path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
+          base: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before || '') }}
+          head: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          version: 3.99.8
           extra_args: --debug --only-verified
