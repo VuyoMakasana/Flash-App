@@ -1133,8 +1133,6 @@ async function migrate() {
     client39.release();
   }
 
-  // pool.end() moved from v39's finally to here when v40 was added — it must
-  // stay on whichever migration runs last, or the process would not drain.
   const client40 = await pool.connect();
   try {
     await migrateV40(client40);
@@ -1143,6 +1141,18 @@ async function migrate() {
     throw err;
   } finally {
     client40.release();
+  }
+
+  // pool.end() moved from v40's finally to here when v41 was added — it must
+  // stay on whichever migration runs last, or the process would not drain.
+  const client41 = await pool.connect();
+  try {
+    await migrateV41(client41);
+  } catch (err) {
+    console.error('Migration v41 failed:', err.message);
+    throw err;
+  } finally {
+    client41.release();
     await pool.end();
   }
 
@@ -2745,4 +2755,273 @@ async function migrateV40(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40 };
+// ─────────────────────────────────────────────────────────────────────────────
+// v41 — SCHEMA BASELINE (N-18): make a FRESH database match PRODUCTION.
+// Full analysis, approvals and proofs: docs/SCHEMA_BASELINE.md.
+//
+// Production's definition is always the target. Every item checks the object
+// first and acts only when it is in the exact fresh-database shape. On
+// production (and on a restore of production's schema) every item finds the
+// production shape and does nothing: no DDL, no data change, and no lock on an
+// application table other than S1's read of `stores` (an accepted exception,
+// SCHEMA_BASELINE.md §9). Approved items (founder, 2026-11-19): T1-T3, F1-F5,
+// I1, D1-D2, S1.
+//
+// The whole version runs in ONE transaction, like v34-v40: if any step fails,
+// everything rolls back, so a guarded drop-and-recreate can never leave a
+// constraint missing.
+//
+// SKIPS ARE LOUD. When an item finds data that does not fit (for example
+// Boost.js's 'flash_closet' in a store_id column), or an object in neither the
+// fresh nor the production shape, it RAISEs a NOTICE starting 'v41:' and
+// changes nothing. node-postgres drops NOTICEs unless someone listens, so this
+// function listens for the duration of v41, prints every skip, and reports the
+// count in its final line. scripts/schema-baseline/schema_check.sh treats any
+// v41 skip as a failure.
+//
+// Deliberately NOT included (SCHEMA_BASELINE.md §4): the production-only
+// settlement tables (accepted orphans), and the cosmetic CHECK-spelling and
+// column-position differences (accepted).
+// ─────────────────────────────────────────────────────────────────────────────
+async function migrateV41(client) {
+  const skips = [];
+  const onNotice = (msg) => {
+    if (msg && typeof msg.message === 'string' && msg.message.startsWith('v41:')) {
+      skips.push(msg.message);
+      console.warn(`[Migration v41] SKIPPED — ${msg.message}`);
+    }
+  };
+  client.on('notice', onNotice);
+
+  await client.query('BEGIN');
+  try {
+    // T1-T3: store_boosts / store_promotions / brand_size_mappings.store_id
+    // varchar(100) -> uuid (production: `store_id uuid NOT NULL`, from the
+    // unmerged production-readiness-audit v30). Acts only on the exact fresh
+    // column definition, and only if every value is a UUID; otherwise NOTICE.
+    await client.query(`
+      DO $$
+      DECLARE
+        t     text;
+        bad   boolean;
+        typ   text;
+        nn    boolean;
+        hasd  boolean;
+      BEGIN
+        FOREACH t IN ARRAY ARRAY['store_boosts', 'store_promotions', 'brand_size_mappings'] LOOP
+          -- pg_attribute only. The information_schema column_default column
+          -- calls pg_get_expr(), which locks the table (B6 Proof 8).
+          SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull, a.atthasdef INTO typ, nn, hasd
+            FROM pg_attribute a
+           WHERE a.attrelid = to_regclass(format('public.%I', t)) AND a.attname = 'store_id' AND NOT a.attisdropped;
+          IF typ = 'character varying(100)' AND nn AND NOT hasd THEN
+            EXECUTE format(
+              'SELECT EXISTS (SELECT 1 FROM public.%I WHERE store_id !~* %L)',
+              t, '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            ) INTO bad;
+            IF bad THEN
+              RAISE NOTICE 'v41: skipped %.store_id varchar->uuid: non-UUID values present', t;
+            ELSE
+              EXECUTE format('ALTER TABLE public.%I ALTER COLUMN store_id TYPE uuid USING store_id::uuid', t);
+            END IF;
+          ELSIF NOT (typ IS NOT DISTINCT FROM 'uuid' AND nn AND NOT hasd) THEN
+            RAISE NOTICE 'v41: skipped %.store_id: neither the fresh nor the production column shape', t;
+          END IF;
+        END LOOP;
+      END $$;
+    `);
+
+    // F1-F5: production-only foreign keys to stores(id), with production's
+    // exact names and definitions. Added only when the table exists, no
+    // constraint of that name exists, store_id is uuid, and no row would
+    // violate it. An existing constraint of that name must have production's
+    // definition (NO ACTION / NO ACTION / MATCH SIMPLE -> stores); otherwise NOTICE.
+    await client.query(`
+      DO $$
+      DECLARE
+        t       text;
+        rel     regclass;
+        orphans boolean;
+      BEGIN
+        FOREACH t IN ARRAY ARRAY['orders', 'store_boosts', 'store_promotions', 'brand_size_mappings', 'order_cancellation_store_shares'] LOOP
+          rel := to_regclass(format('public.%I', t));
+          IF rel IS NULL THEN
+            RAISE NOTICE 'v41: skipped %_store_id_fkey: table public.% does not exist', t, t;
+            CONTINUE;
+          END IF;
+          IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = t || '_store_id_fkey' AND conrelid = rel) THEN
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_constraint c
+               WHERE c.conname = t || '_store_id_fkey' AND c.conrelid = rel AND c.contype = 'f'
+                 AND c.confrelid = to_regclass('public.stores')
+                 AND c.confdeltype = 'a' AND c.confupdtype = 'a' AND c.confmatchtype = 's'
+                 AND NOT c.condeferrable AND c.convalidated
+            ) THEN
+              RAISE NOTICE 'v41: skipped %_store_id_fkey: exists but differs from production', t;
+            END IF;
+            CONTINUE;
+          END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_attribute a
+             WHERE a.attrelid = rel AND a.attname = 'store_id' AND NOT a.attisdropped
+               AND a.atttypid = 'uuid'::regtype
+          ) THEN
+            RAISE NOTICE 'v41: skipped %_store_id_fkey: store_id is not uuid', t;
+            CONTINUE;
+          END IF;
+          EXECUTE format(
+            'SELECT EXISTS (SELECT 1 FROM public.%I x WHERE x.store_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.stores s WHERE s.id = x.store_id))',
+            t
+          ) INTO orphans;
+          IF orphans THEN
+            RAISE NOTICE 'v41: skipped %_store_id_fkey: rows reference no store', t;
+          ELSE
+            EXECUTE format(
+              'ALTER TABLE ONLY public.%I ADD CONSTRAINT %I FOREIGN KEY (store_id) REFERENCES public.stores(id)',
+              t, t || '_store_id_fkey'
+            );
+          END IF;
+        END LOOP;
+      END $$;
+    `);
+
+    // I1: production-only index, production's exact definition. Checks the
+    // catalog first instead of CREATE INDEX IF NOT EXISTS, which takes a SHARE
+    // lock on orders before it checks the name -- so when the index already
+    // exists (production), orders is never locked. An existing relation of
+    // that name that is not production's index raises a NOTICE.
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname = 'public' AND c.relname = 'idx_orders_store_id'
+        ) THEN
+          CREATE INDEX idx_orders_store_id ON public.orders USING btree (store_id);
+        ELSIF NOT EXISTS (
+          SELECT 1 FROM pg_index i
+            JOIN pg_class ic ON ic.oid = i.indexrelid
+            JOIN pg_namespace n ON n.oid = ic.relnamespace
+            JOIN pg_am am ON am.oid = ic.relam
+           WHERE n.nspname = 'public' AND ic.relname = 'idx_orders_store_id'
+             AND i.indrelid = to_regclass('public.orders')
+             AND am.amname = 'btree' AND NOT i.indisunique
+             AND i.indnatts = 1 AND i.indpred IS NULL AND i.indexprs IS NULL
+             AND i.indkey[0] = (SELECT attnum FROM pg_attribute WHERE attrelid = to_regclass('public.orders') AND attname = 'store_id')
+        ) THEN
+          RAISE NOTICE 'v41: skipped idx_orders_store_id: a relation of that name exists but is not production''s index';
+        END IF;
+      END $$;
+    `);
+
+    // D1-D2: guarded DROP-AND-RECREATE. A fresh DB has these FKs with
+    // ON DELETE CASCADE; production has no ON DELETE clause. Acts only when the
+    // catalog proves the EXACT fresh definition (CASCADE on delete, NO ACTION
+    // on update, MATCH SIMPLE, store_id -> stores.id, not deferrable,
+    // validated); does nothing on production's definition; NOTICE for anything
+    // else. Whether these SHOULD cascade is a separate product decision.
+    await client.query(`
+      DO $$
+      DECLARE
+        r      record;
+        rel    regclass;
+        dtype  "char";
+        hit    boolean;  -- NOT "found": that name would shadow PL/pgSQL's FOUND
+      BEGIN
+        FOR r IN SELECT * FROM (VALUES
+          ('store_users',   'store_users_store_id_fkey'),
+          ('store_actions', 'store_actions_store_id_fkey')
+        ) AS v(tbl, con) LOOP
+          rel := to_regclass(format('public.%I', r.tbl));
+          IF rel IS NULL THEN
+            RAISE NOTICE 'v41: skipped %: table public.% does not exist', r.con, r.tbl;
+            CONTINUE;
+          END IF;
+          SELECT c.confdeltype INTO dtype
+            FROM pg_constraint c
+           WHERE c.conname       = r.con
+             AND c.conrelid      = rel
+             AND c.contype       = 'f'
+             AND c.confrelid     = to_regclass('public.stores')
+             AND c.confupdtype   = 'a'
+             AND c.confmatchtype = 's'
+             AND NOT c.condeferrable
+             AND c.convalidated
+             AND c.conkey  = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = rel AND attname = 'store_id')]::int2[]
+             AND c.confkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = to_regclass('public.stores') AND attname = 'id')]::int2[];
+          hit := FOUND;
+          IF hit AND dtype = 'c' THEN
+            EXECUTE format('ALTER TABLE ONLY public.%I DROP CONSTRAINT %I', r.tbl, r.con);
+            EXECUTE format('ALTER TABLE ONLY public.%I ADD CONSTRAINT %I FOREIGN KEY (store_id) REFERENCES public.stores(id)', r.tbl, r.con);
+          ELSIF NOT (hit AND dtype = 'a') THEN
+            RAISE NOTICE 'v41: skipped %: neither the fresh (CASCADE) nor the production definition', r.con;
+          END IF;
+        END LOOP;
+      END $$;
+    `);
+
+    // S1: flash_inventory.store_id -> production's `uuid NOT NULL DEFAULT
+    // '91fff27c-...'::uuid` (production-readiness-audit v34). v41's ONLY data
+    // change: the seeded "Flash Closet" store row that default points at,
+    // keyed on production's exact UUID. Values from
+    // e022cfa:backend/src/db/migrate.js:1813-1820 (carried unchanged on
+    // production-readiness-audit:migrate.js:1909-1916); status 'approved'
+    // mirrors v36's backfill of every pre-onboarding store (migrate.js:2370).
+    // Production already has the row (verified read-only, 2026-11-19), so the
+    // IF NOT EXISTS read is all that runs there: an AccessShareLock on stores,
+    // the one accepted exception to "no app-table locks on production".
+    await client.query(`
+      DO $$
+      DECLARE
+        typ   text;
+        nn    boolean;
+        hasd  boolean;
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM public.stores WHERE id = '91fff27c-c2bb-4f06-8147-c72cb9f8db7a'::uuid) THEN
+          INSERT INTO public.stores (id, name, address, lat, lng, service_area_bounds, is_active, status)
+          VALUES ('91fff27c-c2bb-4f06-8147-c72cb9f8db7a'::uuid,
+                  'Flash Closet',
+                  '12B Mkele Street, Kwazakhele, 6205',
+                  -33.8842210,
+                  25.5853185,
+                  '{"minLat": -34.03, "maxLat": -33.76, "minLng": 25.55, "maxLng": 25.68}'::jsonb,
+                  true,
+                  'approved');
+        END IF;
+
+        -- pg_attribute only (no pg_get_expr, so no lock on flash_inventory).
+        -- The production shape is checked as "uuid, NOT NULL, has a default";
+        -- the default's exact value is verified by the schema check's dump
+        -- comparison (scripts/schema-baseline/schema_check.sh), not here.
+        SELECT format_type(a.atttypid, a.atttypmod), a.attnotnull, a.atthasdef INTO typ, nn, hasd
+          FROM pg_attribute a
+         WHERE a.attrelid = to_regclass('public.flash_inventory') AND a.attname = 'store_id' AND NOT a.attisdropped;
+        IF typ = 'uuid' AND NOT nn AND NOT hasd THEN
+          IF EXISTS (SELECT 1 FROM public.flash_inventory WHERE store_id IS NULL) THEN
+            RAISE NOTICE 'v41: skipped flash_inventory.store_id SET DEFAULT/NOT NULL: NULL values present';
+          ELSE
+            ALTER TABLE public.flash_inventory ALTER COLUMN store_id SET DEFAULT '91fff27c-c2bb-4f06-8147-c72cb9f8db7a'::uuid;
+            ALTER TABLE public.flash_inventory ALTER COLUMN store_id SET NOT NULL;
+          END IF;
+        ELSIF NOT (typ IS NOT DISTINCT FROM 'uuid' AND nn AND hasd) THEN
+          RAISE NOTICE 'v41: skipped flash_inventory.store_id: neither the fresh nor the production column shape';
+        END IF;
+      END $$;
+    `);
+
+    await client.query('COMMIT');
+    if (skips.length) {
+      console.warn(`Flash database migration v41 completed WITH ${skips.length} SKIP(S) — this database still differs from production; see the warnings above and docs/SCHEMA_BASELINE.md`);
+    } else {
+      console.log('Flash database migration v41 completed: schema baseline (fresh DB brought to production definition; no-op on production)');
+    }
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Migration v41 failed:', err.message);
+    throw err;
+  } finally {
+    client.removeListener('notice', onNotice);
+  }
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40, migrateV41 };

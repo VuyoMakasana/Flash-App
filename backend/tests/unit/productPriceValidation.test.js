@@ -153,12 +153,16 @@ describe('migration v40 — shape guard only', () => {
   // Founder-confirmed: the 100_000 ceiling is application policy, not a schema
   // invariant, so it must NOT appear in the migration.
   test('does NOT put the price ceiling in the schema', () => {
-    const v40 = src().slice(src().indexOf('async function migrateV40'));
+    // Bounded at v41 (schema baseline) so v41's own guards can never be
+    // counted here; before v41 existed this ran to end of file.
+    const v40 = src().slice(src().indexOf('async function migrateV40'), src().indexOf('async function migrateV41'));
     expect(v40).not.toMatch(/100000|100_000/);
   });
 
   test('both constraints are guarded so the migration stays re-runnable', () => {
-    const v40 = src().slice(src().indexOf('async function migrateV40'));
+    // Bounded at v41 (schema baseline) so v41's own guards can never be
+    // counted here; before v41 existed this ran to end of file.
+    const v40 = src().slice(src().indexOf('async function migrateV40'), src().indexOf('async function migrateV41'));
     const guards = v40.match(/SELECT 1 FROM pg_constraint WHERE conname =/g) || [];
     expect(guards).toHaveLength(2);
   });
@@ -166,8 +170,14 @@ describe('migration v40 — shape guard only', () => {
   test('v40 is wired into the runner and still ends the pool exactly once', () => {
     const s = src();
     expect(s).toMatch(/await migrateV40\(client40\)/);
-    expect(s).toMatch(/migrateV40 \}/); // exported
+    // Exported. Was /migrateV40 \}/ ("v40 is the LAST export"), which stopped
+    // being true when v41 (schema baseline, docs/SCHEMA_BASELINE.md) was
+    // appended; the property that matters is that v40 is exported at all.
+    expect(s).toMatch(/module\.exports = \{[^}]*\bmigrateV40\b[^}]*\}/);
     expect(s.match(/await pool\.end\(\)/g) || []).toHaveLength(1);
+    // pool.end() must come after the LAST migration (v41), never before it.
+    expect(s.indexOf('await pool.end()')).toBeGreaterThan(s.indexOf('await migrateV41(client41)'));
+    expect(s.indexOf('await migrateV41(client41)')).toBeGreaterThan(-1);
   });
 });
 
