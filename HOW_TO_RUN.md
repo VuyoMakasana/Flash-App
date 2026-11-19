@@ -1,5 +1,7 @@
 # Flash — How to Run
 
+> **Historical build log.** Steps here may be stale. In particular, **never run `migrate.js` against production** ([`docs/SCHEMA_BASELINE.md`](docs/SCHEMA_BASELINE.md) §6). Current rules: [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
+
 This is the complete guide for running, testing, and deploying the Flash platform.
 Read this from top to bottom the first time. After that you only need the "Daily Dev" section.
 

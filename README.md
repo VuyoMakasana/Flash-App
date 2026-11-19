@@ -1,5 +1,7 @@
 # Flash — Same-Day Clothing Delivery Platform
 
+> **Historical build log.** Specifics here (env var names, statuses, auth model, fix lists) may be stale. Current rules and state: [`docs/WORKFLOW.md`](docs/WORKFLOW.md) and [`docs/PROJECT_STATE.md`](docs/PROJECT_STATE.md).
+
 Flash is a complete two-sided delivery marketplace built for South Africa.
 Customers order clothing from local stores and drivers deliver it same-day.
 

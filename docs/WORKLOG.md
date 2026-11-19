@@ -4,6 +4,35 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-20 — Phase 3: cleanup (`foundation/cleanup`)
+- **Deploy diagnosis** (founder, from Render): the backend (`rootDir=backend`) auto-deploys only for `main` commits that touch `backend/` and pass CI.
+  - `4de9d57` (CI only) and `abcfa49` (docs/settings only) were skipped by design.
+  - `9b20249` was blocked by the old Secrets Scan failure.
+  - The store portal deployed all three.
+  - **My earlier top hypothesis (Render waiting on queued, zero-run check suites) was wrong**, and the founder's evidence replaced it.
+  - Recorded in WORKFLOW §3 and LAUNCH L-2a.
+  - New issues: FI-079 (a stuck check-run record) and FI-080 (unused GitHub apps).
+- **Local branches** (List A): `git branch -d` deleted 37 of the 38 approved merged branches.
+  - It refused `multi-tester-readiness`: it has 4 commits its remote lacks, all 4 already in `main`. Needs `-D`, which is a founder call.
+- **Worktrees:** removed `ci-secrets-scan` and `main-adminjs-fix`, without `--force`, both clean; deleted the `status-check` branch.
+  - `agent-acb9bacfac06dd01a` is waiting for the founder to move its pentest-report copy out.
+  - `agent-a6598502319f8f63f` and `feature-storefront-port` are kept untouched.
+- **Kept all 33 unmerged branches** (List D).
+- **Docs** (List E): added `docs/audits/INDEX.md` and historical-log banners on `README.md` and `HOW_TO_RUN.md`; **no files moved**.
+- **GitHub:** 8 labels to be created; 27 issues drafted for founder approval (List F).
+- **Remote merged branches** (List B) are left for the founder to delete in the GitHub UI.
+- **Follow-up (2026-11-20, founder-approved):**
+  - The founder moved **both** pentest-report copies out of the repo. `.gitignore` now blocks `SECURITY_SELF_PENTEST_REPORT*.md`, and INDEX.md and PROJECT_STATE.md note that the report is kept outside the repo.
+  - Worktree `agent-acb9bacfac06dd01a` and its branch removed, without `--force`, clean.
+  - `multi-tester-readiness` deleted with `-D` after `git cherry` showed 0 outstanding commits.
+- **Context recorded:**
+  - A live Paystack key exists (Render env only); card payments stay OFF in the apps. FI-041 and FI-062 now read "latent until card payments are switched on in the app".
+  - iOS-only launch: FI-019's Android `FOREGROUND_SERVICE` part is out of scope for launch, and FI-033's iOS external-checkout item is flagged as launch-relevant.
+- **GitHub:**
+  - Milestone **iOS launch** (#1) created, with no issues assigned.
+  - **29 issues created (#40–#68)** with labels, verified against GitHub (29 open, 0 on a milestone, labels match exactly).
+  - Issue numbers added to `FOUND_ISSUES.md`.
+
 ## 2026-11-19 — Phase 2: guardrails (`foundation/guardrails`)
 - **Added:**
   - `docs/WORKFLOW.md`, `docs/FOUND_ISSUES.md` (69 items: condition-5 hazards, re-verified audit findings, N-1–N-21, schema-baseline items, founder-reported Render findings), `docs/APP_STATES.md` (money/order app-state standard, with today's backend and client error behaviour documented first), `docs/WORKLOG.md`;
