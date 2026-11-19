@@ -14,7 +14,13 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 - **Found while writing APP_STATES.md:** FI-059 (`validate()` uses `err.param`, undefined on express-validator 7.3.2).
 - **Found checking why Render did not deploy PR #36:** FI-077. The CI Secrets Scan fails on **every push to `main`** (TruffleHog base == head); 8 of 8 recent `main` runs failed on that job alone. Reported, not fixed (CI change needs approval).
 - **Started `docs/LAUNCH_INFRA_CHECKLIST.md`** (L-1 branch protection on `main`, L-2 fix the Secrets Scan, …).
-- **Verification:** documentation and config only, so no runtime change. The deny rules' effect was confirmed via `/permissions`, run by the founder.
+- **Verification:** documentation and config only, so no runtime change.
+  - Deny rules tested live, with harmless `--help` forms only: `gh pr merge`, `git rebase`, `git reset --hard`, `git clean`, `rm -rf`, `rm -r`, `supabase`, `npx supabase` and `render` were all denied.
+  - The Supabase and Render MCP tools became unavailable in-session once the file was saved.
+  - Ask rules not exercised.
+  - **Confirmed via `/permissions` on 2026-11-19** (run and reviewed by the founder) for the rules that existed then: 43 deny, 8 ask (commit `5b39eab`). The founder also removed the local allow `Bash(git stash *)` from `.claude/settings.local.json`.
+  - **Not yet confirmed via `/permissions`:** the additions in `7c6c223` (every `git push` → ask; deny `git reset --hard`, `git clean`, `rm -r`/`-rf`, `supabase`, `npx supabase`, `render`; ask `git branch -D`, `git restore`, `git checkout --`, `psql`, `pg_dump`, `pg_restore`) and the `PowerShell` tool deny. These need a second `/permissions` check after the session reloads them.
+  - **`PowerShell` tool denied entirely** (`/permissions` lists rules, not tools; the AI session confirmed it has a PowerShell tool). All shell commands now go through Bash, where the Bash rules apply.
 
 ## 2026-11-19 — Schema baseline, fix N-18 (PR #36, merged)
 - Production schema baseline committed (normalized, secret-scanned).

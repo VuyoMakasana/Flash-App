@@ -90,7 +90,8 @@ Project-level rules for every Claude Code session in this repo.
 - PR merges and repo deletion;
 - the two hazard scripts;
 - the Supabase / Render CLIs (`supabase`, `npx supabase`, `render`) and the Supabase / Render MCP tools;
-- the Read / Edit / Write tools on real `.env` files and the raw production dumps.
+- the Read / Edit / Write tools on real `.env` files and the raw production dumps;
+- **the `PowerShell` tool entirely**, so every shell command goes through Bash, where these rules apply.
 
 **Ask (needs explicit confirmation each time):**
 - **every `git push`**;

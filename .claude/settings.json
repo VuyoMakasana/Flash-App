@@ -52,7 +52,8 @@
       "Bash(rm -r *)",
       "Bash(supabase *)",
       "Bash(npx supabase *)",
-      "Bash(render *)"
+      "Bash(render *)",
+      "PowerShell"
     ],
     "ask": [
       "Bash(node src/db/migrate.js)",
