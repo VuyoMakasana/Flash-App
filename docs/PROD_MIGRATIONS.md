@@ -30,6 +30,7 @@
 | `backend/src/db/migrationFile.js` | Node side: hash, header parse, `:'file_sha'` binding, `applyMigrationFile()`. |
 | `scripts/prod-migrations/A-…E-*.ps1` + `FlashMigration.psm1` | The founder's steps. Windows PowerShell 5.1, ASCII-only, **everything through `docker run`**. No bash, WSL or Python on the host. |
 | `scripts/prod-migrations/*.sh`, `schema_delta.py` | Run **inside** containers (`postgres:17`, `python:3.12-alpine`). `run.sh` wraps every step container and reports its exit code (§5, Docker Desktop hang). |
+| `scripts/prod-migrations/R-RlsReadiness.ps1` + `rls_readiness.sh` | **Read-only** readiness check for v43 (FI-081): table owners, RLS flags, `anon`/`authenticated` privileges, default privileges, and whether the backend role stays exempt from RLS on every table. |
 | `scripts/schema-baseline/production_schema_baseline.sql` | The committed baseline. After a migration PR, it is the **expected production schema after** the migration. |
 | `scripts/schema-baseline/baseline_to_restorable.py` | Developer tool: builds a local prod-shaped database from the baseline (§4). |
 | `schema-baseline-input/vNN/` (git-ignored) | Step working folder. **Schema dumps only, never table data.** |
@@ -200,4 +201,4 @@ Then revert the migration PR, so the committed baseline matches production again
 | Version | PR | Applied by / date (SAST) | BEFORE | AFTER | Ledger sha256 |
 |---|---|---|---|---|---|
 | v41 | #36 | **Not applied, not needed**: proven a no-op on production's shape (`SCHEMA_BASELINE.md` §11) | `697134af…` | `697134af…` | — |
-| v42 | #72 | *pending* | `697134af…2a6962d` | `4355621a…951cd3` | *pending* (file `b4dd4c84…df55fd`) |
+| v42 | #72 (merged, deployed `09bf0d3`) | *pending: founder runs A–E* | `697134af…2a6962d` | `4355621a…951cd3` | *pending* (file `b4dd4c84…df55fd`) |
