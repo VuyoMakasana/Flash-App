@@ -101,8 +101,16 @@ const messagesRoutes = require("./routes/messageRoutes");
 const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
 const sosRoutes = require("./routes/sosRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
+const { createCronRunner, dailySast } = require("./jobs/cronRunner");
 
-function createApp() {
+// L0.3 (#75) / FI-014: one runner per process. Cron jobs are registered only
+// by startServer() (createApp({ withCronJobs: true })), at most once; every
+// run logs start/finish and never overlaps itself. See src/jobs/cronRunner.js.
+const cronRunner = createCronRunner({ cron, log: logger });
+
+// options.withCronJobs: register the cron jobs (only startServer() does).
+// Tests and other importers get the app without any scheduled job (FI-014).
+function createApp({ withCronJobs = false } = {}) {
   const app = express();
   // Trust reverse proxy headers in production deployments (Render/Railway/Nginx).
   if (process.env.NODE_ENV === "production") {
@@ -311,8 +319,12 @@ let _io = io;
       })();
     }
 
-// Cron jobs
-  cron.schedule("0 3 * * *", async () => {
+// Cron jobs. Only registered when asked, once per process (FI-014); see
+// cronRunner. Daily jobs run inside the 06:45-19:45 SAST awake window
+// (founder launch decision 7) and catch up on startup if their slot passed.
+  const job = withCronJobs ? cronRunner.claimScheduler() : () => {};
+
+  job("prune-driver-locations", dailySast("06:50"), async () => {
     try {
       const r = await pool.query(
         `DELETE FROM driver_locations WHERE recorded_at < NOW() - INTERVAL '30 days'`,
@@ -323,7 +335,7 @@ let _io = io;
     }
   });
 
-  cron.schedule("30 3 * * *", async () => {
+  job("prune-browsing-events", dailySast("06:52"), async () => {
     try {
       const r = await pool.query(
         `DELETE FROM browsing_events WHERE created_at < NOW() - INTERVAL '60 days'`,
@@ -334,7 +346,7 @@ let _io = io;
     }
   });
 
-  cron.schedule("*/5 * * * *", async () => {
+  job("payment-reconciliation", "*/5 * * * *", async () => {
     try {
       await reconcilePendingPayments(io);
     } catch (e) {
@@ -373,9 +385,10 @@ let _io = io;
   
 
   
- // Nightly at 03:30 SAST (01:30 UTC): purge expired tokens
-// Without this, refresh_tokens and revoked_tokens grow forever and slow auth queries
-cron.schedule('30 1 * * *', async () => {
+ // Daily at 06:54 SAST (was 01:30 UTC = 03:30 SAST, outside the awake window):
+// purge expired tokens. Without this, refresh_tokens and revoked_tokens grow
+// forever and slow auth queries.
+job("purge-expired-tokens", dailySast("06:54"), async () => {
   try {
     const r1 = await pool.query('DELETE FROM refresh_tokens WHERE expires_at < NOW()');
     const r2 = await pool.query('DELETE FROM revoked_tokens WHERE expires_at < NOW()');
@@ -387,14 +400,18 @@ cron.schedule('30 1 * * *', async () => {
 
 
 
-  // OPERATING HOURS: Every day at 07:00 SAST (05:00 UTC), release all orders
+  // OPERATING HOURS: Every day at 07:00 SAST, release all orders
   // that were placed overnight and are waiting in 'scheduled_for_morning'.
   // These are converted to 'pending_store_acceptance', not directly to
   // 'waiting_for_driver' -- an order placed overnight still needs the same
   // real store accept/reject gate once the store opens
   // (docs/audits/FLASH_STORE_ADMIN_DESIGN.md §0), not a free pass into
   // driver matching just because of when it was placed.
-  cron.schedule('0 5 * * *', async () => {
+  // Startup catch-up only during operating hours (07:00-19:00 SAST), so a
+  // restart can never release overnight orders before the store opens.
+  job("morning-release", dailySast("07:00", {
+    catchUpIf: (now) => require('./services/operatingHoursService').isWithinOperatingHours(now),
+  }), async () => {
     try {
       const { updateOrderStatus } = require('./services/orderStateMachineService');
       const scheduledOrders = await pool.query(
@@ -428,7 +445,7 @@ cron.schedule('30 1 * * *', async () => {
   });
   // WHY: Drivers can accept an order and go offline with no consequence. Orders would
   // stay stuck in driver_assigned forever with no customer alert and no resolution.
-  cron.schedule('*/10 * * * *', async () => {
+  job("reassign-stuck-assigned-orders", "*/10 * * * *", async () => {
     try {
       // Find orders stuck in driver_assigned or driver_arrived_store for more than 45 minutes
       const stuckOrders = await pool.query(`
@@ -569,7 +586,7 @@ cron.schedule('30 1 * * *', async () => {
   // well past normal ping cadence (~15s per CLAUDE.md) and comfortably
   // inside the same order of magnitude as the pre-pickup cron's 45-minute
   // window, without waiting that long on an order already in progress.
-  cron.schedule('*/10 * * * *', async () => {
+  job("flag-driver-connection-lost", "*/10 * * * *", async () => {
     try {
       const staleActive = await pool.query(`
         SELECT o.id, o.order_number, o.driver_id, o.status
@@ -615,7 +632,7 @@ cron.schedule('30 1 * * *', async () => {
   // notification pattern (io.to('admin').emit('fleet_alert', ...)) for
   // anyone with the panel open right now, plus a persistent, visible
   // column (orders.stuck_delivery_flagged_at) for anyone who isn't.
-  cron.schedule('*/30 * * * *', async () => {
+  job("flag-stuck-delivered", "*/30 * * * *", async () => {
     try {
       const stuckDelivered = await pool.query(`
         SELECT id, order_number, driver_id
@@ -649,7 +666,7 @@ cron.schedule('30 1 * * *', async () => {
   // WHY: When a user pays and no drivers are available, their money is trapped
   // in a pending order with no resolution. After 30 minutes in waiting_for_driver
   // we automatically cancel and trigger a full refund so users are not left stranded.
-  cron.schedule('*/15 * * * *', async () => {
+  job("cancel-no-driver-orders", "*/15 * * * *", async () => {
     try {
       const stuckPaidOrders = await pool.query(`
         SELECT o.id, o.user_id, o.payment_method, o.payment_status, o.total
@@ -747,7 +764,7 @@ cron.schedule('30 1 * * *', async () => {
   // duplicating that logic inline a third time -- cancelledByRole: 'system'
   // so this is recorded as a real timeout, not misattributed as a store
   // rejection nobody actually made.
-  cron.schedule('*/15 * * * *', async () => {
+  job("cancel-store-acceptance-timeout", "*/15 * * * *", async () => {
     try {
       const stuckAcceptanceOrders = await pool.query(`
         SELECT id
@@ -785,7 +802,7 @@ cron.schedule('30 1 * * *', async () => {
   // the real logic and reasoning — kept there, not here, so it's
   // independently unit-testable like paymentReconciliationJob.js's
   // functions already are.
-  cron.schedule('*/15 * * * *', async () => {
+  job("cancel-payment-never-initiated", "*/15 * * * *", async () => {
     try {
       const { cancelAbandonedPaymentPendingOrders } = require('./services/orderStateMachineService');
       await cancelAbandonedPaymentPendingOrders({ io: _io });
@@ -799,7 +816,7 @@ cron.schedule('30 1 * * *', async () => {
   // calling markReadyForPickup left it with no timeout at all, unlike
   // pending_store_acceptance and waiting_for_driver. See
   // orderStateMachineService.cancelStalePreparingOrders.
-  cron.schedule('*/15 * * * *', async () => {
+  job("cancel-stale-preparing", "*/15 * * * *", async () => {
     try {
       const { cancelStalePreparingOrders } = require('./services/orderStateMachineService');
       await cancelStalePreparingOrders({ io: _io });
@@ -814,7 +831,7 @@ cron.schedule('30 1 * * *', async () => {
   // swallow a failure to make that transition, and nothing else ever
   // scanned for an order stuck at status='paid'. See
   // orderStateMachineService.recoverStuckPaidOrders.
-  cron.schedule('*/15 * * * *', async () => {
+  job("recover-stuck-paid", "*/15 * * * *", async () => {
     try {
       const { recoverStuckPaidOrders } = require('./services/orderStateMachineService');
       await recoverStuckPaidOrders({ io: _io });
@@ -832,7 +849,7 @@ cron.schedule('30 1 * * *', async () => {
   // caught before the 15-minute cutoff, not just once right at the edge.
   // See orderStateMachineService.escalateStuckPendingAcceptanceOrders /
   // escalateStuckPreparingOrders for the real logic.
-  cron.schedule('*/5 * * * *', async () => {
+  job("escalate-acceptance-and-preparation", "*/5 * * * *", async () => {
     try {
       const { escalateStuckPendingAcceptanceOrders } = require('./services/orderStateMachineService');
       await escalateStuckPendingAcceptanceOrders();
@@ -857,7 +874,7 @@ cron.schedule('30 1 * * *', async () => {
   // users, so admin-panel data is never more than ~15 minutes stale. Only
   // syncs the flag columns themselves; name/contact info is looked up live
   // elsewhere (adminPanel.js's attachUserNames), never duplicated here.
-  cron.schedule('*/15 * * * *', async () => {
+  job("sync-flagged-accounts", "*/15 * * * *", async () => {
     try {
       await pool.query(`
         INSERT INTO flagged_accounts (user_id, flagged_for_cash_abuse, cash_refusal_count, synced_at)
@@ -881,8 +898,8 @@ cron.schedule('30 1 * * *', async () => {
   });
 
   // WHY: Addendum 1 §4.4 named this explicitly -- accuracy can't be assumed
-  // forever, only checked. Daily 04:00 SAST (a clean slot -- doesn't
-  // collide with the 03:00/03:30/01:30 UTC jobs above). Two real checks:
+  // forever, only checked. Daily 06:56 SAST (L0.3: was 02:00 UTC = 04:00
+  // SAST, outside the awake window; still before the 07:00 open). Two real checks:
   //
   // 1. wallet_balance reconciliation, for EVERY driver with a wallet row,
   //    not a sample. Confirmed the real accounting rule by reading
@@ -912,7 +929,7 @@ cron.schedule('30 1 * * *', async () => {
   // unhandledRejection handler and errorHandler.js both already use
   // exactly this, confirmed by reading them directly; it safely no-ops
   // with no SENTRY_DSN/non-prod, same as everywhere else it's used).
-  cron.schedule('0 2 * * *', async () => {
+  job("wallet-and-refund-reconciliation", dailySast("06:56"), async () => {
     try {
       const wallets = await pool.query(`
         SELECT dw.driver_id, dw.wallet_balance,
@@ -976,13 +993,21 @@ cron.schedule('30 1 * * *', async () => {
 
 // Start server
 function startServer() {
-  const { app, server, io } = createApp();
+  const { app, server, io } = createApp({ withCronJobs: true });
+  runtime = { app, server, io };
   const PORT = process.env.PORT || 3000;
   server.listen(PORT, () => {
     console.log(`\n Flash Backend v3.0 (MVC) on port ${PORT}`);
-    console.log(` Cleanup cron scheduled (daily 3am)`);
+    for (const j of cronRunner.listJobs()) {
+      logger.info({ job: j.name, expr: j.expr, timezone: j.timezone }, "cron registered");
+    }
     console.log(` Socket.IO ready for real-time events`);
     console.log(`Server is running!\n`);
+    // Daily jobs whose slot already passed today run once now, if inside
+    // the awake window (cronRunner.dueForCatchUp). Never blocks startup.
+    cronRunner.runStartupCatchUp().catch((err) => {
+      console.error("[Cron] startup catch-up failed:", err.message);
+    });
   });
 
   // Fire-and-forget, mounted onto the already-running app — Express allows
@@ -999,11 +1024,27 @@ function startServer() {
   return { app, server, io };
 }
 
-const runtime = require.main === module ? startServer() : createApp();
+// The app this process serves. Set by startServer(); created lazily (without
+// cron jobs) only if something reads the exports below without starting the
+// server, e.g. an integration test. Previously `require.main === module ?
+// startServer() : createApp()` built an extra app at require time: production
+// runs the root server.js wrapper, so require.main is never this module, and
+// that extra app registered every cron a second time (FI-014), and graceful
+// shutdown closed its never-listening server instead of the live one.
+let runtime = null;
+function getRuntime() {
+  if (!runtime) runtime = createApp();
+  return runtime;
+}
+if (require.main === module) startServer();
 
 // Graceful shutdown
 async function gracefulShutdown(signal) {
   console.log(`\n[${signal}] Starting graceful shutdown...`);
+  if (!runtime) {
+    await pool.end().catch(() => {});
+    process.exit(0);
+  }
   runtime.server.close(async () => {
     try {
       await pool.end();
@@ -1033,7 +1074,8 @@ process.on("unhandledRejection", (reason) => {
 module.exports = {
   createApp,
   startServer,
-  app: runtime.app,
-  server: runtime.server,
-  io: runtime.io,
+  cronJobs: () => cronRunner.listJobs(),
+  get app() { return getRuntime().app; },
+  get server() { return getRuntime().server; },
+  get io() { return getRuntime().io; },
 };

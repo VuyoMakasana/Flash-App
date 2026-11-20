@@ -88,7 +88,7 @@ Every change to an action that touches money, orders, OTP, payouts, refunds, ret
 ### Phases
 | Phase | Scope | State |
 |---|---|---|
-| **L0** | 1. local/test isolation (#69); 2. production migration process (#71, `docs/PROD_MIGRATIONS.md`, v42 ledger); 3. cron audit + FI-014 double-registration fix + start/finish logging; 4. confirm `/health` is cheap, give the exact pinger URL; 5. kill switches `PAYOUTS_ENABLED`, `CARD_PAYMENTS_ENABLED`, `PREMIUM_ENABLED`, `BOOSTS_ENABLED` (unset = today's behaviour, except Premium and Boosts, which default to off), with tests | 1 done (PR #70); 2 in PR #72; 3–5 next |
+| **L0** | 1. local/test isolation (#69); 2. production migration process (#71, `docs/PROD_MIGRATIONS.md`, v42 ledger); 3. cron audit + FI-014 double-registration fix + start/finish logging; 4. confirm `/health` is cheap, give the exact pinger URL; 5. kill switches `PAYOUTS_ENABLED`, `CARD_PAYMENTS_ENABLED`, `PREMIUM_ENABLED`, `BOOSTS_ENABLED` (unset = today's behaviour, except Premium and Boosts, which default to off), with tests | 1–2 done (PR #70, #72); 3 in review (#75, `docs/CRON_JOBS.md`); 4–5 next |
 | **L1** | FI-016 (#46; propose the customer message), FI-013 (#43), FI-015 (#45), the startup DB timeout (FI-073), FI-018 (#47), FI-020 (#49), FI-021 (#50), FI-026 (#55) | |
 | **L2** | Card checkout under the model above; webhook-verified; the cash OTP covers only the delivery fee; fix `computeCancellationSplit`; idempotency keys; a production smoke-test script | |
 | **L3** | Driver earnings (decision 5) and free plans (decision 6) | |

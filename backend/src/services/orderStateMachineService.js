@@ -970,7 +970,14 @@ async function escalateStuckPendingAcceptanceOrders(context = {}) {
   let escalated = 0;
   for (const order of result.rows) {
     try {
-      await pool.query(`UPDATE orders SET acceptance_escalated_at = NOW() WHERE id = $1`, [order.id]);
+      // The UPDATE is the claim (L0.3, #75 / FI-014): only the run that flips
+      // acceptance_escalated_at from NULL sends the email, so two overlapping runs
+      // (or two instances) can never both send it.
+      const claim = await pool.query(
+        `UPDATE orders SET acceptance_escalated_at = NOW() WHERE id = $1 AND acceptance_escalated_at IS NULL RETURNING id`,
+        [order.id],
+      );
+      if (!claim.rows || claim.rows.length === 0) continue;
       const { sendOrderEscalationEmail } = require('./emailService');
       await sendOrderEscalationEmail(order, 'acceptance');
       escalated += 1;
@@ -999,7 +1006,14 @@ async function escalateStuckPreparingOrders(context = {}) {
   let escalated = 0;
   for (const order of result.rows) {
     try {
-      await pool.query(`UPDATE orders SET preparation_escalated_at = NOW() WHERE id = $1`, [order.id]);
+      // The UPDATE is the claim (L0.3, #75 / FI-014): only the run that flips
+      // preparation_escalated_at from NULL sends the email, so two overlapping runs
+      // (or two instances) can never both send it.
+      const claim = await pool.query(
+        `UPDATE orders SET preparation_escalated_at = NOW() WHERE id = $1 AND preparation_escalated_at IS NULL RETURNING id`,
+        [order.id],
+      );
+      if (!claim.rows || claim.rows.length === 0) continue;
       const { sendOrderEscalationEmail } = require('./emailService');
       await sendOrderEscalationEmail(order, 'preparation');
       escalated += 1;
