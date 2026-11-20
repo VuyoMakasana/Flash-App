@@ -15,8 +15,8 @@
 ## 1. Absolute rules
 
 1. **Production is off-limits to AI sessions.** No connecting to, querying, migrating, seeding or modifying the production database. No Render, Supabase or Cloudflare dashboards or APIs. No changing environment variables anywhere. Production reads are done **by the founder**, with read-only scripts written for them (`scripts/schema-baseline/prod_*.sh`).
-2. **`migrate.js` is never run against production**, from anywhere, until the unsafe re-run statements are fixed and a backup-first process is approved (`docs/SCHEMA_BASELINE.md` §6, §8).
-3. **No production schema change outside the approved process.** That includes the Supabase SQL editor, MCP and CLI (FOUND_ISSUES FI-061).
+2. **`migrate.js` is never run against production**, from anywhere, ever (`docs/SCHEMA_BASELINE.md` §6). Production gets each schema change as one standalone SQL file, applied by the founder through steps A–E in **`docs/PROD_MIGRATIONS.md`** (approved 2026-11-20, L0.2 #71).
+3. **No production schema change outside `docs/PROD_MIGRATIONS.md`.** That includes the Supabase SQL editor, MCP and CLI (FOUND_ISSUES FI-061). **Every migration SQL is sent for a second review before step D** (founder rule, 2026-11-20); step D asks for the review link.
 4. **Never print secrets.** Refer to them by variable name only. When checking a URL, report only whether the host is local or remote.
 5. **Before any command that loads env files or connects to a database, prove the database is local.** Print only host and port. If you can't prove it, don't run it; ask.
 6. **Git:** never push to `main`, never force-push, never rewrite history, never delete remote branches. **The founder merges** PRs. One branch and one PR per piece of work: `foundation/<name>`, `fix/<name>`, `feat/<name>`.
@@ -40,7 +40,7 @@
 3. **Architecture decisions** go through the seven questions in `CLAUDE.md`. Business calls go to the founder.
 4. **Impact analysis** before every change: what can break, who is affected, data, money, locks, deploy.
 5. **Make the change** on a branch.
-6. **Verify:** run the relevant tests; for schema work, run `scripts/schema-baseline/schema_check.sh`; for money/order UI, go through the `APP_STATES.md` Part 3 checklist. Print sizes and counts next to every hash or "identical" claim.
+6. **Verify:** run the relevant tests; for schema work, run `scripts/schema-baseline/schema_check.sh` and follow `docs/PROD_MIGRATIONS.md` §4; for money/order UI, go through the `APP_STATES.md` Part 3 checklist. Print sizes and counts next to every hash or "identical" claim.
 7. **Document:**
    - add a `docs/WORKLOG.md` entry;
    - add bugs found along the way to `docs/FOUND_ISSUES.md` (record them, don't fix them on the spot);
@@ -65,7 +65,49 @@ Every change to an action that touches money, orders, OTP, payouts, refunds, ret
 - Paystack success only from the backend;
 - no tokens or PII in logs.
 
-## 5. Engineering-foundation programme (phases)
+## 5. iOS launch plan (founder, 2026-11-20) — the current programme
+
+**This plan replaces the remaining foundation phases (§5a) until launch.** Milestone **"iOS launch"** on GitHub.
+
+**Per-fix process, for every fix:** GitHub issue (milestone "iOS launch") → branch `launch/<id>-<name>` → impact analysis → **a failing test that proves the bug or the missing behaviour** → fix → test passes → CI green on the PR's own head SHA → PR → **STOP for approval. The founder merges.**
+
+### Launch decisions (founder; do not re-ask, do not deviate)
+1. **iOS only.** Android is out of scope.
+2. **Items are Flash's own stock** (Flash Closet). No store splits and no store payouts at launch.
+3. **The item is always paid by card; the delivery fee is card or cash.** The live Paystack key lives only in Render; local and CI use Paystack **test** keys only.
+4. **Premium and Boosts are hidden:** UI hidden, endpoints behind flags that **default to off**. No other card flows.
+5. **Driver earnings:**
+   - cash delivery fee: the driver keeps 100%, with no commission debt;
+   - card delivery fee: the driver's share is paid **daily by Paystack Transfer at 19:15 SAST**, one transfer per driver per day, and Flash pays the transfer fee;
+   - **no withdraw button**; the driver app shows today's earnings, "paid tonight", and payout history with the transfer reference;
+   - safety: `basa` recipients; Paystack account validation before the first payout; a **DB-unique constraint for one payout per driver per day**; a failed transfer retries the next evening and alerts the driver and the admin; kill switch `PAYOUTS_ENABLED`;
+   - the old payout and commission-debt paths are **disabled behind flags, not deleted**; FI-010, FI-011 and FI-012 are resolved by non-use (record that on the issues).
+6. **Driver plans are free for launch;** the purchase screen is hidden on iOS.
+7. **Render stays on the free plan.** The founder pings `/health` every 10 minutes from 06:45 to 19:45 SAST. **Every job must run inside that window or catch up on startup.**
+
+### Phases
+| Phase | Scope | State |
+|---|---|---|
+| **L0** | 1. local/test isolation (#69); 2. production migration process (#71, `docs/PROD_MIGRATIONS.md`, v42 ledger); 3. cron audit + FI-014 double-registration fix + start/finish logging; 4. confirm `/health` is cheap, give the exact pinger URL; 5. kill switches `PAYOUTS_ENABLED`, `CARD_PAYMENTS_ENABLED`, `PREMIUM_ENABLED`, `BOOSTS_ENABLED` (unset = today's behaviour, except Premium and Boosts, which default to off), with tests | 1 done (PR #70); 2 in PR #72; 3–5 next |
+| **L1** | FI-016 (#46; propose the customer message), FI-013 (#43), FI-015 (#45), the startup DB timeout (FI-073), FI-018 (#47), FI-020 (#49), FI-021 (#50), FI-026 (#55) | |
+| **L2** | Card checkout under the model above; webhook-verified; the cash OTP covers only the delivery fee; fix `computeCancellationSplit`; idempotency keys; a production smoke-test script | |
+| **L3** | Driver earnings (decision 5) and free plans (decision 6) | |
+| **L4** | App fixes: FI-019 (#48, iOS), #51, #52, #53, #54, #57, #59 (polling), status labels, rating timing, `/api/notifications`, the demo-product fallback, hiding "Pick a Driver", and `APP_STATES.md` applied fully | |
+| **L5** | TestFlight and App Store readiness (**prepare only**) | |
+| **L6** | Pilot verification checklist | |
+
+### Deferred until after launch
+Recorded so nothing is lost; none of these is worked on before launch unless the founder says so:
+- the **Phase 5A** full app-state inventory, and the rest of **Phase 5** (characterization tests);
+- **Phase 6** (CI hardening: CI Postgres 15 → 17, `schema_check.sh` in CI, the stale `production-hardening-final` trigger, pinned actions);
+- **Phases 8–9** (secrets hygiene, `CLAUDE.md` rewrite, final report);
+- Medium and Low FOUND_ISSUES items not named in L0–L4;
+- a staging environment; the **Render paid plan**;
+- multi-store payouts and splits; **Premium**; **Boosts**; **Android**.
+
+(Phase 4's goals were delivered by L0.1; Phase 7's cron logging, kill switches and `/health` analysis moved into L0 steps 3–5.)
+
+## 5a. Engineering-foundation programme (phases) — paused for the launch plan
 
 Each phase has its own branch and PR, and **stops for the founder's "approved"**.
 
@@ -74,9 +116,9 @@ Each phase has its own branch and PR, and **stops for the founder's "approved"**
 | 0 | Orientation and safety check (read-only) | Done |
 | 1 | `PROJECT_STATE.md` re-audit + independent verification (Part A) | Done (PRs #34, #35) |
 | 1-B | Schema baseline: fix N-18, migration v41, schema check | Done (PR #36) |
-| 2 | Guardrails: `.claude/settings.json` deny rules, `WORKFLOW.md`, PR and issue templates, `WORKLOG.md`, `FOUND_ISSUES.md`, `APP_STATES.md`, "Read first" pointer in `CLAUDE.md` | This PR |
-| 3 | Branch, worktree and docs cleanup proposals; GitHub issues (with approval) | |
-| 4 | Local test DB isolation: `.env.test.example`, local-host guard, seed data, `docs/TESTING.md`, `docs/ENVIRONMENT.md`. First prove docker compose and every test command use only local Postgres and get no real third-party keys. | |
+| 2 | Guardrails: `.claude/settings.json` deny rules, `WORKFLOW.md`, PR and issue templates, `WORKLOG.md`, `FOUND_ISSUES.md`, `APP_STATES.md`, "Read first" pointer in `CLAUDE.md` | Done (PR #38) |
+| 3 | Branch, worktree and docs cleanup proposals; GitHub issues (with approval) | Done (PR #39) |
+| 4 | Local test DB isolation: `.env.test.example`, local-host guard, seed data, `docs/TESTING.md`, `docs/ENVIRONMENT.md`. First prove docker compose and every test command use only local Postgres and get no real third-party keys. | Isolation, guard and `TESTING.md` done by L0.1 (PR #70); seed data and `ENVIRONMENT.md` deferred |
 | 5 | Integration characterization tests on money and order paths (`test.failing` with issue numbers) | |
 | **5A** | **App state inventory (read-only).** For every action in both apps and the portal that touches money, orders, OTP, payouts, refunds, returns, auth or delivery photos, trace button → API → backend → DB → response → screen. Record today's behaviour on success, each error type, timeout, double-tap, app backgrounded and offline (file:line), and every gap against `APP_STATES.md`, in `docs/APP_STATES_INVENTORY.md`. **No code changes.** Draft one GitHub issue per gap for founder approval. | **Added 2026-11-19** |
 | 6 | CI hardening: pinned actions, `docs/CI_CD.md`, **`schema_check.sh` in CI**, **CI Postgres 15 → 17**, and **remove the stale `production-hardening-final` push trigger** in `ci.yml` (a June branch, 80 commits off `main`) | |

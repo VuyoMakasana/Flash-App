@@ -1,0 +1,2 @@
+b4dd4c841c00672c3bbbb11fcc80e840e56af7d7d10623e851b2034332df55fd  v42_schema_migrations_ledger.sql
+157b21bc3cb5dde2495e94dd59ff76a4cf712f9b1a33846339aec1c3234a612b  rollback/v42_schema_migrations_ledger.rollback.sql

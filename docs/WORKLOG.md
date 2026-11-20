@@ -4,7 +4,22 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
-## 2026-11-20 — Launch plan L0.1: local/test isolation (#69, `launch/l0-1-test-isolation`)
+## 2026-11-20 — Launch plan L0.2: production migration process (#71, `launch/l0-2-prod-migration-process`)
+- **Process approved by the founder** with six changes. All six are implemented, and the process is documented in **`docs/PROD_MIGRATIONS.md`**:
+  - BEFORE/AFTER header fingerprints;
+  - the ledger hash passed as `-v file_sha`;
+  - step D's git and PR-hash pre-checks;
+  - PowerShell-only steps A–E through `docker run`;
+  - backup location, retention and encryption;
+  - a second review before step D.
+- **v42 (approved):** `schema_migrations_ledger (version text PK, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`, as a standalone file. `migrateV42` only runs that file. There is a guarded rollback file.
+  - Baseline: `697134af…` (66 tables) → `4355621a…` (67 tables). The change is exactly the new table and its PK.
+- **v42 is NOT applied to production.** The founder applies it with steps A–E after merge.
+- **Found while building it:** a restored copy of production re-spells 2 CHECK constraints (FI-082). That's why steps C and D compare like with like, or compare deltas. Also recorded FI-081 (no RLS on `public`; Supabase Data API exposure unverified; founder check).
+- **WORKFLOW.md:** the launch plan, the founder decisions, the per-fix process and the deferred list are recorded; rule 3 now requires a second review.
+- **Verification:** local throwaway containers only; production was never contacted. See PR #72.
+
+## 2026-11-20 — Launch plan L0.1: local/test isolation (#69, PR #70, merged)
 - **Added:**
   - A jest `setupFiles` bootstrap that refuses any run whose `DATABASE_URL` host isn't `localhost`, `127.0.0.1` or `::1` (or that matches a production marker), or that holds a **live** Paystack key.
   - `backend/.env.test.example` (`backend/.env.test` is now git-ignored; it wasn't before).

@@ -2,6 +2,7 @@
 
 
 const { Pool } = require('pg');
+const { applyMigrationFile } = require('./migrationFile');
 require('dotenv').config();
 
 // Previously logged the full DATABASE_URL, including its embedded password,
@@ -1143,8 +1144,6 @@ async function migrate() {
     client40.release();
   }
 
-  // pool.end() moved from v40's finally to here when v41 was added — it must
-  // stay on whichever migration runs last, or the process would not drain.
   const client41 = await pool.connect();
   try {
     await migrateV41(client41);
@@ -1153,6 +1152,18 @@ async function migrate() {
     throw err;
   } finally {
     client41.release();
+  }
+
+  // pool.end() moved from v41's finally to here when v42 was added — it must
+  // stay on whichever migration runs last, or the process would not drain.
+  const client42 = await pool.connect();
+  try {
+    await migrateV42(client42);
+  } catch (err) {
+    console.error('Migration v42 failed:', err.message);
+    throw err;
+  } finally {
+    client42.release();
     await pool.end();
   }
 
@@ -3024,4 +3035,14 @@ async function migrateV41(client) {
   }
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40, migrateV41 };
+// ─── v42: schema_migrations_ledger (L0.2, #71) ───────────────────────────────
+// From v42 on, every schema change is a standalone file in ./migrations/,
+// applied here for fresh/CI databases and, byte-for-byte the same, to
+// production by the founder (scripts/prod-migrations/D-Apply.ps1). This
+// function only runs that file; the SQL lives in the file, not here.
+async function migrateV42(client) {
+  const m = await applyMigrationFile(client, 'v42_schema_migrations_ledger.sql');
+  console.log(`Flash database migration v42 completed: schema_migrations_ledger (file sha256 ${m.sha})`);
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40, migrateV41, migrateV42 };
