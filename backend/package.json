@@ -12,7 +12,10 @@
     "dev": "nodemon server.js",
     "migrate": "node src/db/migrate.js",
     "test": "jest --runInBand",
-    "test:integration": "jest --runInBand tests/integration"
+    "test:integration": "jest --runInBand tests/integration",
+    "test:db:up": "docker compose -f ../docker-compose.test.yml up -d --wait",
+    "test:db:migrate": "node tests/setup/migrateTestDb.js",
+    "test:db:down": "docker compose -f ../docker-compose.test.yml down"
   },
   "dependencies": {
     "@adminjs/express": "^6.1.1",

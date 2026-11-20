@@ -1,0 +1,27 @@
+# docker-compose.test.yml: throwaway Postgres 17 for LOCAL tests only (L0.1, #69)
+#
+#   docker compose -f docker-compose.test.yml up -d --wait
+#   docker compose -f docker-compose.test.yml down
+#
+# - postgres:17 matches production's major version (17.6). The dev stack in
+#   docker-compose.yml still uses 15; that is unchanged here (FI-068).
+# - Bound to 127.0.0.1:55432 only; never reachable from the network.
+# - Data lives in tmpfs: nothing persists, every `up` starts empty.
+# - Credentials are test-only and match backend/.env.test.example.
+name: flash-test
+services:
+  postgres-test:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: flash_test
+      POSTGRES_PASSWORD: flash_test
+      POSTGRES_DB: flash_test
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flash_test -d flash_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
