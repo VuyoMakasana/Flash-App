@@ -4,6 +4,20 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-21 — Launch plan L0.3: cron audit, FI-014, logging, awake window (#75, `launch/l0-3-cron-window`)
+- **FI-014 root cause confirmed:** Render runs the root `server.js`, which requires `src/server.js`. There, `require.main === module ? startServer() : createApp()` ran `createApp()` at require time, registering all 16 crons; then `startServer()` registered all 16 again.
+  - Also found: the first set captured an `io` that never listened, so its socket emits reached no one.
+  - Also found: graceful shutdown closed that non-listening server, not the live one.
+- **Fix:**
+  - `src/jobs/cronRunner.js`: register once per process; start/finish/fail logs; no overlap; SAST daily slots inside 06:45–19:45; startup catch-up for daily jobs.
+  - `createApp({ withCronJobs })`, so only `startServer()` asks for crons.
+  - Lazy exports.
+  - The escalation claim UPDATE.
+  - The 4 out-of-window daily jobs moved to 06:50–06:56 SAST; the morning release stays at 07:00 (explicit SAST).
+  - Audit: `docs/CRON_JOBS.md`.
+- **Found:** FI-073 lead. Startup blocks the event loop for about 54–69 s locally on `main` too, longer than the 5 s DB connect timeout. Recorded; to fix in L1.
+- **Verification:** see PR.
+
 ## 2026-11-20 — FI-081 raised to Critical; v43 readiness check (#73, `launch/v43-rls-readiness`)
 - **Founder-reported (2026-11-20):**
   - The Supabase advisor confirmed `rls_disabled_in_public` (ERROR) on all 66 tables.
