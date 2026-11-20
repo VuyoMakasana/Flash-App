@@ -4,6 +4,18 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-21 — v43 decisions and standing rules recorded (#73, `launch/v43-decisions`)
+- **Founder decisions for v43:**
+  - the rollback disables RLS only and never re-grants `anon`/`authenticated`;
+  - `service_role` stays as is, and its key must never be in the apps, the website or the repo;
+  - default privileges owned by roles we can't alter (e.g. `supabase_admin`) are an accepted, recorded gap. They only apply to objects that role creates.
+- **Standing rules** (`PROD_MIGRATIONS.md` §1, rules 9–10; `WORKFLOW.md` §1):
+  - every migration that creates a table enables RLS on it and grants nothing to `anon`/`authenticated`;
+  - every step E records the Supabase security advisor's result.
+
+  `E-Verify.ps1` now prints that reminder.
+- **v43 is still not written.** It waits for the readiness check (OK) and v42's A–E.
+
 ## 2026-11-20 — FI-081 raised to Critical; v43 readiness check (#73, `launch/v43-rls-readiness`)
 - **Founder-reported (2026-11-20):**
   - The Supabase advisor confirmed `rls_disabled_in_public` (ERROR) on all 66 tables.
