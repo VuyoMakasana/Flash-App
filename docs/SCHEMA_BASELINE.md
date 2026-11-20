@@ -184,7 +184,9 @@ v41 itself is not a cause: run alone, it is proven to do nothing on production's
 2. **No production schema change except through the approved backup-first process below.** That includes the Supabase SQL editor, the Supabase MCP server and the Supabase CLI.
 3. **Open decision (recommended): remove or disable the Supabase MCP server in `.vscode/mcp.json`,** or later point it at a staging project. Today it points at production (FOUND_ISSUES item, from the Phase 1 condition 5 list). Together with §2, this is the route by which unreviewed production DDL, including a `DROP`, has already happened. **To be logged in FOUND_ISSUES as High.**
 
-**Proposed backup-first process** (draft, not adopted):
+**Superseded (2026-11-20):** the approved process is **`docs/PROD_MIGRATIONS.md`** (L0.2, #71): standalone migration files from v42 on, BEFORE/AFTER fingerprints, ledger, founder steps A–E. The draft below is kept for history.
+
+**Proposed backup-first process** (draft, superseded):
 1. A PR containing the migration is reviewed and merged, and CI passes, including the schema check (§10).
 2. **Backup:** take a Supabase on-demand backup or a `pg_dump` of the full database, verified restorable, **before** anything runs.
 3. Founder runs `prod_dump_schema.sh` (the before-dump).
@@ -243,17 +245,17 @@ Everything runs in one transaction. Every item checks the catalog (`pg_attribute
 **`scripts/schema-baseline/schema_check.sh`** (run from the repo root: `bash scripts/schema-baseline/schema_check.sh`):
 1. Starts a throwaway `postgres:17` container: in-memory, bound to `127.0.0.1`, random password.
 2. Refuses if `backend/.env` exists, or if the URL it built is not `127.0.0.1` / `localhost`.
-3. Runs `migrate.js` (v1–v41) and **fails on any v41 skip**.
-4. Dumps the schema and **fails unless both the dump and the baseline are non-empty and the CREATE TABLE counts are as expected**: fresh = baseline − 3 settlement orphans (63 = 66 − 3). "Identical because empty" can never pass.
+3. Runs `migrate.js` (v1–v42) and **fails on any v41 skip** or if v41 or v42 does not report completion.
+4. Dumps the schema and **fails unless both the dump and the baseline are non-empty and the CREATE TABLE counts are as expected**: fresh = baseline − 3 settlement orphans (64 = 67 − 3 since v42; 63 = 66 − 3 before). "Identical because empty" can never pass.
 5. Runs `normalize_schema.py --self-test` (9 cases) and `--compare` against the committed **`scripts/schema-baseline/production_schema_baseline.sql`**, and fails on any unaccepted difference.
 
-The committed baseline is production's `pg_dump` with comments, nonce lines and session `SET`s removed and statements sorted; column order is kept. It is 72,732 bytes, 66 CREATE TABLEs, and passed the secret scan: the only quoted literals on `password`/`token` lines are the enum values `'email_verification'` and `'password_reset'`. **The raw dumps in `schema-baseline-input/` are git-ignored and never committed.**
+The committed baseline is production's `pg_dump` with comments, nonce lines and session `SET`s removed and statements sorted; column order is kept. **Since v42 it is the expected production schema _after_ the latest migration** (`docs/PROD_MIGRATIONS.md` §3): 73,021 bytes, 67 CREATE TABLEs, sha256 `4355621a…951cd3` (v42's AFTER fingerprint). Before v42 it was 72,732 bytes, 66 CREATE TABLEs, and passed the secret scan: the only quoted literals on `password`/`token` lines are the enum values `'email_verification'` and `'password_reset'`. **The raw dumps in `schema-baseline-input/` are git-ignored and never committed.**
 
 **Negative tests run (2026-11-19):**
 - Baseline with one CHECK value changed (`'approved'` → `'approvedX'` in `stores_status_check`, an N8-accepted constraint) → `RESULT: FAIL (2 unaccepted difference(s))`.
 - Empty baseline → `SCHEMA CHECK FAILED: a dump is (near-)empty`.
 
-**Refreshing the baseline (founder only; never Claude Code):**
+**Refreshing the baseline (founder only; never Claude Code).** A migration PR updates the baseline itself (`PROD_MIGRATIONS.md` §4); a refresh from production is only needed to investigate drift, and step A of the next migration detects drift anyway:
 1. In your own PowerShell window, set `FLASH_PROD_DB_URL` (Session pooler) with `Read-Host -AsSecureString`, as in B2.
 2. `docker run --rm -e FLASH_PROD_DB_URL -v "${PWD}\scripts\schema-baseline:/s:ro" postgres:17 sh /s/prod_check.sh`, then check the database name and `session_read_only = on`.
 3. `docker run --rm -e FLASH_PROD_DB_URL -v "${PWD}\scripts\schema-baseline:/s:ro" -v "${PWD}\schema-baseline-input:/out" postgres:17 sh /s/prod_dump_schema.sh`

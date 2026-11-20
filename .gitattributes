@@ -4,3 +4,9 @@ scripts/schema-baseline/*.sh text eol=lf
 # Committed production schema baseline: byte-stable for hashing and diffing.
 scripts/schema-baseline/*.sql text eol=lf
 scripts/schema-baseline/*.py text eol=lf
+# Standalone migration files and their checksums are hashed byte-for-byte by
+# every runner (L0.2, #71): they must be LF on every checkout.
+backend/src/db/migrations/** text eol=lf
+# Founder runbook: container-side helpers must be LF. The .ps1/.psm1 files are
+# ASCII-only (Windows PowerShell 5.1) and keep the platform default.
+scripts/prod-migrations/*.sh text eol=lf

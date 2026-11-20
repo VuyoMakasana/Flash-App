@@ -400,6 +400,9 @@ ALTER TABLE ONLY public.saved_cards
 ALTER TABLE ONLY public.saved_cards
     ADD CONSTRAINT saved_cards_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
+ALTER TABLE ONLY public.schema_migrations_ledger
+    ADD CONSTRAINT schema_migrations_ledger_pkey PRIMARY KEY (version);
+
 ALTER TABLE ONLY public.settlement_config
     ADD CONSTRAINT settlement_config_pkey PRIMARY KEY (id);
 
@@ -1426,6 +1429,12 @@ CREATE TABLE public.saved_cards (
     is_default boolean DEFAULT false,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now()
+);
+
+CREATE TABLE public.schema_migrations_ledger (
+    version text NOT NULL,
+    sha256 text NOT NULL,
+    applied_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 CREATE TABLE public.settlement_config (
