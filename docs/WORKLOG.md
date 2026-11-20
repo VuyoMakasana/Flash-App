@@ -18,7 +18,18 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 - **Found:** FI-073 lead. Startup blocks the event loop for about 54–69 s locally on `main` too, longer than the 5 s DB connect timeout. Recorded; to fix in L1.
 - **Verification:** see PR.
 
-## 2026-11-20 — Launch plan L0.2: production migration process (#71, `launch/l0-2-prod-migration-process`)
+## 2026-11-20 — FI-081 raised to Critical; v43 readiness check (#73, `launch/v43-rls-readiness`)
+- **Founder-reported (2026-11-20):**
+  - The Supabase advisor confirmed `rls_disabled_in_public` (ERROR) on all 66 tables.
+  - The founder disabled the Data API; the waitlist still works, and that warning cleared.
+  - `pg_graphql_anon_table_exposed` and `pg_graphql_authenticated_table_exposed` remain, on 66 tables each.
+  - No app uses supabase-js, the anon key, or REST/GraphQL.
+- **FI-081 → Critical**, mitigated by the Data API being off. The fix is v43: RLS on every `public` table, revoke from `anon`/`authenticated`, default privileges. It is a **proposal under review, not written**.
+- **New:** `scripts/prod-migrations/R-RlsReadiness.ps1` + `rls_readiness.sh`, a read-only check that the backend role stays exempt from RLS on every table. Verified locally only, on a prod-shaped DB with Supabase-like roles; see PR.
+- **New FI-083 (High):** Supabase is in Frankfurt and Render in Oregon, so every query crosses the Atlantic. Added `LAUNCH_INFRA_CHECKLIST.md` **L-8** (move `Flash-App` to Render Frankfurt).
+- **PR #72 merged and deployed** (`09bf0d3`). The founder posted the second-review comment on it. **v42 is not yet applied**; the founder runs A–E next.
+
+## 2026-11-20 — Launch plan L0.2: production migration process (#71, PR #72, merged)
 - **Process approved by the founder** with six changes. All six are implemented, and the process is documented in **`docs/PROD_MIGRATIONS.md`**:
   - BEFORE/AFTER header fingerprints;
   - the ledger hash passed as `-v file_sha`;
