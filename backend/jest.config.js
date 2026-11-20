@@ -30,6 +30,9 @@
 /** @type {import('jest').Config} */
 module.exports = {
   testEnvironment: 'node',
+  // L0.1 (#69): refuse any non-local database or live Paystack key before a
+  // single test runs. See tests/setup/testEnv.js and docs/TESTING.md.
+  setupFiles: ['<rootDir>/tests/setup/testEnv.js'],
   testMatch: [
     '**/tests/unit/**/*.test.js',
     '**/tests/integration/**/*.test.js',

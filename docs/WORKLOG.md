@@ -4,6 +4,18 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-20 — Launch plan L0.1: local/test isolation (#69, `launch/l0-1-test-isolation`)
+- **Added:**
+  - A jest `setupFiles` bootstrap that refuses any run whose `DATABASE_URL` host isn't `localhost`, `127.0.0.1` or `::1` (or that matches a production marker), or that holds a **live** Paystack key.
+  - `backend/.env.test.example` (`backend/.env.test` is now git-ignored; it wasn't before).
+  - `docker-compose.test.yml`: Postgres 17, `127.0.0.1:55432`, tmpfs.
+  - npm scripts `test:db:up` / `test:db:migrate` / `test:db:down` (the migrate helper is guarded the same way).
+  - `docs/TESTING.md`.
+- **Test-first:** `tests/unit/testEnvGuard.test.js` failed before the fix (`Cannot find module`) and passes after (14 tests, including jest wiring and child-process runs of the bootstrap).
+- **Verified locally against Postgres 17.12 only:** migrate v1–v41 with no v41 skips; unit 637/637 (44 suites); integration 7/7 (2 suites). A full run with a remote URL, and a full run with a live key, were each refused before any test executed.
+- **FI-004:** mitigated.
+- **No runtime change.**
+
 ## 2026-11-20 — Phase 3: cleanup (`foundation/cleanup`)
 - **Deploy diagnosis** (founder, from Render): the backend (`rootDir=backend`) auto-deploys only for `main` commits that touch `backend/` and pass CI.
   - `4de9d57` (CI only) and `abcfa49` (docs/settings only) were skipped by design.

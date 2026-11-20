@@ -8,3 +8,8 @@ coverage/
 # AdminJS's own generated frontend bundle — regenerated automatically on
 # every server start, not source, same category as node_modules/dist.
 .adminjs/
+
+# L0.1 (#69): local test env (holds a Paystack TEST key). Never commit it;
+# only the .example is tracked.
+.env.test
+.env.*.local
