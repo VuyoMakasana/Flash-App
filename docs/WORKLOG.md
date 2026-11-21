@@ -4,7 +4,20 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
-## 2026-11-21 — L0.5a: v44 `feature_switches` written and proven locally; NOT applied (#84, `launch/v44-feature-switches`)
+## 2026-11-21 — v44 applied to production; readiness evidence kept per run (`docs/v44-applied`)
+- **v44 applied by the founder on 2026-11-21 at 14:17 SAST.**
+  - Steps A–E passed; verified at 14:19 SAST.
+  - The step E record is on PR #85: https://github.com/VuyoMakasana/Flash-App/pull/85#issuecomment-7063019801.
+  - File sha `332926f4…`; BEFORE `689f03b4…`; AFTER `83a42d48…`.
+  - Backup `flash_public_20261121_140851_pre-v44.dump` (sha `94563bd5…`), verified by step C.
+- **Readiness:** 68/68/0, `postgres` defaults = `postgres` + `service_role`, verdict OK.
+- **Advisor (15:04 SAST):** no ERRORs or WARNs; INFO `rls_enabled_no_policy` on 68 tables (expected).
+- **Fix:** `R-RlsReadiness.ps1` saved to a fixed file name, so the post-v44 run overwrote the pre-v43 readiness file. It now saves to `rls_readiness_<yyyyMMdd_HHmmss>.txt` (or `rls_post_v43_<…>.txt`) through the new `Get-FlashStampedFileName`, so every run is kept.
+  - It's verified under PowerShell 5.1: exact format, distinct names a second apart, and refused path-like names.
+  - Scripts only, nothing under `backend/`: the jest test for it is held for the next backend PR, because this PR may not touch `backend/`.
+- **Updated** `PROD_MIGRATIONS.md` §9, `SCHEMA_BASELINE.md`, `PROJECT_STATE.md` and the older WORKLOG heading, so that none says v44 is pending.
+
+## 2026-11-21 — L0.5a: v44 `feature_switches` written and proven locally; NOT applied by that PR (#84, PR #85, merged; **applied by the founder 2026-11-21 14:17 SAST**, see the entry above)
 - **v44** creates `public.feature_switches`:
   - `key` text, the primary key, with a CHECK limited to the 8 known keys;
   - `enabled`, `updated_at` and `updated_by`. `updated_by` has no foreign key, so v44 locks no existing table; the audit trail goes in `admin_actions` in L0.5b.
