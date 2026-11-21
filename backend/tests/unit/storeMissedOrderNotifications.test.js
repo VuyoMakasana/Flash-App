@@ -91,11 +91,35 @@ describe('escalateStuckPendingAcceptanceOrders', () => {
     pool.query = jest.fn()
       .mockResolvedValueOnce({ rows: [{ id: 'order-1', order_number: 'A' }, { id: 'order-2', order_number: 'B' }] })
       .mockRejectedValueOnce(new Error('DB blip'))
-      .mockResolvedValueOnce({ rows: [] });
+      // L0.3 (#75): the claim UPDATE now returns the claimed row; an empty
+      // result means another run already claimed it (see the tests below).
+      .mockResolvedValueOnce({ rows: [{ id: 'order-2' }] });
 
     const result = await escalateStuckPendingAcceptanceOrders({});
 
     expect(result).toEqual({ escalated: 1, total: 2 });
+  });
+
+  // L0.3 (#75) / FI-014: two overlapping runs (the double-registered crons,
+  // or two instances) used to both pass the SELECT and both send the email,
+  // because the UPDATE had no IS NULL guard. The UPDATE is now the claim.
+  test('the flag UPDATE only claims a row that is still unflagged, and returns it', async () => {
+    const order = { id: 'order-1', order_number: 'FLASH-1', total: '200.00' };
+    pool.query = jest.fn().mockResolvedValue({ rows: [order] });
+    await escalateStuckPendingAcceptanceOrders({});
+    const [sql] = pool.query.mock.calls.find(([q]) => /UPDATE orders SET acceptance_escalated_at/i.test(q));
+    expect(sql).toMatch(/WHERE id = \$1 AND acceptance_escalated_at IS NULL/);
+    expect(sql).toMatch(/RETURNING id/);
+  });
+
+  test('does not send when another run already claimed the order', async () => {
+    const order = { id: 'order-1', order_number: 'FLASH-1', total: '200.00' };
+    pool.query = jest.fn()
+      .mockResolvedValueOnce({ rows: [order] }) // SELECT: still looks unflagged
+      .mockResolvedValueOnce({ rows: [] });     // claim UPDATE: someone else got it first
+    const result = await escalateStuckPendingAcceptanceOrders({});
+    expect(emailService.sendOrderEscalationEmail).not.toHaveBeenCalled();
+    expect(result).toEqual({ escalated: 0, total: 1 });
   });
 });
 
@@ -110,6 +134,24 @@ describe('escalateStuckPreparingOrders', () => {
     expect(emailService.sendOrderEscalationEmail).toHaveBeenCalledWith(order, 'preparation');
     const updateCall = pool.query.mock.calls.find(([sql]) => /UPDATE orders SET preparation_escalated_at/i.test(sql));
     expect(updateCall[1]).toEqual(['order-2']);
+  });
+
+  test('the flag UPDATE only claims a row that is still unflagged (L0.3, #75)', async () => {
+    const order = { id: 'order-2', order_number: 'FLASH-2', total: '90.00' };
+    pool.query = jest.fn().mockResolvedValue({ rows: [order] });
+    await escalateStuckPreparingOrders({});
+    const [sql] = pool.query.mock.calls.find(([q]) => /UPDATE orders SET preparation_escalated_at/i.test(q));
+    expect(sql).toMatch(/WHERE id = \$1 AND preparation_escalated_at IS NULL/);
+    expect(sql).toMatch(/RETURNING id/);
+  });
+
+  test('does not send when another run already claimed the order (L0.3, #75)', async () => {
+    pool.query = jest.fn()
+      .mockResolvedValueOnce({ rows: [{ id: 'order-2', order_number: 'FLASH-2' }] })
+      .mockResolvedValueOnce({ rows: [] });
+    const result = await escalateStuckPreparingOrders({});
+    expect(emailService.sendOrderEscalationEmail).not.toHaveBeenCalled();
+    expect(result).toEqual({ escalated: 0, total: 1 });
   });
 
   test('defaults to a 20-minute threshold (same 10-minute buffer ratio as the 30-minute preparing timeout)', async () => {
