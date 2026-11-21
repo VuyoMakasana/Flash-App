@@ -39,6 +39,7 @@ build/
 # Schema-baseline inputs produced by the founder from production (never commit raw)
 schema-baseline-input/
 scripts/schema-baseline/.schema-check-tmp/
+scripts/schema-baseline/.v43-rehearsal-tmp/
 
 # Founder-held security reports: kept outside the repo, never committed
 SECURITY_SELF_PENTEST_REPORT*.md

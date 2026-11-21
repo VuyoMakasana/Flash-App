@@ -4,6 +4,25 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-21 — v43 RLS lockdown written and proven locally; NOT applied (#73, `launch/v43-rls-lockdown`)
+- **Repo search before writing:** nothing in the backend, either app, the store portal or the scripts uses supabase-js, an anon or publishable key, Storage, Realtime, auth, or REST/GraphQL. The only Supabase hits are the Postgres connection string, a dashboard link, the never-run `test-db.js`, a test fixture, the pooler-host check, and the read-only Supabase MCP dev tool.
+- **Non-table objects in `public`** (baseline and `migrate.js`): 0 sequences, 0 functions or procedures, 0 views, 0 triggers; 1 enum type (`order_status_enum`, not touched).
+- **v43:**
+  - RLS on all 67 tables, with no FORCE and no policies;
+  - revoke `anon`/`authenticated` on tables, sequences and functions;
+  - revoke them from `postgres`'s default privileges in `public`;
+  - guards: an exact table set by name (67 on production; 64 = the 67 minus the 3 settlement orphans on fresh/CI), and the applying role keeping access;
+  - an in-transaction proof, then the ledger row.
+
+  The rollback disables RLS and removes the ledger row; it never re-grants. AFTER is `689f03b4…`; the change is exactly 67 `ENABLE ROW LEVEL SECURITY` statements.
+- **Proofs:**
+  - the grant rehearsal on production's real grant state passed;
+  - the backend-role integration test passed;
+  - rule 9 and the post-v43 evaluator are unit-tested.
+
+  `R-RlsReadiness.ps1 -PostV43` is the check after step E.
+- **Not applied.** Next: the founder's second review of the SQL, then A–E.
+
 ## 2026-11-21 — v42 applied to production; records updated (`docs/v42-applied`)
 - **v42 applied by the founder on 2026-11-21 at 07:55 SAST.**
   - Steps A–E all passed; verified at 09:38 SAST.

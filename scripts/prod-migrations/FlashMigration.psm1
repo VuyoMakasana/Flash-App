@@ -256,6 +256,45 @@ function Test-FlashSchemaDelta {
     return ($r.Code -eq 0)
 }
 
+# v43 post-check (FI-081, #73): judges rls_readiness.sh output lines. PASS
+# only if: every table has RLS (rls_enabled = tables = ExpectedTables);
+# no table grants anon/authenticated; no sequence or function in public is
+# granted to them; postgres's default ACLs no longer mention them; and the
+# readiness verdict is OK (the backend role keeps access). Pure function: it
+# never connects to anything, so it is unit-tested in CI.
+function Test-FlashV43Lockdown {
+    param([Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Lines, [int]$ExpectedTables = 67)
+    $failures = New-Object System.Collections.Generic.List[string]
+    $summary = @($Lines | Where-Object { $_ -like 'summary|*' })
+    if ($summary.Count -ne 1) {
+        $failures.Add('no summary line in the readiness output')
+    } else {
+        $kv = @{}
+        foreach ($part in ($summary[0] -split '\|' | Select-Object -Skip 1)) {
+            $i = $part.IndexOf('=')
+            if ($i -gt 0) { $kv[$part.Substring(0, $i)] = $part.Substring($i + 1) }
+        }
+        if ($kv['tables'] -ne [string]$ExpectedTables) { $failures.Add("tables=$($kv['tables']), expected $ExpectedTables") }
+        if ($kv['rls_enabled'] -ne [string]$ExpectedTables) { $failures.Add("rls_enabled=$($kv['rls_enabled']), expected $ExpectedTables") }
+        if ($kv['tables_with_anon_or_auth_privs'] -ne '0') { $failures.Add("tables_with_anon_or_auth_privs=$($kv['tables_with_anon_or_auth_privs']), expected 0") }
+    }
+    foreach ($l in @($Lines | Where-Object { $_ -like 'sequence|*' })) {
+        $f = $l -split '\|'
+        if ($f[3] -ne '0' -or $f[4] -ne '0') { $failures.Add("sequence $($f[1]) still granted to anon/authenticated") }
+    }
+    foreach ($l in @($Lines | Where-Object { $_ -like 'function|*' })) {
+        $f = $l -split '\|'
+        if ($f[3] -ne 'f' -or $f[4] -ne 'f') { $failures.Add("function $($f[1]) still executable by anon/authenticated") }
+    }
+    foreach ($l in @($Lines | Where-Object { $_ -like 'default_acl|postgres|*' })) {
+        $f = $l -split '\|'
+        if ($f[4] -match '(^|[{,])"?(anon|authenticated)"?=') { $failures.Add("postgres default privileges for $($f[2]) in $($f[3]) still mention anon/authenticated") }
+    }
+    $verdict = @($Lines | Where-Object { $_ -like 'verdict|*' })
+    if ($verdict.Count -ne 1 -or $verdict[0] -notlike 'verdict|OK*') { $failures.Add('readiness verdict is not OK (the backend role would not keep access to every table)') }
+    return [pscustomobject]@{ Pass = ($failures.Count -eq 0); Failures = $failures.ToArray() }
+}
+
 # Throwaway local postgres:17 with NO network: it cannot reach production or
 # anything else. Data lives in tmpfs and disappears with the container.
 function Start-FlashLocalPg {

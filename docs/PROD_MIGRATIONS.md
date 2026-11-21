@@ -32,7 +32,8 @@
 | `backend/src/db/migrationFile.js` | Node side: hash, header parse, `:'file_sha'` binding, `applyMigrationFile()`. |
 | `scripts/prod-migrations/A-…E-*.ps1` + `FlashMigration.psm1` | The founder's steps. Windows PowerShell 5.1, ASCII-only, **everything through `docker run`**. No bash, WSL or Python on the host. |
 | `scripts/prod-migrations/*.sh`, `schema_delta.py` | Run **inside** containers (`postgres:17`, `python:3.12-alpine`). `run.sh` wraps every step container and reports its exit code (§5, Docker Desktop hang). |
-| `scripts/prod-migrations/R-RlsReadiness.ps1` + `rls_readiness.sh` | **Read-only** readiness check for v43 (FI-081): table owners, RLS flags, `anon`/`authenticated` privileges, default privileges, and whether the backend role stays exempt from RLS on every table. |
+| `scripts/prod-migrations/R-RlsReadiness.ps1` + `rls_readiness.sh` | **Read-only** readiness check (FI-081): table owners, RLS flags, `anon`/`authenticated` privileges, default privileges, and whether the backend role stays exempt from RLS on every table. With **`-PostV43`** it is also the v43 check after step E (§5). |
+| `scripts/schema-baseline/v43_grant_rehearsal.sh` | Developer tool, local only: rebuilds production's real **grant** state (Supabase roles, grants, both default ACLs) and rehearses v43 apply / re-apply / wrong sha / rollback / guards / lock timeout. Step D's rehearsal can't do that, because its dump has no privileges. |
 | `scripts/schema-baseline/production_schema_baseline.sql` | The committed baseline. After a migration PR, it is the **expected production schema after** the migration. |
 | `scripts/schema-baseline/baseline_to_restorable.py` | Developer tool: builds a local prod-shaped database from the baseline (§4). |
 | `schema-baseline-input/vNN/` (git-ignored) | Step working folder. **Schema dumps only, never table data.** |
@@ -155,6 +156,22 @@ A step therefore shows a container's output when it finishes, not live. If the m
 
 **If step E fails:** stop. Don't deploy code that depends on the change. Report the output, then decide (§7).
 
+**v43 only: the check after step E.** The fingerprints compare `pg_dump --no-privileges` dumps. They see v43's 67 `ENABLE ROW LEVEL SECURITY` statements, but **not** its `REVOKE`s or default-privilege changes, so A–E alone can't verify half of v43. After step E passes, run (read-only):
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\prod-migrations\R-RlsReadiness.ps1 -BackendRole postgres -PostV43
+```
+It **passes only if** all of these hold:
+- `rls_enabled=67` (and `tables=67`);
+- `tables_with_anon_or_auth_privs=0`;
+- no sequence or function in `public` is granted to `anon`/`authenticated`;
+- `postgres`'s default ACLs no longer mention `anon`/`authenticated`;
+- the verdict is OK (the backend role keeps access to every table).
+
+`supabase_admin`'s default ACLs are printed as an accepted gap and aren't checked. Then **the security advisor (rule 10):**
+- expect both `pg_graphql_anon_table_exposed` and `pg_graphql_authenticated_table_exposed` to go from 67 to **0**;
+- expect **`rls_enabled_no_policy` (INFO) on all 67 tables**. That is intended: RLS on with no policy means deny-all for every role that doesn't bypass RLS. The backend role (`postgres`, BYPASSRLS, owner) is unaffected.
+- Any new ERROR or WARN means step E failed.
+
 ## 6. Backups
 
 - **Location:** `C:\Users\makas\flash-secrets\backups\` by default (`-BackupDir` to change it). Step B refuses a folder inside the repo.
@@ -212,3 +229,5 @@ Then revert the migration PR, so the committed baseline matches production again
   - `pg_graphql_anon_table_exposed` and `pg_graphql_authenticated_table_exposed` each went from **66 to 67**.
 - **Why the +1:** the new `schema_migrations_ledger` table inherited `postgres`'s default privileges, which grant `anon`/`authenticated` on every new table. v42 predates rule 9. It isn't reachable externally (the Data API is disabled), and the table holds only migration names and hashes.
 - **Accepted by the founder, not rolled back.** v43 must cover all 67 tables, `schema_migrations_ledger` included, and alter `postgres`'s default privileges (FI-081).
+
+| v43 | (this PR, #73) | *pending: second review, then the founder runs A–E plus the v43 check* | `4355621a…951cd3` | `689f03b4…a5cf113` (77,270 bytes, 67 tables) | *pending* (file `4c26cb10…eb11689`) |
