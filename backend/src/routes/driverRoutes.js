@@ -138,11 +138,17 @@ router.get(
   requireRole("driver"),
   DriverController.getWallet,
 );
+// Driver withdrawals are permanently off for launch (founder decision,
+// 2026-11-21; L0.4 #82). This used to create a payout request and
+// immediately start a live Paystack transfer. It now refuses before any
+// database write or Paystack call. Earnings are paid out automatically by
+// L3's nightly transfer, which reuses PayoutService.
 router.post(
   "/wallet/payout-request",
   authenticate,
   requireRole("driver"),
-  DriverController.requestPayout,
+  requireApprovedDriver,
+  DriverController.refuseWithdrawal,
 );
 router.get(
   "/active-order",

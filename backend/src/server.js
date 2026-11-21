@@ -61,7 +61,6 @@ const {
   authLimiter,
 } = require("./middleware/rateLimiter");
 const { corsMiddleware } = require("./middleware/cors");
-const { redisClient } = require("./middleware/cache");
 const setupSocket = require("./socket/socketServer");
 const {
   reconcilePendingPayments,
@@ -101,6 +100,7 @@ const messagesRoutes = require("./routes/messageRoutes");
 const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
 const sosRoutes = require("./routes/sosRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
+const { createHealthRouter } = require("./routes/healthRoutes");
 const { createCronRunner, dailySast } = require("./jobs/cronRunner");
 
 // L0.3 (#75) / FI-014: one runner per process. Cron jobs are registered only
@@ -184,12 +184,18 @@ function createApp({ withCronJobs = false } = {}) {
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true }));
 
+// Health checks (L0.4, #82): GET /health (liveness, no database) and the
+// token-protected GET /health/db. Mounted BEFORE the request logger, so the
+// keep-awake pings add no log noise and the X-Health-Token header can never
+// be logged. See src/routes/healthRoutes.js.
+  app.use(createHealthRouter({ pool }));
+
 // Logging — structured JSON, with a request ID (req.id) attached to every
 // log line for a given request, including anything logged via req.log
 // inside a route handler. Replaces morgan's plain-text access log.
   app.use(pinoHttp({
     logger,
-    redact: ["req.headers.authorization", "req.headers.cookie"],
+    redact: ["req.headers.authorization", "req.headers.cookie", 'req.headers["x-health-token"]'],
   }));
 
 // Rate limiting
@@ -232,45 +238,6 @@ function createApp({ withCronJobs = false } = {}) {
 // mounted at /api directly since the frontend already calls /api/waitlist,
 // /api/contact, /api/applications/driver, /api/applications/seller.
   app.use("/api", marketingRoutes);
-
-// Health check — previously always returned status: "ok" unconditionally,
-// with no actual check of either dependency. That made it useless for real
-// incident response: it would report healthy even with the DB or Redis down.
-  app.get("/health", async (req, res) => {
-    const checks = { database: "unknown", redis: "unknown" };
-    let healthy = true;
-
-    try {
-      await pool.query("SELECT 1");
-      checks.database = "ok";
-    } catch (err) {
-      checks.database = "error";
-      healthy = false;
-    }
-
-    if (!redisClient) {
-      checks.redis = "not_configured";
-    } else {
-      try {
-        await redisClient.ping();
-        checks.redis = "ok";
-      } catch (err) {
-        // Redis backs caching and distributed rate limiting, both of which
-        // already fall back gracefully (cache.js skips itself; rateLimiter.js
-        // falls back to an in-memory store) — its outage degrades
-        // performance but doesn't take the API down, so it doesn't flip
-        // overall health to unhealthy the way a DB failure does.
-        checks.redis = "error";
-      }
-    }
-
-    res.status(healthy ? 200 : 503).json({
-      status: healthy ? "ok" : "unhealthy",
-      version: "3.0.0",
-      timestamp: new Date().toISOString(),
-      checks,
-    });
-  });
 
   // Operating hours status — used by both apps to show open/closed banner
   app.get("/api/status/hours", (req, res) => {

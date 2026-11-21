@@ -4,6 +4,19 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-21 — L0.4: cheap /health, protected /health/db, driver withdrawals closed, rule-11 CI check (#82, `launch/l0-4-health-payouts`)
+- **`GET /health`** is now liveness only: `200 {"status":"ok"}`, no-store, no database, no version, no Redis status; mounted before the request logger. It used to run `SELECT 1` through the pool on every call, with no rate limit.
+- **`GET /health/db`** (new):
+  - the `X-Health-Token` header is compared in constant time against `HEALTH_CHECK_TOKEN`;
+  - a wrong or missing token, or no token configured, gets the normal 404;
+  - the result is cached for 15 s, and concurrent requests share one query;
+  - it returns only `{database, latencyMs}`, with 503 on error;
+  - it's never logged, and the logger also redacts `x-health-token`.
+- **FI-086 fixed:** `POST /api/drivers/wallet/payout-request` started a live Paystack transfer. It now refuses (`403 WITHDRAWALS_DISABLED`) behind `requireApprovedDriver`, before any database write or Paystack call; the old handler is removed and `PayoutService` kept for L3. The driver app has no withdraw button.
+- **Rule 11 CI check** (FI-085), plus a fix to the rule-9 regex, where `public.` matched any character.
+- **Docs:** the pinger setup and free-hours maths (`CRON_JOBS.md`, `LAUNCH_INFRA_CHECKLIST.md` L-10, L-3 note).
+- **Founder action:** add `HEALTH_CHECK_TOKEN` in Render, then set up the two cron-job.org jobs.
+
 ## 2026-11-21 — v43 applied to production; FI-081 fixed (`docs/v43-applied`)
 - **v43 applied by the founder on 2026-11-21 at 11:09 SAST.**
   - Steps A–E and `R-RlsReadiness.ps1 -PostV43` all passed; verified at 11:12 SAST.

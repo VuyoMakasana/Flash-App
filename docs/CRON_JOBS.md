@@ -38,6 +38,59 @@ Before L0.3, `node-cron` ran in the server's timezone, which is **UTC on Render*
 
 **Coming in L3:** the daily driver payout at 19:15 SAST (inside the window, before it closes).
 
+## Keeping the backend awake: the external pinger (L0.4, #82)
+Render's free plan puts `Flash-App` to sleep after 15 minutes without traffic, and asleep it runs no jobs. A cron-job.org job therefore calls `GET /health` every 10 minutes.
+
+**What the endpoints do:**
+- **`GET /health`** is a liveness check: `200 {"status":"ok"}`, `Cache-Control: no-store`. It does no database work and reveals nothing. It's mounted before the request logger, so pings add no log lines.
+- **`GET /health/db`** is the protected deep check:
+  - it needs the `X-Health-Token` header to equal the Render variable `HEALTH_CHECK_TOKEN` (constant-time comparison);
+  - otherwise it returns the normal `404`, and always `404` if the variable isn't set;
+  - the result is cached for 15 s;
+  - it returns `{"database":"ok"|"error","latencyMs":N}`, with `503` on a database error.
+
+### Job 1: keep-awake (one job; founder decision 2026-11-21)
+| Setting | Value |
+|---|---|
+| URL | `https://api.flashdelivery.co.za/health` |
+| Method / headers | `GET`, no headers, no body |
+| Time zone | **Africa/Johannesburg** |
+| Schedule | every day; hours **06–19**; minutes **05, 15, 25, 35, 45, 55** (first ping 06:05, last 19:55) |
+| Timeout | **30 s** (cron-job.org's maximum, as far as known) |
+| Notifications | notify **on failure**, **after 2 failures** if offered; notify **on recovery** |
+| Expected | HTTP 200, body `{"status":"ok"}` |
+
+**What the alerts mean:**
+- **The 06:05 ping may fail once:** startup takes about a minute (FI-073), longer than the 30 s timeout, but the ping still wakes the server. That's why the alert waits for 2 failures.
+- **A real problem** is two failures in a row during the day.
+- **Check weekly:** cron-job.org can disable a job after many failures in a row.
+
+**The awake window:** pings run from 06:05; the server sleeps about 15 minutes after the 19:55 ping, around 20:10. That covers the **06:45–19:45 SAST** window the jobs above rely on (rule 4).
+
+### Job 2: database check (optional deep check)
+| Setting | Value |
+|---|---|
+| URL | `https://api.flashdelivery.co.za/health/db` |
+| Method / headers | `GET`, header **`X-Health-Token: <the value of HEALTH_CHECK_TOKEN in Render>`** (typed into cron-job.org only; never in the repo, docs or chat) |
+| Time zone | Africa/Johannesburg |
+| Schedule | every day; hours **07–19**; minutes **00, 30** (every 30 minutes, 07:00–19:30) |
+| Timeout / notifications | 30 s; on failure after 2 failures; on recovery |
+| Expected | HTTP 200, `{"database":"ok",...}` |
+
+**What its results mean:**
+- **`503`:** the server is up but can't reach the database.
+- **`404`:** the token in cron-job.org doesn't match Render's, or `HEALTH_CHECK_TOKEN` isn't set.
+
+### Free instance hours (Render: 750 per workspace per month)
+| | Hours |
+|---|---|
+| Pinger: 06:05 to about 20:10 | about **14.1 h/day**, so **≤ 437 h** in a 31-day month |
+| Night wakes (estimate: about 10 a night × about 16 minutes) | about **83 h** |
+| **Total for `Flash-App`** | **about 520 h**, leaving about **230 h** |
+
+- The store portal is a static site and uses no instance hours.
+- **Founder check:** Render → Billing → free usage, and the list of web services in the workspace. Another free web service that stays awake (about 720 h) would exhaust the 750, and Render suspends free services for the rest of the month. I couldn't verify this from here.
+
 ## Reading the logs (Render)
 - **Search `cron registered`:** there must be exactly 16 lines per boot. Two lines for the same job would mean FI-014 is back.
 - **Search `cron failed`:** a job threw. The `error` field says why.

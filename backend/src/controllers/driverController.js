@@ -18,7 +18,6 @@ const {
   notifyOrderStatusChange,
 } = require('../services/orderStateMachineService');
 const { autoAssignNearestDriver } = require('../services/autoMatchService');
-const PayoutService = require('../services/payoutService');
 const paystackService = require('../services/paystackService');
 const { saveDriverPushToken, sendPushNotification, reportPushFailure } = require('../services/notificationService');
 const bcrypt = require('bcryptjs');
@@ -502,19 +501,16 @@ class DriverController {
     }
   }
 
-  static async requestPayout(req, res) {
-    const { amount } = req.body;
-    if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
-      return res.status(400).json({ error: 'Valid payout amount is required' });
-    }
-    try {
-      const request = await DriverWallet.createPayoutRequest(req.userId, amount);
-      const payout  = await PayoutService.processRequestedPayout(request.id);
-      res.status(201).json({ payoutRequest: request, payout });
-    } catch (err) {
-      console.error('[Driver] requestPayout error:', err.message);
-      res.status(400).json({ error: err.message || 'Failed to request payout' });
-    }
+  // Driver withdrawals are permanently off for launch (founder decision,
+  // 2026-11-21; L0.4 #82). The handler that created a payout request and
+  // started a Paystack transfer (requestPayout) is removed; this answers
+  // without touching the database or Paystack. No `status` field, because
+  // the driver app branches on err.status for account states.
+  static refuseWithdrawal(req, res) {
+    res.status(403).json({
+      error: "Withdrawals aren't available. Your earnings are paid to your bank automatically.",
+      code: 'WITHDRAWALS_DISABLED',
+    });
   }
 
   static async getActiveOrder(req, res) {

@@ -239,7 +239,7 @@ describe('rule 9: new tables get RLS, nothing is granted to anon/authenticated',
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, fileName), 'utf8').replace(/^\s*--.*$/gm, '');
     const created = [...sql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(?:public\.)?"?([a-z_][a-z0-9_]*)"?/gi)].map((x) => x[1].toLowerCase());
     for (const t of created) {
-      expect(sql).toMatch(new RegExp(`ALTER TABLE (?:IF EXISTS )?(?:ONLY )?(?:public\.)?"?${t}"? ENABLE ROW LEVEL SECURITY`, 'i'));
+      expect(sql).toMatch(new RegExp(`ALTER TABLE (?:IF EXISTS )?(?:ONLY )?(?:public\\.)?"?${t}"? ENABLE ROW LEVEL SECURITY`, 'i'));
     }
   });
 
@@ -294,5 +294,23 @@ describe('Test-FlashV43Lockdown (the v43 check after step E)', () => {
     const out = judge(lines);
     expect(out[0]).toBe('FAIL');
     expect(out.slice(1).join('\n')).toMatch(why);
+  });
+});
+
+// Rule 11 (FI-085): from v44 on, every function created in public must
+// REVOKE EXECUTE ... FROM PUBLIC in the same file.
+describe('rule 11: new functions revoke EXECUTE from PUBLIC', () => {
+  const FN = /CREATE (?:OR REPLACE )?(?:FUNCTION|PROCEDURE) (?:public\.)?"?([a-z_][a-z0-9_]*)"?\s*\(/gi;
+  const revoked = (sql, f) => new RegExp(`REVOKE (?:EXECUTE|ALL)(?: PRIVILEGES)? ON (?:FUNCTION|PROCEDURE|ROUTINE) (?:public\\.)?"?${f}"?\\s*\\([^)]*\\) FROM PUBLIC`, 'i').test(sql);
+  const missing = (sql) => [...sql.matchAll(FN)].map((x) => x[1].toLowerCase()).filter((f) => !revoked(sql, f));
+  test('the check catches a missing revoke and accepts a correct one', () => {
+    expect(missing('CREATE FUNCTION public.f(a int) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;')).toEqual(['f']);
+    expect(missing('CREATE OR REPLACE FUNCTION public.f(a int) RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\nREVOKE EXECUTE ON FUNCTION public.f(int) FROM PUBLIC;')).toEqual([]);
+  });
+  test('every migration from v44 on revokes EXECUTE from PUBLIC on each function it creates', () => {
+    for (const m of listMigrations().filter((x) => Number(x.version.slice(1)) >= 44)) {
+      const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, m.fileName), 'utf8').replace(/^\s*--.*$/gm, '');
+      expect({ file: m.fileName, missing: missing(sql) }).toEqual({ file: m.fileName, missing: [] });
+    }
   });
 });
