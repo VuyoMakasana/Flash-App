@@ -35,6 +35,7 @@
 | `scripts/prod-migrations/*.sh`, `schema_delta.py` | Run **inside** containers (`postgres:17`, `python:3.12-alpine`). `run.sh` wraps every step container and reports its exit code (§5, Docker Desktop hang). |
 | `scripts/prod-migrations/R-RlsReadiness.ps1` + `rls_readiness.sh` | **Read-only** readiness check (FI-081): table owners, RLS flags, `anon`/`authenticated` privileges, default privileges, and whether the backend role stays exempt from RLS on every table. With **`-PostV43`** it is also the v43 check after step E (§5). |
 | `scripts/schema-baseline/v43_grant_rehearsal.sh` | Developer tool, local only: rebuilds production's real **grant** state (Supabase roles, grants, both default ACLs) and rehearses v43 apply / re-apply / wrong sha / rollback / guards / lock timeout. Step D's rehearsal can't do that, because its dump has no privileges. |
+| `scripts/schema-baseline/v44_rehearsal.sh` | Developer tool, local only: production's post-v43 state (owner, grants, default ACLs), then v44 apply / seeds / a flipped switch surviving a re-apply / wrong sha / rollback / guards / applying while `orders`, `users` and `admins` are exclusively locked. |
 | `scripts/schema-baseline/production_schema_baseline.sql` | The committed baseline. After a migration PR, it is the **expected production schema after** the migration. |
 | `scripts/schema-baseline/baseline_to_restorable.py` | Developer tool: builds a local prod-shaped database from the baseline (§4). |
 | `schema-baseline-input/vNN/` (git-ignored) | Step working folder. **Schema dumps only, never table data.** |
@@ -80,6 +81,7 @@ The rule that follows:
    - last, the ledger insert plus the "different sha256 → `RAISE EXCEPTION`" check.
 
    Then write its `rollback/…rollback.sql`.
+   **Guards check the schema, never data.** Step D's rehearsal restores a **schema-only** dump, where every table, the ledger included, is empty. A guard such as "refuse unless the ledger has a v43 row" therefore fails in every rehearsal. Check a schema fact instead: v44 checks RLS on `schema_migrations_ledger`, which is v43's visible effect.
 2. Add `migrateVNN` to `migrate.js`: one line calling `applyMigrationFile`. Move `pool.end()` to it.
 3. **Compute AFTER** (all local, throwaway containers):
    `baseline_to_restorable.py <baseline>` → a local prod-shaped DB (its re-dump differs from the baseline only by the §3 re-spelling) → `rehearse.sh` → `schema_delta.py apply <baseline> rehearsal_before rehearsal_after_1` → the new baseline → its sha256 = AFTER; the old baseline's sha256 = BEFORE.
@@ -156,6 +158,12 @@ A step therefore shows a container's output when it finishes, not live. If the m
 **If step D's apply fails or is interrupted:** `--single-transaction` means it either committed or rolled back as a whole, never half. **Run step E: it reads production and tells you which.**
 
 **If step E fails:** stop. Don't deploy code that depends on the change. Report the output, then decide (§7).
+
+**v44: the check after step E.** Run `R-RlsReadiness.ps1 -BackendRole postgres` (**without** `-PostV43`, which is v43-specific and expects 67 tables). It should show:
+- `summary|tables=68|exempt=68|not_exempt=0|rls_enabled=68|tables_with_anon_or_auth_privs=0` and `verdict|OK`;
+- `table|feature_switches|postgres|t|f|t|t|0|0`.
+
+Then the advisor: no ERROR or WARN, and INFO `rls_enabled_no_policy` on **68** tables (expected). The 8 seed rows are data, so the fingerprint can't see them. v44 checks them inside its own transaction.
 
 **v43 only: the check after step E.** The fingerprints compare `pg_dump --no-privileges` dumps. They see v43's 67 `ENABLE ROW LEVEL SECURITY` statements, but **not** its `REVOKE`s or default-privilege changes, so A–E alone can't verify half of v43. After step E passes, run (read-only):
 ```powershell
@@ -245,3 +253,5 @@ Then revert the migration PR, so the committed baseline matches production again
   - `GET /api/inventory` returned 200;
   - the startup catch-up jobs (`prune-driver-locations`, `prune-browsing-events`, `purge-expired-tokens`, `morning-release`, `wallet-and-refund-reconciliation`) and the 11:20 scheduled jobs all finished;
   - no permission or row-level security errors.
+
+| v44 | (this PR, #84) | *pending: second review, then the founder runs A–E plus the v44 check (§5)* | `689f03b4…5cf113` | `83a42d48…f9ceb001` (77,854 bytes, 68 tables) | *pending* (file `332926f4…74d68c`) |
