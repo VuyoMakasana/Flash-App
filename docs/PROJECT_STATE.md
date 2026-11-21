@@ -16,6 +16,7 @@
 > - **`migrate.js` is never run against production.** Schema changes reach production only through `docs/PROD_MIGRATIONS.md` steps A–E.
 > - **v41 (PR #36):** merged; not applied to production and not needed (a proven no-op there).
 > - **v42 (`schema_migrations_ledger`, PR #72):** **applied to production on 2026-11-21 at 07:55 SAST**. Step E verified production == the committed baseline (`PROD_MIGRATIONS.md` §9).
+> - **v43 (RLS lockdown of `public`, PR #80):** **applied to production on 2026-11-21 at 11:09 SAST**. Steps A–E and the `-PostV43` check passed; FI-081 is fixed (`PROD_MIGRATIONS.md` §9).
 >
 > Item 5 in §3 and N-18 below describe the state before this.
 
