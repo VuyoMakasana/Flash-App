@@ -12,6 +12,13 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-21 (migrations).** This audit predates the production migration process.
+> - **`migrate.js` is never run against production.** Schema changes reach production only through `docs/PROD_MIGRATIONS.md` steps A–E.
+> - **v41 (PR #36):** merged; not applied to production and not needed (a proven no-op there).
+> - **v42 (`schema_migrations_ledger`, PR #72):** **applied to production on 2026-11-21 at 07:55 SAST**. Step E verified production == the committed baseline (`PROD_MIGRATIONS.md` §9).
+>
+> Item 5 in §3 and N-18 below describe the state before this.
+
 ---
 
 ## 1. Summary
@@ -340,7 +347,7 @@ Low items from the earlier audit were not re-checked line-by-line. All of them s
 | N-15 | Low | **AdminJS `flash_inventory` new/edit has gaps.** `stock_by_size` is written through the generic key-value editor with no validation, the same class as N-3. `store_id` is a free-text field, so a product can be created with no store or with a mistyped UUID; an FK violation surfaces as a raw error. New/edit is **not** logged to `admin_actions`; only `deactivateProduct` is. | `adminPanel.js:1760-1811` | Confirmed (code); key-value value types not verified at runtime |
 | N-16 | Low | The three `marketing_*` resources disable new/edit but leave AdminJS's generic **delete / bulkDelete** enabled, which is a hard `DELETE`. Every other resource disables delete. | `adminPanel.js:1814-1941` | Confirmed (code) |
 | N-17 | Info | Stale comment: it says `'suspended'` "is reachable only by a direct database change today", but the `suspendStore` action exists. | `adminPanel.js:172-175` vs `:2041` | Confirmed |
-| N-18 | Medium (process) → **fixed for fresh DBs by v41 (pending merge)** | **A fresh-DB schema is not production's schema.** Fully enumerated in `docs/SCHEMA_BASELINE.md` §4: IN MIGRATE ONLY 0; IN PROD ONLY 5 FKs + 1 index + 3 settlement tables (accepted orphans); 6 real DIFFERENT DEFINITION items; 16 cosmetic CHECK spellings + 2 column orders (accepted). Migration v41 brings a fresh DB to production's definition and is proven a zero-DDL no-op on production's schema (SCHEMA_BASELINE.md §11). **v41 has NOT been run on production.** `scripts/schema-baseline/schema_check.sh` now detects any new drift. | `docs/SCHEMA_BASELINE.md` | Confirmed against production's own schema dump (founder-run, read-only) |
+| N-18 | Medium (process) → **fixed for fresh DBs by v41 (PR #36, merged)** | **A fresh-DB schema is not production's schema.** Fully enumerated in `docs/SCHEMA_BASELINE.md` §4: IN MIGRATE ONLY 0; IN PROD ONLY 5 FKs + 1 index + 3 settlement tables (accepted orphans); 6 real DIFFERENT DEFINITION items; 16 cosmetic CHECK spellings + 2 column orders (accepted). Migration v41 brings a fresh DB to production's definition and is proven a zero-DDL no-op on production's schema (SCHEMA_BASELINE.md §11). **v41 has NOT been run on production.** `scripts/schema-baseline/schema_check.sh` now detects any new drift. | `docs/SCHEMA_BASELINE.md` | Confirmed against production's own schema dump (founder-run, read-only) |
 | N-19 | Info | `orders.cash_otp_plain VARCHAR(6)` holds the cash OTP in plaintext alongside its hash. It is time-boxed and nulled on verification, deliberately so the customer can re-view it. That makes it readable by anyone with DB access during the window. | `migrate.js:626`, `cashOtpService.js:50-57,154` | Confirmed (code); design choice, not necessarily a bug |
 | N-20 | High (latent until card payments go live) | **`Boost.activateBoost` inserts `store_id = 'flash_closet'` into a `uuid` column** in production (`store_boosts.store_id` is `uuid NOT NULL` + FK there), so a paid boost fails to activate **after Paystack has charged**. After v41, fresh DBs fail the same way. | `models/Boost.js:4,105-107`; SCHEMA_BASELINE.md §4.3 | Confirmed (code + prod schema) |
 | N-21 | Medium (latent) | `brand_size_mappings.store_id` is `uuid` in production, so `GET /api/sizing/recommend/:storeId/:category` with a non-UUID `storeId` returns a 500. | `models/Sizing.js:152`; SCHEMA_BASELINE.md §4.3 | Confirmed (code + prod schema) |
