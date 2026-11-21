@@ -21,6 +21,7 @@
 8. Apply inside the awake window (06:45–19:45 SAST), at a quiet time. Step D warns outside the window. `lock_timeout = 5s` makes a migration give up rather than queue behind live traffic.
 9. **Every migration that creates a table must `ENABLE ROW LEVEL SECURITY` on it, in the same file, and must grant nothing to `anon` or `authenticated`** (founder rule, 2026-11-21; FI-081). No policies unless the founder approves one: the backend role owns the tables and is exempt, and every other role is denied. This applies from v43 on. v42's ledger table predates the rule, and v43 enables RLS on it.
 10. **Step E for every migration includes the Supabase security advisor** (Dashboard → Advisors → Security). Record its result in the migration PR: the date, and the remaining lints by name and count. A new ERROR or WARN that the migration introduced counts as step E failing. The founder runs it. Claude Code sessions in this repo cannot: the Supabase tools are denied in `.claude/settings.json` (`WORKFLOW.md` §1, rule 1).
+11. **Every migration that creates a function in `public` must `REVOKE EXECUTE ON FUNCTION … FROM PUBLIC`, in the same file, and must grant nothing to `anon` or `authenticated`** (founder rule, 2026-11-21; FI-085). Postgres gives `PUBLIC` (every role, `anon` included) `EXECUTE` on every new function by default, and v43 does not change that.
 
 ## 2. Files
 
@@ -230,4 +231,17 @@ Then revert the migration PR, so the committed baseline matches production again
 - **Why the +1:** the new `schema_migrations_ledger` table inherited `postgres`'s default privileges, which grant `anon`/`authenticated` on every new table. v42 predates rule 9. It isn't reachable externally (the Data API is disabled), and the table holds only migration names and hashes.
 - **Accepted by the founder, not rolled back.** v43 must cover all 67 tables, `schema_migrations_ledger` included, and alter `postgres`'s default privileges (FI-081).
 
-| v43 | (this PR, #73) | *pending: second review, then the founder runs A–E plus the v43 check* | `4355621a…951cd3` | `689f03b4…a5cf113` (77,270 bytes, 67 tables) | *pending* (file `4c26cb10…eb11689`) |
+| v43 | #80 (merged `5ce588d`) | **Applied 2026-11-21 11:09 SAST by the founder**; steps A–E and the `-PostV43` check all passed, verified 11:12 SAST ([step E record](https://github.com/VuyoMakasana/Flash-App/pull/80#issuecomment-7060545953); [second review](https://github.com/VuyoMakasana/Flash-App/pull/80#issuecomment-7060172358)) | `4355621a…951cd3` | `689f03b4…5cf113` (77,270 bytes, 67 tables) | `4c26cb102bf3f30d2ea6d8c7f1d83ee6c79d1835a80e268a021b4b115eb11689` = file sha; ledger `applied_at 2026-11-21 09:09:52 UTC` |
+
+**v43 details (from the step E record):**
+- **Backup (step B):** `flash_public_20261121_105627_pre-v43.dump`, sha256 `eeba74694b79d192a4b376366fd2ca2b37e6bf30b3259b7829b92e2995273f73`, verified by step C.
+- **Post-check (`R-RlsReadiness.ps1 -PostV43`): PASSED.** `tables=67`, `rls_enabled=67`, `tables_with_anon_or_auth_privs=0`; `postgres`'s default ACLs list only `postgres` and `service_role`; verdict OK.
+- **Remaining, accepted gap:** `supabase_admin`'s default ACLs still list `anon`/`authenticated`. They only apply to objects `supabase_admin` creates; Flash's tables are created by `postgres`.
+- **Security advisor (rule 10), 2026-11-21 11:10 SAST:**
+  - **no ERRORs**;
+  - `pg_graphql_anon_table_exposed` and `pg_graphql_authenticated_table_exposed` both went from **67 to 0**;
+  - INFO `rls_enabled_no_policy` on 67 tables, as expected: only the backend role, which bypasses RLS, can read or write.
+- **Live check (Render logs), 11:15–11:20 SAST:**
+  - `GET /api/inventory` returned 200;
+  - the startup catch-up jobs (`prune-driver-locations`, `prune-browsing-events`, `purge-expired-tokens`, `morning-release`, `wallet-and-refund-reconciliation`) and the 11:20 scheduled jobs all finished;
+  - no permission or row-level security errors.

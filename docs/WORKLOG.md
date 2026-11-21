@@ -4,7 +4,22 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
-## 2026-11-21 — v43 RLS lockdown written and proven locally; NOT applied (#73, `launch/v43-rls-lockdown`)
+## 2026-11-21 — v43 applied to production; FI-081 fixed (`docs/v43-applied`)
+- **v43 applied by the founder on 2026-11-21 at 11:09 SAST.**
+  - Steps A–E and `R-RlsReadiness.ps1 -PostV43` all passed; verified at 11:12 SAST.
+  - The step E record is on PR #80: https://github.com/VuyoMakasana/Flash-App/pull/80#issuecomment-7060545953.
+  - File sha `4c26cb10…`; BEFORE `4355621a…`; AFTER `689f03b4…`.
+  - Backup `flash_public_20261121_105627_pre-v43.dump` (sha `eeba7469…`), verified by step C.
+- **Post-check:** `rls_enabled=67`, `tables_with_anon_or_auth_privs=0`, `postgres` defaults = `postgres` + `service_role` only, verdict OK.
+- **Advisor:** no ERRORs; both `pg_graphql` WARNs 67 → 0; INFO `rls_enabled_no_policy` on 67 tables (expected).
+- **Live check:** `/api/inventory` 200; jobs ran with no permission or RLS errors.
+- **FI-081 → Fixed.** The remaining accepted gap is `supabase_admin`'s default ACLs.
+- **New FI-085 (Low):** `PUBLIC` `EXECUTE` on new functions; none exist today.
+- **New rule 11** (`PROD_MIGRATIONS.md` §1): every migration that creates a function revokes `EXECUTE … FROM PUBLIC` and grants nothing to `anon`/`authenticated`.
+- **Updated** `PROD_MIGRATIONS.md` §9, `SCHEMA_BASELINE.md` §10, `PROJECT_STATE.md` and older `WORKLOG.md` lines, so that none says v43 is pending.
+- Docs only.
+
+## 2026-11-21 — v43 RLS lockdown written and proven locally; NOT applied by that PR (#73, PR #80, merged; **applied by the founder 2026-11-21 11:09 SAST**, see the entry above)
 - **Repo search before writing:** nothing in the backend, either app, the store portal or the scripts uses supabase-js, an anon or publishable key, Storage, Realtime, auth, or REST/GraphQL. The only Supabase hits are the Postgres connection string, a dashboard link, the never-run `test-db.js`, a test fixture, the pooler-host check, and the read-only Supabase MCP dev tool.
 - **Non-table objects in `public`** (baseline and `migrate.js`): 0 sequences, 0 functions or procedures, 0 views, 0 triggers; 1 enum type (`order_status_enum`, not touched).
 - **v43:**
@@ -45,7 +60,7 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
   - every step E records the Supabase security advisor's result.
 
   `E-Verify.ps1` now prints that reminder.
-- **v43 is still not written.** It waits for the readiness check (OK) and v42's A–E. (v42's A–E passed on 2026-11-21.)
+- **v43 is still not written.** It waits for the readiness check (OK) and v42's A–E. (v42's A–E passed on 2026-11-21. v43 was then written in PR #80 and **applied on 2026-11-21 at 11:09 SAST**.)
 
 ## 2026-11-21 — Launch plan L0.3: cron audit, FI-014, logging, awake window (#75, `launch/l0-3-cron-window`)
 - **FI-014 root cause confirmed:** Render runs the root `server.js`, which requires `src/server.js`. There, `require.main === module ? startServer() : createApp()` ran `createApp()` at require time, registering all 16 crons; then `startServer()` registered all 16 again.
