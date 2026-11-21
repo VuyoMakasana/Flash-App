@@ -254,4 +254,10 @@ Then revert the migration PR, so the committed baseline matches production again
   - the startup catch-up jobs (`prune-driver-locations`, `prune-browsing-events`, `purge-expired-tokens`, `morning-release`, `wallet-and-refund-reconciliation`) and the 11:20 scheduled jobs all finished;
   - no permission or row-level security errors.
 
-| v44 | (this PR, #84) | *pending: second review, then the founder runs A–E plus the v44 check (§5)* | `689f03b4…5cf113` | `83a42d48…f9ceb001` (77,854 bytes, 68 tables) | *pending* (file `332926f4…74d68c`) |
+| v44 | #85 (merged `aae101a`) | **Applied 2026-11-21 14:17 SAST by the founder**; steps A–E and the v44 readiness check passed, verified 14:19 SAST ([step E record](https://github.com/VuyoMakasana/Flash-App/pull/85#issuecomment-7063019801); [second review](https://github.com/VuyoMakasana/Flash-App/pull/85#issuecomment-7062314292)) | `689f03b4…5cf113` | `83a42d48…f9ceb001` (77,854 bytes, 68 tables) | `332926f437bf11a68f36b59810ff1f9881b1e6808ebffebfba22c6332c74d68c` = file sha; ledger `applied_at 2026-11-21 12:17:31 UTC` |
+
+**v44 details (from the step E record):**
+- **Backup (step B):** `flash_public_20261121_140851_pre-v44.dump`, sha256 `94563bd59daf5f30e690fe7a72a17317202c3740f038d685ee466a78e717de30`, verified by step C.
+- **Readiness (`R-RlsReadiness.ps1 -BackendRole postgres`):** `tables=68`, `rls_enabled=68`, `tables_with_anon_or_auth_privs=0`; `postgres`'s default ACLs list only `postgres` and `service_role`; verdict OK.
+- **Security advisor (rule 10), 2026-11-21 15:04 SAST:** no ERRORs; no WARNs; INFO `rls_enabled_no_policy` on **68** tables (was 67; the +1 is `feature_switches`, expected).
+- **No code reads the table yet;** that's L0.5b. The seed values on production are the v44 defaults: on for `card_payments`, `new_orders`, `cash_orders`, `store_portal_writes` and `signups`; off for `driver_payouts`, `premium` and `boosts`.

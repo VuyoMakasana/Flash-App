@@ -17,6 +17,7 @@
 > - **v41 (PR #36):** merged; not applied to production and not needed (a proven no-op there).
 > - **v42 (`schema_migrations_ledger`, PR #72):** **applied to production on 2026-11-21 at 07:55 SAST**. Step E verified production == the committed baseline (`PROD_MIGRATIONS.md` §9).
 > - **v43 (RLS lockdown of `public`, PR #80):** **applied to production on 2026-11-21 at 11:09 SAST**. Steps A–E and the `-PostV43` check passed; FI-081 is fixed (`PROD_MIGRATIONS.md` §9).
+> - **v44 (`feature_switches`, PR #85):** **applied to production on 2026-11-21 at 14:17 SAST**. Steps A–E and the readiness check passed (68 tables, all RLS, none granted to `anon`/`authenticated`). No code reads it yet; that's L0.5b (`PROD_MIGRATIONS.md` §9).
 >
 > Item 5 in §3 and N-18 below describe the state before this.
 

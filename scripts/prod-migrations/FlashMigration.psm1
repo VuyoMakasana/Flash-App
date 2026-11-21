@@ -256,6 +256,20 @@ function Test-FlashSchemaDelta {
     return ($r.Code -eq 0)
 }
 
+# A file name that never overwrites an earlier run: <Base>_<yyyyMMdd_HHmmss>.<Extension>
+# in local time (the founder's clock). Used for evidence files such as the
+# readiness output, so every run is kept.
+function Get-FlashStampedFileName {
+    param(
+        [Parameter(Mandatory = $true)][string]$Base,
+        [string]$Extension = 'txt',
+        [DateTime]$Now = (Get-Date)
+    )
+    if ($Base -notmatch '^[A-Za-z0-9_-]+$') { throw "Base must be letters, digits, '_' or '-' (got '$Base')" }
+    if ($Extension -notmatch '^[A-Za-z0-9]+$') { throw "Extension must be letters or digits (got '$Extension')" }
+    return ($Base + '_' + $Now.ToString('yyyyMMdd_HHmmss', [Globalization.CultureInfo]::InvariantCulture) + '.' + $Extension)
+}
+
 # v43 post-check (FI-081, #73): judges rls_readiness.sh output lines. PASS
 # only if: every table has RLS (rls_enabled = tables = ExpectedTables);
 # no table grants anon/authenticated; no sequence or function in public is

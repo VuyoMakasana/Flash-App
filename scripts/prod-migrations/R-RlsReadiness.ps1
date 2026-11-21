@@ -51,7 +51,8 @@ try {
     Clear-FlashProdUrl
 }
 
-$out = Join-Path $work $(if ($PostV43) { 'rls_post_v43.txt' } else { 'rls_readiness.txt' })
+# Time-stamped, so a run never overwrites an earlier one (each is evidence).
+$out = Join-Path $work (Get-FlashStampedFileName -Base $(if ($PostV43) { 'rls_post_v43' } else { 'rls_readiness' }))
 [System.IO.File]::WriteAllLines($out, [string[]]$r.Output)
 foreach ($l in $r.Output) {
     if ($l -match '^(session|role|owners|summary|verdict|default_acl|sequence|function)\|') { Write-Host ('  ' + $l) }
