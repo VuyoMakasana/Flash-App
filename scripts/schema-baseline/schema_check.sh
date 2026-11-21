@@ -6,7 +6,7 @@
 # baseline (scripts/schema-baseline/production_schema_baseline.sql).
 #
 # Exit 0 only if ALL of these hold:
-#   - migrate.js succeeds, prints no v41 skip, and v41, v42 and v43 report completion;
+#   - migrate.js succeeds, prints no v41 skip, and v41-v44 report completion;
 #   - the fresh dump and the baseline are non-empty and have the expected
 #     CREATE TABLE counts (so "identical because empty" can never pass);
 #   - normalize_schema.py --compare reports no unaccepted difference;
@@ -55,6 +55,7 @@ if grep -E "v41:|SKIP" "$WORK/migrate.out"; then fail "v41 reported a skip (see 
 grep -q "migration v41 completed: schema baseline" "$WORK/migrate.out" || fail "v41 did not report completion"
 grep -q "migration v42 completed: schema_migrations_ledger" "$WORK/migrate.out" || fail "v42 did not report completion"
 grep -q "migration v43 completed: rls_public_lockdown" "$WORK/migrate.out" || fail "v43 did not report completion"
+grep -q "migration v44 completed: feature_switches" "$WORK/migrate.out" || fail "v44 did not report completion"
 
 docker exec "$NAME" pg_dump -U postgres -d schema_check --schema-only --no-owner --no-privileges \
   --no-publications --no-subscriptions --schema=public --lock-wait-timeout=10s \

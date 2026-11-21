@@ -169,6 +169,9 @@ ALTER TABLE ONLY public.email_tokens
 ALTER TABLE ONLY public.email_tokens
     ADD CONSTRAINT email_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
 
+ALTER TABLE ONLY public.feature_switches
+    ADD CONSTRAINT feature_switches_pkey PRIMARY KEY (key);
+
 ALTER TABLE ONLY public.feed_comments
     ADD CONSTRAINT feed_comments_pkey PRIMARY KEY (id);
 
@@ -585,6 +588,8 @@ ALTER TABLE public.drivers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.email_events ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.email_tokens ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.feature_switches ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.feed_comments ENABLE ROW LEVEL SECURITY;
 
@@ -1190,6 +1195,14 @@ CREATE TABLE public.email_tokens (
     used_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now(),
     CONSTRAINT email_tokens_type_check CHECK (((type)::text = ANY (ARRAY[('email_verification'::character varying)::text, ('password_reset'::character varying)::text])))
+);
+
+CREATE TABLE public.feature_switches (
+    key text NOT NULL,
+    enabled boolean NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_by uuid,
+    CONSTRAINT feature_switches_key_check CHECK ((key = ANY (ARRAY['card_payments'::text, 'new_orders'::text, 'cash_orders'::text, 'driver_payouts'::text, 'store_portal_writes'::text, 'signups'::text, 'premium'::text, 'boosts'::text])))
 );
 
 CREATE TABLE public.feed_comments (

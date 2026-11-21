@@ -4,6 +4,24 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-21 — L0.5a: v44 `feature_switches` written and proven locally; NOT applied (#84, `launch/v44-feature-switches`)
+- **v44** creates `public.feature_switches`:
+  - `key` text, the primary key, with a CHECK limited to the 8 known keys;
+  - `enabled`, `updated_at` and `updated_by`. `updated_by` has no foreign key, so v44 locks no existing table; the audit trail goes in `admin_actions` in L0.5b.
+  - There is no message column; messages live in code.
+  - RLS on, no policies, no grants (rule 9).
+  - Seed: on for `card_payments`, `new_orders`, `cash_orders`, `store_portal_writes` and `signups`; off for `driver_payouts`, `premium` and `boosts`. The seed uses `ON CONFLICT DO NOTHING`, so a re-run never resets a flipped switch.
+  - Rollback drops the table and the ledger row.
+- **BEFORE `689f03b4…` → AFTER `83a42d48…`.** The change is 3 statements: the table with its CHECK, the PK, and RLS. File sha `332926f4…`.
+- **Found while writing:** a guard on ledger *rows* would make step D's schema-only rehearsal always fail. v44 checks a schema fact instead, and the rule is now in `PROD_MIGRATIONS.md` §4.
+- **Proofs:**
+  - the founder-path rehearsal;
+  - `v44_rehearsal.sh` on production's post-v43 state: seeds; readiness 68/68/0; a flipped switch survives a re-apply; wrong sha refused; rollback; guards; applied while `orders`, `users` and `admins` were exclusively locked;
+  - unit, integration and the schema check.
+
+  `adminCoverage.js` records the table as intentionally not a default AdminJS resource.
+- **Not applied.** Next: the founder's second review, then A–E. L0.5b only after that.
+
 ## 2026-11-21 — L0.4: cheap /health, protected /health/db, driver withdrawals closed, rule-11 CI check (#82, `launch/l0-4-health-payouts`)
 - **`GET /health`** is now liveness only: `200 {"status":"ok"}`, no-store, no database, no version, no Redis status; mounted before the request logger. It used to run `SELECT 1` through the pool on every call, with no rate limit.
 - **`GET /health/db`** (new):
