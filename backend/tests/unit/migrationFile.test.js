@@ -314,3 +314,42 @@ describe('rule 11: new functions revoke EXECUTE from PUBLIC', () => {
     }
   });
 });
+
+// R-RlsReadiness.ps1 used to save to a fixed name, so each run overwrote the
+// previous evidence (the post-v44 run replaced the pre-v43 file). It now uses
+// a time-stamped name from Get-FlashStampedFileName.
+describe('Get-FlashStampedFileName (evidence files are never overwritten)', () => {
+  const exe = findPowerShell();
+  const maybe = exe ? test : (process.env.CI ? test : test.skip);
+  const ps = (cmd) => spawnSync(exe, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+    `Import-Module '${PS_MODULE.replace(/'/g, "''")}' -Force; ${cmd}`], { encoding: 'utf8' });
+
+  maybe('builds <base>_<yyyyMMdd_HHmmss>.<ext> from the given time', () => {
+    if (!exe) throw new Error('PowerShell (pwsh) is required in CI');
+    const r = ps("Get-FlashStampedFileName -Base 'rls_readiness' -Now ([DateTime]::new(2026, 11, 21, 14, 17, 5))");
+    expect(r.stderr).toBe('');
+    expect(r.stdout.trim()).toBe('rls_readiness_20261121_141705.txt');
+  });
+
+  maybe('two runs a second apart get different names', () => {
+    if (!exe) throw new Error('PowerShell (pwsh) is required in CI');
+    const r = ps("$t = [DateTime]::new(2026, 11, 21, 14, 17, 5); (Get-FlashStampedFileName -Base 'rls_post_v43' -Now $t) + '|' + (Get-FlashStampedFileName -Base 'rls_post_v43' -Now $t.AddSeconds(1))");
+    const [a, b] = r.stdout.trim().split('|');
+    expect(a).toBe('rls_post_v43_20261121_141705.txt');
+    expect(b).toBe('rls_post_v43_20261121_141706.txt');
+  });
+
+  maybe('refuses a base or extension that could escape the folder', () => {
+    if (!exe) throw new Error('PowerShell (pwsh) is required in CI');
+    for (const bad of ["-Base '../x'", "-Base 'a/b'", "-Base 'a b'", "-Base 'ok' -Extension 'txt/..'"]) {
+      const r = ps(`try { Get-FlashStampedFileName ${bad}; 'NO-THROW' } catch { 'THREW' }`);
+      expect(r.stdout.trim()).toBe('THREW');
+    }
+  });
+
+  test('R-RlsReadiness.ps1 saves through it and no longer names a fixed file', () => {
+    const text = fs.readFileSync(path.join(PS_DIR, 'R-RlsReadiness.ps1'), 'utf8');
+    expect(text).toMatch(/Get-FlashStampedFileName -Base/);
+    expect(text).not.toMatch(/'rls_readiness\.txt'|'rls_post_v43\.txt'/);
+  });
+});

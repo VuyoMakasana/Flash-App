@@ -1,6 +1,6 @@
 const Admin = require("../models/Admin");
 const AdminAction = require("../models/AdminAction");
-const bcrypt = require("bcryptjs");
+const { verifyAdminCredentials } = require("../services/adminCredentials");
 const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const pool = require("../config/database");
@@ -22,15 +22,17 @@ class AdminController {
     }
 
     try {
-      const admin = await Admin.findByEmail(email);
-      if (!admin) {
+      // Admin hardening (#87): the same check the AdminJS login uses --
+      // per-account lockout (A1b), role = 'admin' only (A4), and a dummy-hash
+      // comparison for unknown emails (A7). See services/adminCredentials.js.
+      const result = await verifyAdminCredentials(email, password);
+      if (!result.ok && result.reason === "locked") {
+        return res.status(429).json({ error: "Too many failed login attempts for this account. Please try again in 15 minutes." });
+      }
+      if (!result.ok) {
         return res.status(401).json({ error: "Invalid credentials" });
       }
-
-      const isValid = await bcrypt.compare(password, admin.password_hash);
-      if (!isValid) {
-        return res.status(401).json({ error: "Invalid credentials" });
-      }
+      const admin = result.admin;
 
       const jwtSecret = getRequired("ADMIN_JWT_SECRET", "admin-auth");
       if (!jwtSecret) {
