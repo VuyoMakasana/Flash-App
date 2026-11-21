@@ -1154,8 +1154,6 @@ async function migrate() {
     client41.release();
   }
 
-  // pool.end() moved from v41's finally to here when v42 was added — it must
-  // stay on whichever migration runs last, or the process would not drain.
   const client42 = await pool.connect();
   try {
     await migrateV42(client42);
@@ -1164,6 +1162,18 @@ async function migrate() {
     throw err;
   } finally {
     client42.release();
+  }
+
+  // pool.end() moved from v42's finally to here when v43 was added — it must
+  // stay on whichever migration runs last, or the process would not drain.
+  const client43 = await pool.connect();
+  try {
+    await migrateV43(client43);
+  } catch (err) {
+    console.error('Migration v43 failed:', err.message);
+    throw err;
+  } finally {
+    client43.release();
     await pool.end();
   }
 
@@ -3045,4 +3055,12 @@ async function migrateV42(client) {
   console.log(`Flash database migration v42 completed: schema_migrations_ledger (file sha256 ${m.sha})`);
 }
 
-module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40, migrateV41, migrateV42 };
+// ─── v43: RLS on every public table; revoke anon/authenticated (FI-081, #73) ─
+// The SQL lives in ./migrations/v43_rls_public_lockdown.sql; on fresh/CI
+// databases (no Supabase roles) only the RLS part applies.
+async function migrateV43(client) {
+  const m = await applyMigrationFile(client, 'v43_rls_public_lockdown.sql');
+  console.log(`Flash database migration v43 completed: rls_public_lockdown (file sha256 ${m.sha})`);
+}
+
+module.exports = { migrateV7, migrateV8, migrateV9, migrateV10, migrateV11, migrateV12, migrateV13, migrateV14, migrateV15, migrateV16, migrateV17, migrateV18, migrateV19, migrateV20, migrateV21, migrateV22, migrateV23, migrateV24, migrateV25, migrateV26, migrateV27, migrateV28, migrateV29, migrateV30, migrateV31, migrateV32, migrateV33, migrateV34, migrateV35, migrateV36, migrateV37, migrateV38, migrateV39, migrateV40, migrateV41, migrateV42, migrateV43 };

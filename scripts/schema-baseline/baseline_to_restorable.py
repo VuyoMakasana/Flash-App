@@ -11,13 +11,16 @@ AFTER fingerprint:
   -> pg_dump (prod_dump_schema.sh flags) -> normalize_schema.py --baseline
   -> sha256 = AFTER
 
-The round trip is checked, not assumed: the local DB's own dump must
-normalize back to the input baseline byte for byte (sha256 printed by the
-proof), or the fixture is not production's shape.
+The round trip is checked, not assumed: the local DB's own dump normalizes
+back to the input baseline except for two re-spelled CHECK constraints on the
+settlement tables (FI-082: restore-and-redump re-spells them; same meaning).
+That is why AFTER is derived as baseline + the rehearsal's statement-level
+change (scripts/prod-migrations/schema_delta.py apply), never by hashing the
+fixture's own dump.
 
 The baseline is sorted (normalize_schema.py --baseline); restore order is:
   0 CREATE SCHEMA   1 COMMENT ON SCHEMA   2 CREATE TYPE / FUNCTION / SEQUENCE
-  3 CREATE TABLE    4 PRIMARY KEY / UNIQUE / CHECK / EXCLUDE constraints
+  3 CREATE TABLE    4 PRIMARY KEY / UNIQUE / CHECK / EXCLUDE constraints; ENABLE ROW LEVEL SECURITY
   5 CREATE [UNIQUE] INDEX   6 FOREIGN KEY constraints   7 anything else
 Unknown statement kinds are rank 7 and listed on stderr, so nothing is
 silently reordered wrongly.
@@ -42,6 +45,8 @@ def rank(stmt):
         return 3
     if first.startswith("ALTER TABLE ONLY ") and re.match(r"^ADD CONSTRAINT \S+ (PRIMARY KEY|UNIQUE|CHECK|EXCLUDE)\b", second):
         return 4
+    if re.match(r"^ALTER TABLE public\.\w+ ENABLE ROW LEVEL SECURITY;$", first):
+        return 4  # v43: the baseline now carries RLS for every table
     if re.match(r"^CREATE (UNIQUE )?INDEX ", first):
         return 5
     if first.startswith("ALTER TABLE ONLY ") and re.match(r"^ADD CONSTRAINT \S+ FOREIGN KEY\b", second):

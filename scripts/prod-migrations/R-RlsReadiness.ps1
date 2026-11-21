@@ -19,9 +19,17 @@
 # VERDICT OK   -> v43 can be written as proposed.
 # VERDICT STOP -> the listed tables would become unreadable to the backend.
 #                 Do not proceed; send the output.
+#
+# -PostV43: the v43-specific check after step E (docs/PROD_MIGRATIONS.md s5).
+# The schema fingerprint cannot see grants (pg_dump --no-privileges), so this
+# proves the other half of v43. PASS only if rls_enabled = 67, no table,
+# sequence or function in public is granted to anon/authenticated, postgres's
+# default privileges no longer mention them, and the verdict is OK.
+#   powershell -ExecutionPolicy Bypass -File scripts\prod-migrations\R-RlsReadiness.ps1 -BackendRole postgres -PostV43
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$BackendRole
+    [Parameter(Mandatory = $true)][string]$BackendRole,
+    [switch]$PostV43
 )
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'FlashMigration.psm1') -Force
@@ -43,7 +51,7 @@ try {
     Clear-FlashProdUrl
 }
 
-$out = Join-Path $work 'rls_readiness.txt'
+$out = Join-Path $work $(if ($PostV43) { 'rls_post_v43.txt' } else { 'rls_readiness.txt' })
 [System.IO.File]::WriteAllLines($out, [string[]]$r.Output)
 foreach ($l in $r.Output) {
     if ($l -match '^(session|role|owners|summary|verdict|default_acl|sequence|function)\|') { Write-Host ('  ' + $l) }
@@ -61,3 +69,18 @@ if ($verdict.Count -eq 1 -and $verdict[0] -like 'verdict|OK*') {
     Write-Host 'VERDICT STOP: the backend role would lose access to the tables above. Do not proceed; send the saved file.'
 }
 Write-Host ('Saved (table names and role names only, no data, no secrets): ' + $out)
+
+if ($PostV43) {
+    Write-FlashStep 'v43 post-check (after step E)'
+    $check = Test-FlashV43Lockdown -Lines $r.Output -ExpectedTables 67
+    foreach ($f in $check.Failures) { Write-Host ('  [FAIL] ' + $f) }
+    $other = @($r.Output | Where-Object { $_ -like 'default_acl|*' -and $_ -notlike 'default_acl|postgres|*' })
+    foreach ($l in $other) { Write-Host ('  (accepted gap, not checked) ' + $l) }
+    Write-Host ''
+    if ($check.Pass) {
+        Write-Host 'V43 POST-CHECK PASSED: RLS on all 67 tables; anon/authenticated hold nothing in public; postgres defaults clean; backend keeps access.'
+    } else {
+        Write-Host 'V43 POST-CHECK FAILED: see the [FAIL] lines above. Step E is not complete; send the saved file.'
+        exit 1
+    }
+}

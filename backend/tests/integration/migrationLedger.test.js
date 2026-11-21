@@ -8,7 +8,7 @@
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { Pool } = require('pg');
-const { MIGRATIONS_DIR, fileSha256, applyMigrationFile } = require('../../src/db/migrationFile');
+const { MIGRATIONS_DIR, fileSha256, applyMigrationFile, listMigrations } = require('../../src/db/migrationFile');
 
 const FILE = 'v42_schema_migrations_ledger.sql';
 const FILE_PATH = path.join(MIGRATIONS_DIR, FILE);
@@ -33,10 +33,12 @@ d('schema_migrations_ledger (v42)', () => {
 
   const rows = async () => (await pool.query("SELECT version, sha256, applied_at FROM public.schema_migrations_ledger ORDER BY version")).rows;
 
-  test('migrate.js recorded v42 with sha256 of the file bytes', async () => {
+  test('migrate.js recorded every migration file, each with sha256 of its own bytes', async () => {
     const r = await rows();
-    expect(r.map((x) => x.version)).toEqual(['v42']);
-    expect(r[0].sha256).toBe(sha);
+    const files = listMigrations();
+    expect(r.map((x) => x.version)).toEqual(files.map((m) => m.version));
+    for (const m of files) expect(r.find((x) => x.version === m.version).sha256).toBe(m.sha);
+    expect(r.find((x) => x.version === 'v42').sha256).toBe(sha);
   });
 
   test('applying again through migrate.js (Node) is a no-op', async () => {
@@ -81,6 +83,6 @@ d('schema_migrations_ledger (v42)', () => {
     }
     const r = spawnSync('psql', [process.env.DATABASE_URL, '-X', '-q', '-v', 'ON_ERROR_STOP=1', '--single-transaction', '-f', FILE_PATH], { encoding: 'utf8' });
     expect(r.status).not.toBe(0);
-    expect(await rows()).toHaveLength(1);
+    expect(await rows()).toHaveLength(listMigrations().length);
   });
 });

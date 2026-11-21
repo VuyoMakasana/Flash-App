@@ -544,6 +544,140 @@ ALTER TABLE ONLY public.webhook_events
 ALTER TABLE ONLY public.webhook_events
     ADD CONSTRAINT webhook_events_pkey PRIMARY KEY (id);
 
+ALTER TABLE public.addresses ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.admin_actions ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.admins ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.app_ratings ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.brand_size_mappings ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.browsing_events ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.chat_reports ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.commission_rates ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_commission_debts ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_documents ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_locations ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_payout_requests ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_payouts ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_penalties ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_ratings ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_subscriptions ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_wallet_ledger ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.driver_wallets ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.drivers ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.email_events ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.email_tokens ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.feed_comments ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.feed_likes ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.feed_post_products ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.feed_posts ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.flagged_accounts ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.flash_inventory ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.marketing_applications ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.marketing_contact_messages ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.marketing_waitlist ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.order_cancellation_store_shares ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.order_cancellations ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.order_items ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.order_stops ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.orders ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.payflex_webhook_events ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.payment_methods ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.payment_refunds ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.payout_transactions ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.premium_subscription_payments ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.premium_subscriptions ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.refresh_tokens ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.return_request_items ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.return_requests ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.revoked_tokens ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.saved_cards ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.schema_migrations_ledger ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.settlement_config ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.size_profiles ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.sos_alerts ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_actions ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_boosts ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_credits ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_password_tokens ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_promotions ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_settlement_line_items ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_settlements ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_transfer_recipients ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.store_users ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.stores ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.transfer_recipients ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.trusted_drivers ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.user_blocks ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE public.webhook_events ENABLE ROW LEVEL SECURITY;
+
 COMMENT ON SCHEMA public IS 'standard public schema';
 
 CREATE INDEX idx_addresses_user ON public.addresses USING btree (user_id);
