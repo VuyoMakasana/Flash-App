@@ -70,3 +70,6 @@ Write-Host ''
 $summary | ForEach-Object { Write-Host $_ }
 Write-Host ''
 Write-Host 'STEP E PASSED. Production == committed baseline == BEFORE + this migration. Paste the block above into the PR.'
+Write-Host ''
+Write-Host 'Last part of step E (PROD_MIGRATIONS.md rule 10): open Supabase -> Advisors -> Security, refresh it, and record'
+Write-Host 'the date and the remaining lints (name and count) in the PR. A new ERROR or WARN from this migration = step E failed.'

@@ -19,6 +19,8 @@
 6. **A migration file never changes after it is applied anywhere that matters.** The ledger records its sha256, and re-applying a changed file fails.
 7. **Index changes on large tables** (`orders`, `order_items`, `driver_locations`, `browsing_events`, …) may need `CREATE INDEX CONCURRENTLY`. That **cannot run inside a transaction**, so it does not fit step D (`--single-transaction`). When that day comes, it gets **its own reviewed procedure**. Step D does not detect this by itself; the second reviewer must reject a plain `CREATE INDEX` on a large table (it takes a lock that blocks writes for the whole build).
 8. Apply inside the awake window (06:45–19:45 SAST), at a quiet time. Step D warns outside the window. `lock_timeout = 5s` makes a migration give up rather than queue behind live traffic.
+9. **Every migration that creates a table must `ENABLE ROW LEVEL SECURITY` on it, in the same file, and must grant nothing to `anon` or `authenticated`** (founder rule, 2026-11-21; FI-081). No policies unless the founder approves one: the backend role owns the tables and is exempt, and every other role is denied. This applies from v43 on. v42's ledger table predates the rule, and v43 enables RLS on it.
+10. **Step E for every migration includes the Supabase security advisor** (Dashboard → Advisors → Security). Record its result in the migration PR: the date, and the remaining lints by name and count. A new ERROR or WARN that the migration introduced counts as step E failing. The founder runs it. Claude Code sessions in this repo cannot: the Supabase tools are denied in `.claude/settings.json` (`WORKFLOW.md` §1, rule 1).
 
 ## 2. Files
 
