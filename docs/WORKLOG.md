@@ -4,6 +4,18 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-21 — v42 applied to production; records updated (`docs/v42-applied`)
+- **v42 applied by the founder on 2026-11-21 at 07:55 SAST.**
+  - Steps A–E all passed; verified at 09:38 SAST.
+  - The step E record is on PR #72: https://github.com/VuyoMakasana/Flash-App/pull/72#issuecomment-7059420526.
+  - File sha `b4dd4c84…`; BEFORE `697134af…`; AFTER `4355621a…`.
+  - Backup `flash_public_20261121_074206_pre-v42.dump` (sha `f8d8b5a3…`), verified by step C.
+- **Security advisor:** no ERRORs. The two `pg_graphql_*_table_exposed` WARNs went from 66 to 67, because `schema_migrations_ledger` inherited `postgres`'s default grants. v42 predates rule 9; accepted, not rolled back. FI-081 is noted: v43 must cover all 67 tables.
+- **Recorded:** the Supabase free plan has no backups (`LAUNCH_INFRA_CHECKLIST.md` L-9; `PROD_MIGRATIONS.md` §6). Step B is the only backup.
+- **`.gitignore`:** `flash-store-portal/.env` can no longer be committed.
+- **Updated** `PROD_MIGRATIONS.md` §9, `SCHEMA_BASELINE.md` §10 and `PROJECT_STATE.md`, so that none says v42 is unapplied.
+- Docs and `.gitignore` only.
+
 ## 2026-11-21 — v43 decisions and standing rules recorded (#73, `launch/v43-decisions`)
 - **Founder decisions for v43:**
   - the rollback disables RLS only and never re-grants `anon`/`authenticated`;
@@ -14,7 +26,7 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
   - every step E records the Supabase security advisor's result.
 
   `E-Verify.ps1` now prints that reminder.
-- **v43 is still not written.** It waits for the readiness check (OK) and v42's A–E.
+- **v43 is still not written.** It waits for the readiness check (OK) and v42's A–E. (v42's A–E passed on 2026-11-21.)
 
 ## 2026-11-21 — Launch plan L0.3: cron audit, FI-014, logging, awake window (#75, `launch/l0-3-cron-window`)
 - **FI-014 root cause confirmed:** Render runs the root `server.js`, which requires `src/server.js`. There, `require.main === module ? startServer() : createApp()` ran `createApp()` at require time, registering all 16 crons; then `startServer()` registered all 16 again.
@@ -39,7 +51,7 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 - **FI-081 → Critical**, mitigated by the Data API being off. The fix is v43: RLS on every `public` table, revoke from `anon`/`authenticated`, default privileges. It is a **proposal under review, not written**.
 - **New:** `scripts/prod-migrations/R-RlsReadiness.ps1` + `rls_readiness.sh`, a read-only check that the backend role stays exempt from RLS on every table. Verified locally only, on a prod-shaped DB with Supabase-like roles; see PR.
 - **New FI-083 (High):** Supabase is in Frankfurt and Render in Oregon, so every query crosses the Atlantic. Added `LAUNCH_INFRA_CHECKLIST.md` **L-8** (move `Flash-App` to Render Frankfurt).
-- **PR #72 merged and deployed** (`09bf0d3`). The founder posted the second-review comment on it. **v42 is not yet applied**; the founder runs A–E next.
+- **PR #72 merged and deployed** (`09bf0d3`). The founder posted the second-review comment on it. **v42 was not yet applied at that point**; the founder ran A–E next. (**Applied 2026-11-21 07:55 SAST**, see the 2026-11-21 v42 entry.)
 
 ## 2026-11-20 — Launch plan L0.2: production migration process (#71, PR #72, merged)
 - **Process approved by the founder** with six changes. All six are implemented, and the process is documented in **`docs/PROD_MIGRATIONS.md`**:
@@ -51,7 +63,7 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
   - a second review before step D.
 - **v42 (approved):** `schema_migrations_ledger (version text PK, sha256 text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`, as a standalone file. `migrateV42` only runs that file. There is a guarded rollback file.
   - Baseline: `697134af…` (66 tables) → `4355621a…` (67 tables). The change is exactly the new table and its PK.
-- **v42 is NOT applied to production.** The founder applies it with steps A–E after merge.
+- **v42 was not applied to production by that PR.** The founder applied it with steps A–E on **2026-11-21 at 07:55 SAST** (see the 2026-11-21 v42 entry).
 - **Found while building it:** a restored copy of production re-spells 2 CHECK constraints (FI-082). That's why steps C and D compare like with like, or compare deltas. Also recorded FI-081 (no RLS on `public`; Supabase Data API exposure unverified; founder check).
 - **WORKFLOW.md:** the launch plan, the founder decisions, the per-fix process and the deferred list are recorded; rule 3 now requires a second review.
 - **Verification:** local throwaway containers only; production was never contacted. See PR #72.

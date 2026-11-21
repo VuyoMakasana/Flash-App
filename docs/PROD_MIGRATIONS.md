@@ -162,7 +162,7 @@ A step therefore shows a container's output when it finishes, not live. If the m
 - **What's covered:** every Flash table lives in `public`. Supabase's own schemas (auth, storage) aren't used by Flash and are covered by Supabase's backups.
 - **Retention:** keep the **newest 5**, and keep every **pre-migration backup for at least 30 days**. Step B lists older files and deletes them **only if you type `DELETE`**.
 - **They contain customer data.** Any copy that leaves this laptop must be **encrypted first**: 7-Zip, AES-256, "encrypt file names" on, the password stored in the password manager. Never email one, and never put one in the repo or in chat.
-- **Supabase backups:** once you've confirmed what your plan provides (Dashboard → Database → Backups: daily backups and how long they're kept; point-in-time recovery or not), record it here. Until then, step B is mandatory.
+- **Supabase backups: none.** The founder confirmed in the dashboard on 2026-11-21 that the **free plan has no backups**. **Step B is the only backup Flash has**, so it stays mandatory for every migration. Before launch, the founder decides between Supabase Pro (7 days of daily backups) and our own encrypted daily backup (`LAUNCH_INFRA_CHECKLIST.md` L-9).
 
 ## 7. Rollback
 
@@ -203,4 +203,12 @@ Then revert the migration PR, so the committed baseline matches production again
 | Version | PR | Applied by / date (SAST) | BEFORE | AFTER | Ledger sha256 |
 |---|---|---|---|---|---|
 | v41 | #36 | **Not applied, not needed**: proven a no-op on production's shape (`SCHEMA_BASELINE.md` §11) | `697134af…` | `697134af…` | — |
-| v42 | #72 (merged, deployed `09bf0d3`) | *pending: founder runs A–E* | `697134af…2a6962d` | `4355621a…951cd3` | *pending* (file `b4dd4c84…df55fd`) |
+| v42 | #72 (merged, deployed `09bf0d3`) | **Applied 2026-11-21 07:55 SAST by the founder**; steps A–E all passed, verified 09:38 SAST ([step E record](https://github.com/VuyoMakasana/Flash-App/pull/72#issuecomment-7059420526); [second review](https://github.com/VuyoMakasana/Flash-App/pull/72#issuecomment-7047079722)) | `697134af…2a6962d` | `4355621a…951cd3` (73,021 bytes, 67 tables) | `b4dd4c84…df55fd` = file sha; ledger `applied_at 2026-11-21 05:55:45 UTC` |
+
+**v42 details (from the step E record):**
+- **Backup (step B):** `flash_public_20261121_074206_pre-v42.dump`, sha256 `f8d8b5a3e177e400269ef9ec8eec3ea7413758be0a34d122d60abe12c1355a93`, verified by step C.
+- **Security advisor (rule 10), 2026-11-21 07:56 SAST:**
+  - **no ERRORs**;
+  - `pg_graphql_anon_table_exposed` and `pg_graphql_authenticated_table_exposed` each went from **66 to 67**.
+- **Why the +1:** the new `schema_migrations_ledger` table inherited `postgres`'s default privileges, which grant `anon`/`authenticated` on every new table. v42 predates rule 9. It isn't reachable externally (the Data API is disabled), and the table holds only migration names and hashes.
+- **Accepted by the founder, not rolled back.** v43 must cover all 67 tables, `schema_migrations_ledger` included, and alter `postgres`'s default privileges (FI-081).
