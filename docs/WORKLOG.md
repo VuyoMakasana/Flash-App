@@ -4,6 +4,48 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-23 — `DRIVER_TEST_MODE` switched off in production (docs only, on PR #92)
+- **The founder set `DRIVER_TEST_MODE=false` in Render at 22:53 SAST.** The restart was verified in the Render logs (server running, admin panel mounted). New driver registrations start at `pending_documents` again (`models/Driver.js`). **FI-091 is fixed.**
+- **Follow-up, new checklist L-14:** drivers who registered while it was on stay auto-approved, with placeholder documents (`file_name = 'test-mode-placeholder'`, shown in the panel as "Verified" with no file) and a `TEST_MODE_GRANT` subscription. The founder reviews them in the admin panel and rejects or suspends anyone who isn't a known tester.
+- **Updated:** `FOUND_ISSUES` (FI-091 and the decisions summary), `SECRETS_INVENTORY`, `LAUNCH_INFRA_CHECKLIST` (L-6, new L-14), `PROJECT_STATE`.
+- **Not touched:** the v45 SQL, its rollback and `SHA256SUMS` (their hashes are unchanged).
+
+## 2026-11-23 — v45 admin TOTP schema, written and proven; NOT applied. MFA design and lost-phone runbook (#91, `launch/v45-admin-totp`)
+- **v45 (`v45_admin_totp.sql`)** follows the v42–v44 pattern: BEFORE/AFTER header, `lock_timeout` 5 s / `statement_timeout` 60 s, `flash.file_sha`, a ledger row with the sha-mismatch refusal, one transaction, idempotent.
+  - **`admins`** gains `totp_secret_enc` text (AES-256-GCM ciphertext `v<n>:iv:tag:ct`), `totp_enrolled_at` timestamptz and `totp_last_step` bigint, plus `admins_totp_check`: the secret and enrolment time are set together; a step exists only once enrolled, and is ≥ 0; the secret has the versioned format.
+  - **`admin_mfa_recovery_codes`:** uuid PK; `admin_id` → `admins` ON DELETE CASCADE; `code_hash`, a hex-sha256 CHECK; `created_at`; `used_at`; `UNIQUE (admin_id, code_hash)`.
+  - **Rule 9:** RLS on the new table, no policies, nothing granted.
+  - **Guards check the schema only:** v42 (the ledger table), v43 (RLS on the ledger), v44 (the `feature_switches` table), and that `admins` has a uuid PK. Any partial or unexpected shape raises.
+  - **Locks:** one ALTER takes ACCESS EXCLUSIVE on `admins` **first** (so the FK's lock never has to upgrade), held until COMMIT. No other existing table is touched. A re-run takes no lock.
+  - **The rollback** drops the table, the CHECK and the three columns, and removes the ledger row. It warns that after PR 3, the MFA code must be reverted first.
+- **Fingerprints:** BEFORE `83a42d48…` → AFTER `aefbc6affe4dc1b2041aaa318721620f4abf5289810b945dae11d013ce91ccd9` (79,132 bytes, 69 tables). The change: `admins` re-spelled with 3 columns and the CHECK; the new table plus its PK, FK, UNIQUE and RLS (−1 / +6 statements). File sha `5b341cf5…ac841d04`; rollback `d3bcd4b2…88e422e5`.
+- **Proofs (all local, throwaway containers):**
+  - **The founder-path rehearsal** (`rehearse.sh` on a restored baseline): apply; re-apply changes nothing; a wrong sha is refused with no change; the rollback returns exactly to the start; AFTER computed with `schema_delta.py apply`.
+  - **`v45_rehearsal.sh`, 29/29:**
+    - the fixture is production's post-v44 state, and its baseline hashes to BEFORE;
+    - readiness 69/69/0 with verdict OK, and `anon` is denied;
+    - every CHECK, FK and UNIQUE rule;
+    - the replay-guard UPDATE and the single-use code UPDATE work exactly once;
+    - a re-apply with MFA data present is byte-identical;
+    - the wrong sha, the cascade, the rollback, a second rollback, and four guards;
+    - **locks:** it applies while orders, users, drivers, stores, admin_actions and feature_switches are exclusively locked; the file takes **90 ms** inside its transaction; while `admins` is in use it gives up after `lock_timeout` and changes nothing.
+  - **`schema_check.sh`:** a fresh `migrate.js` (now including v45) equals the new baseline.
+- **Also:** `migrateV45` (`pool.end()` moved to it); `adminCoverage.js` excludes `admin_mfa_recovery_codes`; `SHA256SUMS`; `schema_check.sh`; `.gitignore`; `PROD_MIGRATIONS.md` (tools, the v45 check after step E, the §9 row), `SCHEMA_BASELINE.md`, `TESTING.md`.
+- **The design** (`docs/ADMIN_MFA_DESIGN.md`, also in the PR description, for review before PR 3):
+  - RFC 6238 (SHA-1, 6 digits, 30 s, ±1 step);
+  - AES-256-GCM under the new `ADMIN_TOTP_ENCRYPTION_KEY`;
+  - 10 recovery codes of 80 bits each, hashed, shown once;
+  - the AdminJS gate and the enrolment page;
+  - the API's password → challenge → code flow, with no token before the code;
+  - every failure counts toward the lockout, and only a full login resets it;
+  - the lost-phone runbook A/B/C.
+- **Recorded from the founder (2026-11-23):**
+  - PR #90 deployed at 21:50 SAST;
+  - in Render: `NODE_ENV=production` and `APP_URL` exist, and **`DRIVER_TEST_MODE=true`** (new FI-091, High; checklist L-6);
+  - **L-12 decided:** the morning cold start is accepted during TestFlight, and Render Starter comes before public launch (FI-090). New checklist **L-13** (the MFA rollout order).
+- **Verified:** see the PR (unit and integration results on this head).
+- **Founder actions:** the second review of v45, merge, then A–E plus the v45 check (`PROD_MIGRATIONS.md` §5). Review the MFA design. `ADMIN_TOTP_ENCRYPTION_KEY` waits for PR 3 (add it before merging PR 3).
+
 ## 2026-11-23 — Auth limiter once, unused admin limiter deleted, secrets inventory, keep-awake finding (#89, `launch/fixes-and-secrets-inventory`)
 - **PR #88 deployed and verified (founder, 2026-11-23):**
   - `ADMIN_SESSION_SECRET` was added in Render before the merge;
@@ -26,7 +68,7 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
   It flags the **pending database password rotation**, with the safe order.
 - **FI-090 (new, High, founder-reported):** Render answers the pinger with 429 while the free service is asleep, and the service doesn't start (2026-11-22, 06:05 and 06:15 SAST). Once awake, the pinger keeps it awake (2026-11-21, 14:09–20:10). The decision is new checklist item **L-12**: Render Starter (about US$7/month) before public launch, or accept the morning cold start during TestFlight. `CRON_JOBS.md` no longer claims the 06:05 ping wakes the server.
-- **Verified:** see the PR (unit and integration results on this head).
+- **Verified:** unit 800/800, integration 18/18 on `bdbb203`; CI green. **Merged as PR #90 and deployed (founder): live 2026-11-23 21:50 SAST, admin panel mounted.**
 - **Founder actions:** decide L-12; confirm `NODE_ENV=production` and `DRIVER_TEST_MODE` in Render (SECRETS_INVENTORY "Check these first"); rotate the database password.
 
 ## 2026-11-21 — Admin hardening: real client IP for rate limits, session cookie and secret, role, lockout, dummy hash (#87, `launch/admin-hardening`)

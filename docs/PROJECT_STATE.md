@@ -12,6 +12,13 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-23, later (MFA schema; Render checked).**
+> - **PR #90 (#89)** is merged and deployed (live 21:50 SAST, admin panel mounted).
+> - **Founder's Render check:** `NODE_ENV=production` ✅; `APP_URL` set ✅; `DRIVER_TEST_MODE` was `true` (**FI-091**, High), so new drivers skipped document review. **The founder set it to `false` on 2026-11-23 at 22:53 SAST; FI-091 is fixed.** Drivers auto-approved before then are to be reviewed (checklist L-14).
+> - **L-12 decided:** the morning cold start is accepted during TestFlight; Render Starter before public launch (FI-090).
+> - **v45 (admin TOTP, #91)** is written and proven locally, **not applied**. It adds `admins.totp_secret_enc`, `totp_enrolled_at` and `totp_last_step` (+ `admins_totp_check`) and `admin_mfa_recovery_codes` (RLS on). The baseline is now v45's AFTER `aefbc6af…` (69 tables). **Production is still at v44 (`83a42d48…`, 68 tables) until the founder applies v45.** No code reads the new columns yet.
+> - **The MFA design and lost-phone runbook** are in `docs/ADMIN_MFA_DESIGN.md`; the code is PR 3.
+
 > **Status update, 2026-11-23 (security and operations).**
 > - **Admin hardening (#87, PR #88)** is deployed and verified on production (live 20:46 SAST; `ADMIN_SESSION_SECRET` added before the merge). Rate limits now key on the real client IP (FI-088 fixed).
 > - **#89:** `authLimiter` applies once per `/api/auth/*` request, so customers and drivers get 10 attempts per 15 minutes, not 5 (FI-087 fixed). The unused `adminAccountLoginLimiter` is deleted (FI-089 fixed).

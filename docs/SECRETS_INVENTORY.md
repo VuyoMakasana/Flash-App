@@ -10,9 +10,9 @@
   - `PAYMENT_METHOD_ENCRYPTION_KEY` and `CASH_OTP_SECRET` refuse to fall back to their **built-in development values**;
   - the Paystack webhook refuses to skip signature checks.
 
-  With any other value, those silently use their development fallbacks. **I can't see Render's variables: founder, please confirm `NODE_ENV=production`.** (`RENDER=true` is set by Render itself.)
+  With any other value, those silently use their development fallbacks. (`RENDER=true` is set by Render itself.) **✅ Confirmed by the founder in Render on 2026-11-23: `NODE_ENV` is `production`, and `APP_URL` exists.**
 - **Pending: rotate the database password (founder-reported).** See `DATABASE_URL` below for the safe order.
-- **`DRIVER_TEST_MODE` must be `false` (or unset) before public launch:** while it's `true`, new drivers skip document review (see the table below).
+- **✅ `DRIVER_TEST_MODE` has been `false` in production since 2026-11-23 at 22:53 SAST** (founder; restart verified in the Render logs). It was `true` before then, so new drivers skipped document review (FI-091). **Keep it `false`.** Drivers auto-approved while it was on still need reviewing (checklist L-14).
 
 ## Secrets (values that grant access or protect data)
 | Variable | What it protects | Set where / when added | Without it in production | How to rotate safely, and what breaks meanwhile |
@@ -46,13 +46,13 @@
 | `SENTRY_DSN` | Error reporting (production only). The DSN isn't a secret, but don't publish it. | No crash reporting. |
 | `LOG_LEVEL` | Log verbosity. | `info` in production. |
 | `APPLE_CLIENT_ID`, `APPLE_DRIVER_CLIENT_ID`, `APPLE_SERVICE_ID`, `GOOGLE_CLIENT_ID_USER_IOS`, `GOOGLE_CLIENT_ID_USER_ANDROID`, `GOOGLE_CLIENT_ID_DRIVER_IOS`, `GOOGLE_CLIENT_ID_DRIVER_ANDROID` | The audiences accepted for Sign in with Apple and Google ID tokens. Public identifiers, not secrets. | Apple falls back to the built-in bundle ids; a missing Google id means that platform's Google sign-in is refused. |
-| `DRIVER_TEST_MODE` | **Must be unset or `false` before public launch** (HANDOFF §3.1 found it `true`). With `true`, every **new** driver registration (`models/Driver.js`) starts `approved` with pre-verified placeholder documents and a free monthly subscription, **skipping document review entirely**. Existing accounts are not touched. | Off: new drivers start at `pending_documents`. |
+| `DRIVER_TEST_MODE` | **`false` since 2026-11-23 at 22:53 SAST** (founder, Render). It was `true` until then (HANDOFF §3.1; FI-091). **Must stay unset or `false` in production.** With `true`, every **new** driver registration (`models/Driver.js`) starts `approved` with pre-verified placeholder documents and a free monthly subscription, **skipping document review entirely**. Existing accounts are not touched. | Off: new drivers start at `pending_documents`. |
 | `I_UNDERSTAND_THIS_CONNECTS_TO_PRODUCTION` | Lets an off-Render script connect to the production database. **Must never be set on Render, or anywhere routinely.** | The guard refuses the production URL off Render (correct). |
 
 ## Coming next (not in the code yet)
 | Variable | For | When |
 |---|---|---|
-| `ADMIN_TOTP_ENCRYPTION_KEY` | Encrypting admins' TOTP secrets (AES-256-GCM): the MFA PR, after v45. | The MFA PR will state exactly when to add it. |
+| `ADMIN_TOTP_ENCRYPTION_KEY` | Encrypts admins' TOTP secrets at rest (AES-256-GCM), with the ciphertext bound to the admin row. **Exactly 64 hex characters** (32 random bytes), different from every other secret. Design: `ADMIN_MFA_DESIGN.md` §2.3 and §7. **Once PR 3 is live, without it in production the admin panel won't mount and admin API login answers 503 (fail closed).** **Rotating it makes every stored TOTP secret undecryptable, so every admin must be reset (runbook C) and re-enrol.** | Add it in Render **before merging PR 3** (the MFA code). Harmless before then, because nothing reads it until PR 3. PR 3 restates this. |
 
 ## Not backend variables (listed so they aren't forgotten)
 - **The apps' build-time values** (`EXPO_PUBLIC_API_BASE_URL`, `EXPO_PUBLIC_POSTHOG_*`, `EXPO_PUBLIC_SENTRY_DSN`, `EXPO_PUBLIC_GOOGLE_CLIENT_ID_*`, `GOOGLE_MAPS_API_KEY`) live in EAS and in `app.config.js`, not Render.
