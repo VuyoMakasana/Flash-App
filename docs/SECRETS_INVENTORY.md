@@ -1,0 +1,60 @@
+# Flash: backend secrets and settings inventory (`SECRETS_INVENTORY.md`)
+
+**Names only. No value of any variable ever appears in this file, the repo, chat, or a log.** Values live in **Render → Flash-App → Environment** (and, for `HEALTH_CHECK_TOKEN`, also in cron-job.org's Job 2 header). Every value that matters is also kept in the founder's password manager.
+
+**Who this is for:** the founder, rotating or adding a variable; anyone changing code that reads one. **Source of truth:** the code (`git grep -E "process\.env\.|get(Required|Optional)\(" backend/src backend/server.js`), as of 2026-11-23, after PR #88. If code starts reading a new variable, add it here in the same PR.
+
+## Check these first
+- **`NODE_ENV` must be `production` on Render.** Many fail-closed checks only fire when it is:
+  - `getRequired` (`config/env.js`) refuses missing and placeholder secrets;
+  - `PAYMENT_METHOD_ENCRYPTION_KEY` and `CASH_OTP_SECRET` refuse to fall back to their **built-in development values**;
+  - the Paystack webhook refuses to skip signature checks.
+
+  With any other value, those silently use their development fallbacks. **I can't see Render's variables: founder, please confirm `NODE_ENV=production`.** (`RENDER=true` is set by Render itself.)
+- **Pending: rotate the database password (founder-reported).** See `DATABASE_URL` below for the safe order.
+- **`DRIVER_TEST_MODE` must be `false` (or unset) before public launch:** while it's `true`, new drivers skip document review (see the table below).
+
+## Secrets (values that grant access or protect data)
+| Variable | What it protects | Set where / when added | Without it in production | How to rotate safely, and what breaks meanwhile |
+|---|---|---|---|---|
+| `DATABASE_URL` | Full read/write access to the production database (`postgres` role, owner of every table). | Render; long-standing. | **The app refuses to start** (`server.js`: `DATABASE_URL` and `JWT_SECRET` are checked at load). | **⚠ Rotation pending (founder-reported).** (1) Pick a quiet time in the awake window. (2) Supabase → Database → reset the password. (3) **Immediately** paste the new connection string (Session pooler or direct, whichever Render uses today) into Render → `DATABASE_URL`; Render restarts. **Between (2) and the restart finishing, every API call fails** (about 1–2 minutes, startup included). (4) Check `/health/db` (cron-job.org Job 2) and one app login. (5) Your own A–E runbook uses the Session pooler string typed at each prompt, so it picks up the new password automatically. Anything else holding the old password (a local `.env`, scripts) stops working, as it should. |
+| `JWT_SECRET` | Signs customer and driver access tokens (15 min) and authenticates Socket.IO connections. | Render; long-standing. | **The app refuses to start** (checked at load; also `getRequired` for the socket server, which refuses placeholder values). | Change it in Render (restart). Access tokens in use stop working, so the apps call refresh and get a new one. **Refresh tokens are random strings in `refresh_tokens`, not signed with this secret, so nobody is logged out.** Sockets reconnect. |
+| `ADMIN_JWT_SECRET` | Signs admin API tokens (8 h) for `/api/admin/*`. | Render; long-standing. | The app starts; **admin API login returns 500** (`getRequired` at login), and admin tokens are rejected. | Change it in Render (restart); admins log in to the API again. **It must stay different from `ADMIN_SESSION_SECRET`,** or the admin panel won't start. |
+| `ADMIN_SESSION_SECRET` | Signs the admin panel's session cookie (`flash_admin_session`). | Render; **added 2026-11-23, before PR #88 merged.** | The app starts; **the admin panel doesn't mount** (`/admin-panel` returns 404, and the log says `[AdminPanel] Failed to mount: ADMIN_SESSION_SECRET …`). It must be ≥ 32 characters and ≠ `ADMIN_JWT_SECRET`. | Change it in Render (restart); everyone is logged out of the panel (sessions live in memory anyway). Same constraints. |
+| `STORE_JWT_SECRET` | Signs store-portal tokens. | Render; long-standing. | The app starts; **store login and store requests fail** (`getRequired` at use). | Change it in Render (restart); store staff log in again. |
+| `PAYMENT_METHOD_ENCRYPTION_KEY` | Encrypts saved-card authorization data at rest (`utils/paymentCrypto.js`). Deliberately separate from `JWT_SECRET`. | Render; long-standing. | Starts; **saving or charging a saved card throws** (fail closed). Outside production a built-in development key is used, which must never happen on Render. | **⚠ Do not rotate casually.** The code has **one** key and no re-encryption: changing it makes **every saved card undecryptable**, so charging saved cards fails until customers re-add their cards. Rotating safely needs a planned change (decrypt with the old key, re-encrypt with the new, in one migration). Only do it after a suspected leak, as a reviewed procedure. |
+| `CASH_OTP_SECRET` | Derives the cash-collection OTPs (`services/cashOtpService.js`). | Render; long-standing (HANDOFF §3: confirm it's strong). | Starts; **generating or checking a cash OTP throws**, so cash orders can't be completed (fail closed). Outside production a fixed development value is used. | Rotate **when no cash order is out for delivery**: OTPs already issued stop matching. Change it in Render (restart). |
+| `PAYSTACK_SECRET_KEY` | Calls to Paystack (charges, refunds, transfers) **and** verifying Paystack webhook signatures (HMAC-SHA512). **Live key in Render only** (founder decision 3); local and CI use test keys. | Render; live key **added 2026-11-20** (founder). | Starts with a `CRITICAL` log; **payments are unavailable and webhooks answer 500** (never accepted unverified). | Roll the key in the Paystack dashboard, then **immediately** update Render (restart). During the gap, calls fail and webhooks are rejected; Paystack retries webhooks, and the 5-minute payment reconciliation job catches anything missed. |
+| `HEALTH_CHECK_TOKEN` | Protects `GET /health/db`. | Render **and** cron-job.org Job 2 (`X-Health-Token`); **added 2026-11-21** (L0.4). | Starts; `/health/db` always answers 404 (by design). | Change it in Render (restart) **and** in cron-job.org Job 2 at the same time. Until both match, Job 2 sees 404 and alerts. |
+| `RESEND_API_KEY` | Sending email through Resend's HTTPS API (escalations, password resets, verification). If it's unset and `SMTP_HOST` is a resend.com host, `SMTP_PASS` is used as the API key. | Render. | Starts; **email sending fails** unless SMTP is configured (Render blocks the usual SMTP ports, which is why the HTTPS API exists). | Create the new key in Resend, update Render (restart), then revoke the old one. Emails sent during the gap fail. |
+| `RESEND_WEBHOOK_SECRET` | Verifies Resend's (Svix) webhook signatures for bounces and complaints. | Render. | Starts; **Resend webhooks are rejected** (never accepted unverified). | Update in Resend and Render together. Svix retries rejected events. |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Email through SMTP (and, for Resend's SMTP host, `SMTP_PASS` serves as the API key). | Render, if used. | Starts; email via SMTP is disabled. | Change the password at the provider, then in Render (restart). Emails during the gap fail. |
+| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Uploads and signed URLs for driver documents and delivery photos (`services/s3Service.js`). | Render. | Starts; **uploads and signed document/photo links fail**. | Create a new key pair in Cloudinary, update Render (restart), then delete the old pair. Uploads and admin document views fail during the gap. |
+
+## Configuration (not secrets, but the app depends on them)
+| Variable | What it does | Without it |
+|---|---|---|
+| `NODE_ENV` | `production` turns on every fail-closed check above, `trust proxy`, and Sentry. **Must be `production` on Render.** | Development behaviour, including insecure fallbacks. |
+| `RENDER` | Set automatically by Render (`true`). The client-IP middleware trusts `CF-Connecting-IP` only when it's set (FI-088). The database guard allows the production URL only when it's set. The admin panel requires `ADMIN_SESSION_SECRET` when it's set. | Not on Render: the header isn't trusted, and the production database URL is refused. |
+| `PORT` | Set by Render. | Defaults to 3000. |
+| `DB_POOL_MAX` | The database pool size (default 30, under Supabase's free-tier cap of 60). | 30. |
+| `REDIS_URL` | If set (and not `disabled`): Socket.IO's Redis adapter, the response cache, and rate-limit counters (only if the optional `rate-limit-redis` package is present; otherwise the limiters log a warning and use memory). | Everything in memory, which is correct for the single Render instance. |
+| `APP_URL` | **The Paystack payment callback URL** (`services/paystackService.js`), links in password-reset and verification emails, and an allowed CORS origin. | **In production, every card payment initialization fails** ("APP_URL must be configured in production"), with no database side effects. Emails link to `http://localhost:3000`. |
+| `ALLOWED_ORIGINS` | The browser CORS allow-list (HTTP and Socket.IO). Mobile apps send no Origin, so they're unaffected. | In production, browser requests from origins other than `APP_URL` are blocked. |
+| `STORE_PORTAL_URL` | Links in store-staff emails. | `https://flash-store-portal.onrender.com`. |
+| `EMAIL_FROM` | The sender address. | `Flash <noreply@flashdelivery.co.za>`. |
+| `SENTRY_DSN` | Error reporting (production only). The DSN isn't a secret, but don't publish it. | No crash reporting. |
+| `LOG_LEVEL` | Log verbosity. | `info` in production. |
+| `APPLE_CLIENT_ID`, `APPLE_DRIVER_CLIENT_ID`, `APPLE_SERVICE_ID`, `GOOGLE_CLIENT_ID_USER_IOS`, `GOOGLE_CLIENT_ID_USER_ANDROID`, `GOOGLE_CLIENT_ID_DRIVER_IOS`, `GOOGLE_CLIENT_ID_DRIVER_ANDROID` | The audiences accepted for Sign in with Apple and Google ID tokens. Public identifiers, not secrets. | Apple falls back to the built-in bundle ids; a missing Google id means that platform's Google sign-in is refused. |
+| `DRIVER_TEST_MODE` | **Must be unset or `false` before public launch** (HANDOFF §3.1 found it `true`). With `true`, every **new** driver registration (`models/Driver.js`) starts `approved` with pre-verified placeholder documents and a free monthly subscription, **skipping document review entirely**. Existing accounts are not touched. | Off: new drivers start at `pending_documents`. |
+| `I_UNDERSTAND_THIS_CONNECTS_TO_PRODUCTION` | Lets an off-Render script connect to the production database. **Must never be set on Render, or anywhere routinely.** | The guard refuses the production URL off Render (correct). |
+
+## Coming next (not in the code yet)
+| Variable | For | When |
+|---|---|---|
+| `ADMIN_TOTP_ENCRYPTION_KEY` | Encrypting admins' TOTP secrets (AES-256-GCM): the MFA PR, after v45. | The MFA PR will state exactly when to add it. |
+
+## Not backend variables (listed so they aren't forgotten)
+- **The apps' build-time values** (`EXPO_PUBLIC_API_BASE_URL`, `EXPO_PUBLIC_POSTHOG_*`, `EXPO_PUBLIC_SENTRY_DSN`, `EXPO_PUBLIC_GOOGLE_CLIENT_ID_*`, `GOOGLE_MAPS_API_KEY`) live in EAS and in `app.config.js`, not Render.
+- **HANDOFF §6:** the **Google Maps key rotation is incomplete**: two previously leaked keys are still active in Google Cloud Console.
+- **The store portal** has only `VITE_API_BASE_URL`, its public API URL.

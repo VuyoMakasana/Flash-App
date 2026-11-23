@@ -12,6 +12,13 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-23 (security and operations).**
+> - **Admin hardening (#87, PR #88)** is deployed and verified on production (live 20:46 SAST; `ADMIN_SESSION_SECRET` added before the merge). Rate limits now key on the real client IP (FI-088 fixed).
+> - **#89:** `authLimiter` applies once per `/api/auth/*` request, so customers and drivers get 10 attempts per 15 minutes, not 5 (FI-087 fixed). The unused `adminAccountLoginLimiter` is deleted (FI-089 fixed).
+> - **`docs/SECRETS_INVENTORY.md`** lists every variable the backend reads (names only), with rotation steps. **The database password rotation is still pending.**
+> - **The keep-awake pinger doesn't wake a sleeping free service (FI-090).** The Render Starter decision is checklist L-12.
+> - **Next:** admin MFA (TOTP): v45 schema, then the code; then L0.5b (feature switches).
+
 > **Status update, 2026-11-21 (migrations).** This audit predates the production migration process.
 > - **`migrate.js` is never run against production.** Schema changes reach production only through `docs/PROD_MIGRATIONS.md` steps A–E.
 > - **v41 (PR #36):** merged; not applied to production and not needed (a proven no-op there).

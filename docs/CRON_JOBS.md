@@ -7,7 +7,7 @@
 2. **Every run logs** `cron start`, then `cron finish` (with `durationMs`) or `cron failed` (with the error message), as JSON lines carrying `job` and `trigger` (`schedule` or `startup-catch-up`). At startup, each job logs one `cron registered` line with its expression and timezone.
 3. **A job never overlaps itself.** If the previous run is still going, the tick is skipped and `cron skip: previous run still in progress` is logged.
 4. **The awake window** (founder launch decision 7):
-   - Render's free plan sleeps. The founder pings `/health` every 10 minutes from **06:45 to 19:45 SAST**, so only that window is guaranteed.
+   - Render's free plan sleeps. The founder pings `/health` every 10 minutes from **06:45 to 19:45 SAST**, so only that window is guaranteed, **and only once the server is awake: the pings don't wake a sleeping free service (FI-090; Render Starter decision in checklist L-12).** The startup catch-up below makes a late morning wake run the missed daily jobs.
    - **Daily jobs are scheduled inside it, in `Africa/Johannesburg` time.** `dailySast()` refuses a slot outside the window.
    - **Startup catch-up:** if the process starts inside the window after a daily job's slot has passed today (a deploy, a restart, a late wake), that job runs once at startup.
    - **Interval jobs** (every N minutes) need no catch-up: they run whenever the process is up, including outside the window if something keeps it awake.
@@ -39,7 +39,7 @@ Before L0.3, `node-cron` ran in the server's timezone, which is **UTC on Render*
 **Coming in L3:** the daily driver payout at 19:15 SAST (inside the window, before it closes).
 
 ## Keeping the backend awake: the external pinger (L0.4, #82)
-Render's free plan puts `Flash-App` to sleep after 15 minutes without traffic, and asleep it runs no jobs. A cron-job.org job therefore calls `GET /health` every 10 minutes.
+Render's free plan puts `Flash-App` to sleep after 15 minutes without traffic, and asleep it runs no jobs. A cron-job.org job therefore calls `GET /health` every 10 minutes. **That keeps an awake server awake, but doesn't wake a sleeping one (FI-090, checklist L-12).**
 
 **What the endpoints do:**
 - **`GET /health`** is a liveness check: `200 {"status":"ok"}`, `Cache-Control: no-store`. It does no database work and reveals nothing. It's mounted before the request logger, so pings add no log lines.
@@ -61,11 +61,11 @@ Render's free plan puts `Flash-App` to sleep after 15 minutes without traffic, a
 | Expected | HTTP 200, body `{"status":"ok"}` |
 
 **What the alerts mean:**
-- **The 06:05 ping may fail once:** startup takes about a minute (FI-073), longer than the 30 s timeout, but the ping still wakes the server. That's why the alert waits for 2 failures.
+- **The pinger doesn't wake a sleeping server (FI-090).** On 2026-11-22, Render answered the 06:05 and 06:15 pings with **429** and the service didn't start (founder-reported). So morning failures are expected on the free plan until something else wakes the server; decision: checklist L-12. Once the server is awake, the pings do keep it awake.
 - **A real problem** is two failures in a row during the day.
 - **Check weekly:** cron-job.org can disable a job after many failures in a row.
 
-**The awake window:** pings run from 06:05; the server sleeps about 15 minutes after the 19:55 ping, around 20:10. That covers the **06:45–19:45 SAST** window the jobs above rely on (rule 4).
+**The awake window:** pings run from 06:05; the server sleeps about 15 minutes after the 19:55 ping, around 20:10 (seen 2026-11-21: awake 14:09–20:10). **On the free plan, the 06:45–19:45 SAST window (rule 4) is only guaranteed once something has woken the server**, because the pings themselves don't wake it (FI-090). Render Starter (no sleep) removes the gap; decision in checklist L-12.
 
 ### Job 2: database check (optional deep check)
 | Setting | Value |

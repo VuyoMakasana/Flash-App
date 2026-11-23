@@ -4,6 +4,31 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-23 — Auth limiter once, unused admin limiter deleted, secrets inventory, keep-awake finding (#89, `launch/fixes-and-secrets-inventory`)
+- **PR #88 deployed and verified (founder, 2026-11-23):**
+  - `ADMIN_SESSION_SECRET` was added in Render before the merge;
+  - the deploy went live at 20:46 SAST, with `[AdminPanel] Mounted at /admin-panel` logged at 20:46:17;
+  - the founder logged in and navigated without being logged out, which confirms the Secure cookie works behind Render's TLS.
+
+  FI-088 is fixed and verified; checklist L-11 is done.
+- **FI-087, fixed:** removed `router.use(authLimiter)` from `routes/authRoutes.js`. `server.js`'s `app.use("/api/auth/", authLimiter)` is now the only mount, so a customer gets 10 attempts per 15 minutes, not 5. `tests/unit/clientIp.test.js` now expects a step of 1 per request (it was 2).
+- **FI-089, fixed (founder decision: delete):** removed `adminAccountLoginLimiter` and its export from `middleware/rateLimiter.js`. `normalizeAdminEmailKey` is kept, because `adminPasswordResetLimiter` uses it. Comments in `rateLimiter.js` and `services/adminLoginLockout.js` are reworded.
+- **New test, `tests/unit/authLimiterOnce.test.js`** (written first, failing 6/6 before the fix). It checks:
+  - exactly 10 attempts (remaining 9 … 0), and the 11th gets 429 with the standard message;
+  - two auth routes share one counter at a step of 1;
+  - another client is unaffected;
+  - there's exactly one mount;
+  - the deleted limiter isn't exported, and nothing in `backend/src` mentions it.
+- **`docs/SECRETS_INVENTORY.md` (new):** every variable the backend reads, names only. For each: what it protects, where it's set, when it was added (where known), what happens without it in production, and how to rotate it. Code checks while writing it found that:
+  - `APP_URL` is required for card payments in production;
+  - `DRIVER_TEST_MODE=true` auto-approves new drivers;
+  - `PAYMENT_METHOD_ENCRYPTION_KEY` can't be rotated without a re-encryption migration.
+
+  It flags the **pending database password rotation**, with the safe order.
+- **FI-090 (new, High, founder-reported):** Render answers the pinger with 429 while the free service is asleep, and the service doesn't start (2026-11-22, 06:05 and 06:15 SAST). Once awake, the pinger keeps it awake (2026-11-21, 14:09–20:10). The decision is new checklist item **L-12**: Render Starter (about US$7/month) before public launch, or accept the morning cold start during TestFlight. `CRON_JOBS.md` no longer claims the 06:05 ping wakes the server.
+- **Verified:** see the PR (unit and integration results on this head).
+- **Founder actions:** decide L-12; confirm `NODE_ENV=production` and `DRIVER_TEST_MODE` in Render (SECRETS_INVENTORY "Check these first"); rotate the database password.
+
 ## 2026-11-21 — Admin hardening: real client IP for rate limits, session cookie and secret, role, lockout, dummy hash (#87, `launch/admin-hardening`)
 - **A0 / FI-088 (High), fixed:** with `trust proxy 1` and production's 3-entry `X-Forwarded-For`, `req.ip` was the right-most entry, a Render-internal proxy. Every per-IP limiter keyed on it. `middleware/clientIp.js` (mounted first) now sets `req.ip` from `CF-Connecting-IP`, on Render only and only if it's a valid IP; `X-Forwarded-For` is never used for the key. Tests use the real header shape: separate clients, the same client across edges, and spoofing via `X-Forwarded-For` and `True-Client-IP`.
 - **A2:** the cookie is `flash_admin_session`, httpOnly, Secure in production, SameSite=Strict, 8 h, and the session id is regenerated at login.

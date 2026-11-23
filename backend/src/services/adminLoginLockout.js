@@ -10,10 +10,10 @@
 //
 // Built on express-rate-limit's own MemoryStore (the existing library; no
 // new dependency). It is in memory, like every limiter here today: one
-// backend instance; a restart clears it. The previous attempt at this,
-// rateLimiter.js's adminAccountLoginLimiter, was never wired to any route,
-// and couldn't be for AdminJS: its login body is parsed inside AdminJS's own
-// router, after any middleware we can put in front of it.
+// backend instance; a restart clears it. An earlier per-account limiter in
+// rateLimiter.js was never wired to any route, and couldn't be for AdminJS:
+// its login body is parsed inside AdminJS's own router, after any middleware
+// we can put in front of it. It was deleted (FI-089, #89).
 
 const { MemoryStore } = require('express-rate-limit');
 
