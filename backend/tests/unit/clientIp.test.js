@@ -82,12 +82,11 @@ describe('every limiter keys on the real client (the real app, production header
   // Each test uses its own client addresses, because the limiters are module-level.
   const hit = (method, path, headers, body) => request(app)[method](path).set(headers).send(body);
 
-  // `step` = how much one request uses. authLimiter is applied twice to every
-  // /api/auth request (server.js and authRoutes.js both mount it), so it uses
-  // 2: a pre-existing bug recorded as FI-087, deliberately not fixed here.
+  // `step` = how much one request uses: 1 for every limiter. (The auth
+  // limiter used 2 until FI-087 was fixed in #89; it was mounted twice.)
   test.each([
     ['global /api limiter', 'get', '/api/status/hours', undefined, 1],
-    ['auth limiter', 'post', '/api/auth/user/login', { email: 'x@example.com', password: 'x' }, 2],
+    ['auth limiter', 'post', '/api/auth/user/login', { email: 'x@example.com', password: 'x' }, 1],
     ['admin login limiter', 'post', '/api/admin/login', { email: 'x@example.com', password: 'x' }, 1],
     ['order limiter', 'post', '/api/orders', {}, 1],
   ])('%s: two clients behind the same proxy get separate counters', async (_name, method, path, body, step) => {

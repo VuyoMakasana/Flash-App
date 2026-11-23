@@ -71,41 +71,18 @@ const adminLimiter = rateLimit({
   ...storeOption,
 });
 
-// NOT USED (admin hardening #87): this limiter was never wired to any route,
-// and it can't serve the AdminJS login, whose body is parsed inside AdminJS's
-// own router after any middleware placed in front. The per-account lockout
-// that IS enforced, on both admin logins, is services/adminLoginLockout.js
-// (via services/adminCredentials.js). Kept, unused, pending a decision to
-// delete it.
-//
-// ADMIN PLATFORM PHASE 2: per-account brute-force lockout for admin login,
-// same pattern as accountLoginLimiter below (security-fixes' H-5 fix,
-// reused here for the admin surface since it's not on this branch's base —
-// see the task's own instruction to build the equivalent if missing).
-// adminLimiter above is IP-keyed; this is keyed by the normalized email
-// itself, so an attacker spraying one admin account's password from many
-// IPs (defeating the IP-keyed limiter) still hits a real per-account cap.
-// skipSuccessfulRequests: true — a legitimate admin logging in repeatedly
-// across a workday never burns down this budget, only real failed guesses
-// do.
+// Normalized-email key for the admin password-reset limiter below. (The
+// per-account admin LOGIN lockout is services/adminLoginLockout.js, enforced
+// on both admin logins. An older, never-wired login limiter that used to sit
+// here was deleted: FI-089, #89.)
 function normalizeAdminEmailKey(req) {
   const email = String(req.body?.email || '').trim().toLowerCase();
   return email || '__no_email_provided__';
 }
 
-const adminAccountLoginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many failed login attempts for this account. Please try again later.' },
-  skipSuccessfulRequests: true,
-  keyGenerator: normalizeAdminEmailKey,
-  ...storeOption,
-});
 
 // ADMIN PLATFORM PHASE 2 — forgot-password request, admin surface. Keyed by
-// the same normalized-email pattern as adminAccountLoginLimiter above (a
+// normalizeAdminEmailKey above (a
 // forgot-password request always carries an email in its body, same shape),
 // so a burst of reset requests against one specific account is capped
 // per-account, not just per-IP — same reasoning as the user/driver
@@ -223,8 +200,8 @@ function normalizeStoreEmailKey(req) {
   return email || '__no_email_provided__';
 }
 
-// Per-account brute-force lockout, same reasoning as adminAccountLoginLimiter
-// above — an attacker spreading guesses against one store account across
+// Per-account brute-force lockout (the same idea as the admin login lockout in
+// services/adminLoginLockout.js) — an attacker spreading guesses against one store account across
 // many IPs still hits a real per-account cap.
 const storeAccountLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -282,7 +259,6 @@ module.exports = {
   limiter,
   authLimiter,
   adminLimiter,
-  adminAccountLoginLimiter,
   adminPasswordResetLimiter,
   storeAuthLimiter,
   storeAccountLoginLimiter,

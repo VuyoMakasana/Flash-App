@@ -6,11 +6,12 @@ const express = require('express');
 const router  = express.Router();
 const { body } = require('express-validator');
 const AuthController = require('../controllers/authController');
-const { authLimiter } = require('../middleware/rateLimiter');
 const { authenticate } = require('../middleware/auth');
 
-// All auth routes get the strict rate limiter (10 per 15 min)
-router.use(authLimiter);
+// All auth routes get the strict rate limiter (10 per 15 min) from ONE place:
+// server.js's app.use("/api/auth/", authLimiter). It used to be mounted here
+// as well, so every request counted twice and customers got 5 attempts, not
+// 10 (FI-087, #89).
 
 // Both live legal pages (Terms & Privacy) claim a minimum age of 18, but
 // nothing enforced it at registration on either app. Shared by user and
