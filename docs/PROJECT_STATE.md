@@ -14,7 +14,7 @@
 
 > **Status update, 2026-11-23, later (MFA schema; Render checked).**
 > - **PR #90 (#89)** is merged and deployed (live 21:50 SAST, admin panel mounted).
-> - **Founder's Render check:** `NODE_ENV=production` ✅; `APP_URL` set ✅; **`DRIVER_TEST_MODE=true`** ❌, so new drivers skip document review (**FI-091**, High: set it to `false` before public launch).
+> - **Founder's Render check:** `NODE_ENV=production` ✅; `APP_URL` set ✅; `DRIVER_TEST_MODE` was `true` (**FI-091**, High), so new drivers skipped document review. **The founder set it to `false` on 2026-11-23 at 22:53 SAST; FI-091 is fixed.** Drivers auto-approved before then are to be reviewed (checklist L-14).
 > - **L-12 decided:** the morning cold start is accepted during TestFlight; Render Starter before public launch (FI-090).
 > - **v45 (admin TOTP, #91)** is written and proven locally, **not applied**. It adds `admins.totp_secret_enc`, `totp_enrolled_at` and `totp_last_step` (+ `admins_totp_check`) and `admin_mfa_recovery_codes` (RLS on). The baseline is now v45's AFTER `aefbc6af…` (69 tables). **Production is still at v44 (`83a42d48…`, 68 tables) until the founder applies v45.** No code reads the new columns yet.
 > - **The MFA design and lost-phone runbook** are in `docs/ADMIN_MFA_DESIGN.md`; the code is PR 3.

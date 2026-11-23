@@ -4,6 +4,12 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-23 — `DRIVER_TEST_MODE` switched off in production (docs only, on PR #92)
+- **The founder set `DRIVER_TEST_MODE=false` in Render at 22:53 SAST.** The restart was verified in the Render logs (server running, admin panel mounted). New driver registrations start at `pending_documents` again (`models/Driver.js`). **FI-091 is fixed.**
+- **Follow-up, new checklist L-14:** drivers who registered while it was on stay auto-approved, with placeholder documents (`file_name = 'test-mode-placeholder'`, shown in the panel as "Verified" with no file) and a `TEST_MODE_GRANT` subscription. The founder reviews them in the admin panel and rejects or suspends anyone who isn't a known tester.
+- **Updated:** `FOUND_ISSUES` (FI-091 and the decisions summary), `SECRETS_INVENTORY`, `LAUNCH_INFRA_CHECKLIST` (L-6, new L-14), `PROJECT_STATE`.
+- **Not touched:** the v45 SQL, its rollback and `SHA256SUMS` (their hashes are unchanged).
+
 ## 2026-11-23 — v45 admin TOTP schema, written and proven; NOT applied. MFA design and lost-phone runbook (#91, `launch/v45-admin-totp`)
 - **v45 (`v45_admin_totp.sql`)** follows the v42–v44 pattern: BEFORE/AFTER header, `lock_timeout` 5 s / `statement_timeout` 60 s, `flash.file_sha`, a ledger row with the sha-mismatch refusal, one transaction, idempotent.
   - **`admins`** gains `totp_secret_enc` text (AES-256-GCM ciphertext `v<n>:iv:tag:ct`), `totp_enrolled_at` timestamptz and `totp_last_step` bigint, plus `admins_totp_check`: the secret and enrolment time are set together; a step exists only once enrolled, and is ≥ 0; the secret has the versioned format.

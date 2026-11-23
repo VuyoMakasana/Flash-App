@@ -12,7 +12,7 @@
 
   With any other value, those silently use their development fallbacks. (`RENDER=true` is set by Render itself.) **✅ Confirmed by the founder in Render on 2026-11-23: `NODE_ENV` is `production`, and `APP_URL` exists.**
 - **Pending: rotate the database password (founder-reported).** See `DATABASE_URL` below for the safe order.
-- **`DRIVER_TEST_MODE` is `true` in production (founder, checked in Render on 2026-11-23).** It must be `false` (or unset) before public launch. While it's `true`, every new driver skips document review (see the table below). Checklist L-6.
+- **✅ `DRIVER_TEST_MODE` has been `false` in production since 2026-11-23 at 22:53 SAST** (founder; restart verified in the Render logs). It was `true` before then, so new drivers skipped document review (FI-091). **Keep it `false`.** Drivers auto-approved while it was on still need reviewing (checklist L-14).
 
 ## Secrets (values that grant access or protect data)
 | Variable | What it protects | Set where / when added | Without it in production | How to rotate safely, and what breaks meanwhile |
@@ -46,7 +46,7 @@
 | `SENTRY_DSN` | Error reporting (production only). The DSN isn't a secret, but don't publish it. | No crash reporting. |
 | `LOG_LEVEL` | Log verbosity. | `info` in production. |
 | `APPLE_CLIENT_ID`, `APPLE_DRIVER_CLIENT_ID`, `APPLE_SERVICE_ID`, `GOOGLE_CLIENT_ID_USER_IOS`, `GOOGLE_CLIENT_ID_USER_ANDROID`, `GOOGLE_CLIENT_ID_DRIVER_IOS`, `GOOGLE_CLIENT_ID_DRIVER_ANDROID` | The audiences accepted for Sign in with Apple and Google ID tokens. Public identifiers, not secrets. | Apple falls back to the built-in bundle ids; a missing Google id means that platform's Google sign-in is refused. |
-| `DRIVER_TEST_MODE` | **Must be unset or `false` before public launch. It is `true` today** (HANDOFF §3.1; confirmed by the founder in Render on 2026-11-23). With `true`, every **new** driver registration (`models/Driver.js`) starts `approved` with pre-verified placeholder documents and a free monthly subscription, **skipping document review entirely**. Existing accounts are not touched. | Off: new drivers start at `pending_documents`. |
+| `DRIVER_TEST_MODE` | **`false` since 2026-11-23 at 22:53 SAST** (founder, Render). It was `true` until then (HANDOFF §3.1; FI-091). **Must stay unset or `false` in production.** With `true`, every **new** driver registration (`models/Driver.js`) starts `approved` with pre-verified placeholder documents and a free monthly subscription, **skipping document review entirely**. Existing accounts are not touched. | Off: new drivers start at `pending_documents`. |
 | `I_UNDERSTAND_THIS_CONNECTS_TO_PRODUCTION` | Lets an off-Render script connect to the production database. **Must never be set on Render, or anywhere routinely.** | The guard refuses the production URL off Render (correct). |
 
 ## Coming next (not in the code yet)
