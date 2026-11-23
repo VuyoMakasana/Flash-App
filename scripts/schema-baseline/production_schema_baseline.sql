@@ -10,6 +10,15 @@ ALTER TABLE ONLY public.admin_actions
 ALTER TABLE ONLY public.admin_actions
     ADD CONSTRAINT admin_actions_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.admin_mfa_recovery_codes
+    ADD CONSTRAINT admin_mfa_recovery_codes_admin_code_key UNIQUE (admin_id, code_hash);
+
+ALTER TABLE ONLY public.admin_mfa_recovery_codes
+    ADD CONSTRAINT admin_mfa_recovery_codes_admin_id_fkey FOREIGN KEY (admin_id) REFERENCES public.admins(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY public.admin_mfa_recovery_codes
+    ADD CONSTRAINT admin_mfa_recovery_codes_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY public.admins
     ADD CONSTRAINT admins_email_key UNIQUE (email);
 
@@ -551,6 +560,8 @@ ALTER TABLE public.addresses ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.admin_actions ENABLE ROW LEVEL SECURITY;
 
+ALTER TABLE public.admin_mfa_recovery_codes ENABLE ROW LEVEL SECURITY;
+
 ALTER TABLE public.admins ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.app_ratings ENABLE ROW LEVEL SECURITY;
@@ -943,6 +954,15 @@ CREATE TABLE public.admin_actions (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE public.admin_mfa_recovery_codes (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    admin_id uuid NOT NULL,
+    code_hash text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    used_at timestamp with time zone,
+    CONSTRAINT admin_mfa_recovery_codes_code_hash_check CHECK ((code_hash ~ '^[0-9a-f]{64}$'::text))
+);
+
 CREATE TABLE public.admins (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     name character varying(255) NOT NULL,
@@ -951,7 +971,11 @@ CREATE TABLE public.admins (
     phone character varying(50),
     role character varying(20) DEFAULT 'admin'::character varying NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    totp_secret_enc text,
+    totp_enrolled_at timestamp with time zone,
+    totp_last_step bigint,
+    CONSTRAINT admins_totp_check CHECK ((((totp_secret_enc IS NULL) = (totp_enrolled_at IS NULL)) AND ((totp_last_step IS NULL) OR ((totp_enrolled_at IS NOT NULL) AND (totp_last_step >= 0))) AND ((totp_secret_enc IS NULL) OR (totp_secret_enc ~ '^v[0-9]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$'::text))))
 );
 
 CREATE TABLE public.app_ratings (

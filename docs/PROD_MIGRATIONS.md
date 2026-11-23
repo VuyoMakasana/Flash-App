@@ -36,6 +36,7 @@
 | `scripts/prod-migrations/R-RlsReadiness.ps1` + `rls_readiness.sh` | **Read-only** readiness check (FI-081): table owners, RLS flags, `anon`/`authenticated` privileges, default privileges, and whether the backend role stays exempt from RLS on every table. With **`-PostV43`** it is also the v43 check after step E (§5). |
 | `scripts/schema-baseline/v43_grant_rehearsal.sh` | Developer tool, local only: rebuilds production's real **grant** state (Supabase roles, grants, both default ACLs) and rehearses v43 apply / re-apply / wrong sha / rollback / guards / lock timeout. Step D's rehearsal can't do that, because its dump has no privileges. |
 | `scripts/schema-baseline/v44_rehearsal.sh` | Developer tool, local only: production's post-v43 state (owner, grants, default ACLs), then v44 apply / seeds / a flipped switch surviving a re-apply / wrong sha / rollback / guards / applying while `orders`, `users` and `admins` are exclusively locked. |
+| `scripts/schema-baseline/v45_rehearsal.sh` | Developer tool, local only: production's post-v44 state (its baseline must hash to v45's BEFORE) plus one admin, then v45 apply / readiness / every `admins_totp_check` and recovery-code rule / a re-apply with MFA data present / wrong sha / cascade / rollback / guards / locks (applies while other busy tables are exclusively locked; gives up cleanly after `lock_timeout` while `admins` is in use). |
 | `scripts/schema-baseline/production_schema_baseline.sql` | The committed baseline. After a migration PR, it is the **expected production schema after** the migration. |
 | `scripts/schema-baseline/baseline_to_restorable.py` | Developer tool: builds a local prod-shaped database from the baseline (§4). |
 | `schema-baseline-input/vNN/` (git-ignored) | Step working folder. **Schema dumps only, never table data.** |
@@ -159,6 +160,12 @@ A step therefore shows a container's output when it finishes, not live. If the m
 
 **If step E fails:** stop. Don't deploy code that depends on the change. Report the output, then decide (§7).
 
+**v45: the check after step E.** Run `R-RlsReadiness.ps1 -BackendRole postgres` (**without** `-PostV43`). It should show:
+- `summary|tables=69|exempt=69|not_exempt=0|rls_enabled=69|tables_with_anon_or_auth_privs=0` and `verdict|OK`;
+- `table|admin_mfa_recovery_codes|postgres|t|f|t|t|0|0`, and the `admins` row unchanged from before.
+
+Then the advisor: no ERROR or WARN, and INFO `rls_enabled_no_policy` on **69** tables (expected). v45 takes an ACCESS EXCLUSIVE lock on `admins` for the rest of its transaction (90 ms in the rehearsal). If an admin is mid-login, step D can fail with a lock timeout after 5 s and change nothing; just run step D again.
+
 **v44: the check after step E.** Run `R-RlsReadiness.ps1 -BackendRole postgres` (**without** `-PostV43`, which is v43-specific and expects 67 tables). It should show:
 - `summary|tables=68|exempt=68|not_exempt=0|rls_enabled=68|tables_with_anon_or_auth_privs=0` and `verdict|OK`;
 - `table|feature_switches|postgres|t|f|t|t|0|0`.
@@ -255,6 +262,7 @@ Then revert the migration PR, so the committed baseline matches production again
   - no permission or row-level security errors.
 
 | v44 | #85 (merged `aae101a`) | **Applied 2026-11-21 14:17 SAST by the founder**; steps A–E and the v44 readiness check passed, verified 14:19 SAST ([step E record](https://github.com/VuyoMakasana/Flash-App/pull/85#issuecomment-7063019801); [second review](https://github.com/VuyoMakasana/Flash-App/pull/85#issuecomment-7062314292)) | `689f03b4…5cf113` | `83a42d48…f9ceb001` (77,854 bytes, 68 tables) | `332926f437bf11a68f36b59810ff1f9881b1e6808ebffebfba22c6332c74d68c` = file sha; ledger `applied_at 2026-11-21 12:17:31 UTC` |
+| v45 | (this PR, #91) | *pending: second review, then the founder runs A–E plus the v45 check (§5)* | `83a42d48…f9ceb001` | `aefbc6af…ce91ccd9` (79,132 bytes, 69 tables) | *pending* (file `5b341cf5…ac841d04`) |
 
 **v44 details (from the step E record):**
 - **Backup (step B):** `flash_public_20261121_140851_pre-v44.dump`, sha256 `94563bd59daf5f30e690fe7a72a17317202c3740f038d685ee466a78e717de30`, verified by step C.

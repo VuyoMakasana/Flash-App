@@ -41,6 +41,7 @@ schema-baseline-input/
 scripts/schema-baseline/.schema-check-tmp/
 scripts/schema-baseline/.v43-rehearsal-tmp/
 scripts/schema-baseline/.v44-rehearsal-tmp/
+scripts/schema-baseline/.v45-rehearsal-tmp/
 
 # Founder-held security reports: kept outside the repo, never committed
 SECURITY_SELF_PENTEST_REPORT*.md
