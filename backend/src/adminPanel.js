@@ -18,7 +18,6 @@
 
 const path = require('path');
 const express = require('express');
-const bcrypt = require('bcryptjs');
 const Admin = require('./models/Admin');
 const AdminAction = require('./models/AdminAction');
 const StoreOnboardingService = require('./services/storeOnboardingService');
@@ -996,7 +995,12 @@ function buildResources(db) {
           actions: {
             list: { after: [stripSensitive] },
             show: { after: [stripSensitive, attachDriverDocuments, attachWalletSummary, attachTrustedDriverScorecard] },
-            new: { before: [nullifyEmptyNonTextFields] },
+            // Admin hardening A4 (#87): no creating or deleting drivers from the
+            // panel. Drivers register through the app; status changes go
+            // through approveDriver/rejectDriver below.
+            new: { isAccessible: false },
+            delete: { isAccessible: false },
+            bulkDelete: { isAccessible: false },
             edit: { before: [nullifyEmptyNonTextFields], after: [stripSensitive] },
             approveDriver: {
               actionType: 'record',
@@ -2097,7 +2101,76 @@ function buildResources(db) {
   ];
 }
 
+// ── Admin hardening (#87) ───────────────────────────────────────────────────
+// A3: the session cookie is signed with its OWN secret, ADMIN_SESSION_SECRET,
+// not ADMIN_JWT_SECRET (which signs admin API tokens): a leak of one no longer
+// forges the other, and each can be rotated alone.
+//   Production (NODE_ENV=production or RENDER=true): it must be set, be at
+//   least 32 characters, and differ from ADMIN_JWT_SECRET. Otherwise this
+//   throws, mountAdminPanel rejects, startServer logs
+//   "[AdminPanel] Failed to mount: ...", and /admin-panel answers 404. The
+//   JSON API (/api/admin/*) and everything else keep working.
+//   Elsewhere: if unset, a random per-process secret (sessions don't survive
+//   a restart, which is fine locally). Never ADMIN_JWT_SECRET.
+const ADMIN_SESSION_COOKIE_NAME = 'flash_admin_session';
+const ADMIN_SESSION_MAX_AGE_MS = 8 * 60 * 60 * 1000; // A2: 8 hours (founder decision)
+
+const isProductionEnv = (env) => env.NODE_ENV === 'production' || env.RENDER === 'true';
+
+function resolveAdminSessionSecret(env = process.env) {
+  const secret = env.ADMIN_SESSION_SECRET;
+  const usable = typeof secret === 'string' && secret.length >= 32 && secret !== env.ADMIN_JWT_SECRET;
+  if (usable) return secret;
+  if (isProductionEnv(env)) {
+    throw new Error('ADMIN_SESSION_SECRET must be set in production, be at least 32 characters, and differ from ADMIN_JWT_SECRET. The admin panel is not mounted; the API is unaffected.');
+  }
+  if (secret) return secret; // local: accept any value someone set on purpose
+  console.warn('[AdminPanel] ADMIN_SESSION_SECRET not set: using a random per-process secret (local only).');
+  return require('crypto').randomBytes(32).toString('hex');
+}
+
+// A2: the session cookie. httpOnly; Secure in production (Render terminates
+// TLS and sends X-Forwarded-Proto, which `trust proxy` reads); SameSite=Strict
+// (no cross-site requests carry it); 8-hour lifetime; nothing stored until a
+// successful login. Sessions stay in memory for launch (founder decision A5).
+function buildAdminSessionOptions(env = process.env, secret) {
+  return {
+    secret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: isProductionEnv(env),
+      sameSite: 'strict',
+      maxAge: ADMIN_SESSION_MAX_AGE_MS,
+    },
+  };
+}
+
+// The AdminJS login check: the same verifyAdminCredentials /api/admin/login
+// uses (lockout A1b, role A4, dummy hash A7), plus A2's new session id at
+// login. AdminJS passes { req, res } as the third argument and, when this
+// returns a user, stores it on req.session -- so regenerating here means the
+// logged-in admin lands on a fresh session id, never one an attacker could
+// have planted before login (session fixation). A regenerate error fails the
+// login rather than keeping the old id.
+function createAdminJsAuthenticate(verify) {
+  return async function authenticate(email, password, context) {
+    const result = await verify(email, password);
+    if (!result.ok) return null;
+    const session = context && context.req && context.req.session;
+    if (session && typeof session.regenerate === 'function') {
+      await new Promise((resolve, reject) => session.regenerate((err) => (err ? reject(err) : resolve())));
+    }
+    const { id, email: adminEmail, name, role } = result.admin;
+    return { id, email: adminEmail, name, role };
+  };
+}
+
 async function mountAdminPanel(app) {
+  // A3: decided first, before AdminJS is even loaded; throws in production
+  // without a proper ADMIN_SESSION_SECRET (see resolveAdminSessionSecret).
+  const sessionSecret = resolveAdminSessionSecret(process.env);
   const AdminJSModule = require('adminjs');
   const AdminJS = AdminJSModule.default;
   // Capture the real ValidationError for validateInventoryPrices (R10).
@@ -2338,36 +2411,28 @@ async function mountAdminPanel(app) {
     },
   });
 
-  // Reuses the exact same check as the real /api/admin/login (Admin.findByEmail
-  // + bcrypt.compare against the real admins table) — one source of truth for
-  // admin credentials, not a second parallel login. What differs is only the
-  // session mechanism: this is a cookie session for AdminJS's own server-rendered
-  // UI, not the JWT bearer token the JSON API uses.
-  const authenticate = async (email, password) => {
-    const adminRow = await Admin.findByEmail(email);
-    if (!adminRow) return null;
-    const valid = await bcrypt.compare(password, adminRow.password_hash);
-    if (!valid) return null;
-    return { id: adminRow.id, email: adminRow.email, name: adminRow.name, role: adminRow.role };
-  };
-
-  // PROTOTYPE NOTE: reusing ADMIN_JWT_SECRET as the session-cookie signing
-  // secret for now, to avoid asking for yet another env var before this has
-  // even been looked at in a browser. Worth its own dedicated secret once
-  // Phase 1 is fully built out, not before.
+  // Uses the exact same check as /api/admin/login (services/adminCredentials:
+  // the admins table, bcrypt, lockout, role, dummy hash) — one source of
+  // truth for admin credentials, not a second parallel login. What differs is
+  // only the session mechanism: this is a cookie session for AdminJS's own
+  // server-rendered UI, not the JWT bearer token the JSON API uses.
+  // Admin hardening (#87): the same check as /api/admin/login (lockout, role,
+  // dummy hash), plus a new session id at login; the cookie signed with its
+  // own ADMIN_SESSION_SECRET, httpOnly, Secure in production, SameSite=Strict,
+  // 8 hours, under a non-default name. AdminJS's own per-IP maxRetries guard
+  // stays; it now sees the real client IP (req.ip, middleware/clientIp.js).
+  const { verifyAdminCredentials } = require('./services/adminCredentials');
+  const authenticate = createAdminJsAuthenticate(verifyAdminCredentials);
   const router = buildAuthenticatedRouter(
     admin,
     {
-      cookiePassword: process.env.ADMIN_JWT_SECRET,
+      cookiePassword: sessionSecret,
+      cookieName: ADMIN_SESSION_COOKIE_NAME,
       authenticate,
       maxRetries: 5,
     },
     null,
-    {
-      secret: process.env.ADMIN_JWT_SECRET,
-      resave: false,
-      saveUninitialized: false,
-    },
+    buildAdminSessionOptions(process.env, sessionSecret),
   );
 
   // Mounted onto the placeholder router createApp() registered before the
@@ -2417,6 +2482,9 @@ async function mountAdminPanel(app) {
 
 module.exports = {
   mountAdminPanel, ADMIN_PANEL_PATH, buildResources,
+  // Admin hardening (#87), exported for unit tests.
+  createAdminJsAuthenticate, buildAdminSessionOptions, resolveAdminSessionSecret,
+  ADMIN_SESSION_COOKIE_NAME, ADMIN_SESSION_MAX_AGE_MS,
   // Exported for direct unit testing without booting the Express app or a
   // session -- same rationale as buildResources. The hook ORDER these two
   // run in is load-bearing (see validateInventoryPrices' comment), and

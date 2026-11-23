@@ -101,6 +101,7 @@ const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
 const sosRoutes = require("./routes/sosRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
 const { createHealthRouter } = require("./routes/healthRoutes");
+const { realClientIp } = require("./middleware/clientIp");
 const { createCronRunner, dailySast } = require("./jobs/cronRunner");
 
 // L0.3 (#75) / FI-014: one runner per process. Cron jobs are registered only
@@ -116,6 +117,12 @@ function createApp({ withCronJobs = false } = {}) {
   if (process.env.NODE_ENV === "production") {
     app.set("trust proxy", 1);
   }
+
+  // Admin hardening A0 (#87): req.ip = the real client (CF-Connecting-IP on
+  // Render), before anything reads it -- every rate limiter keys on req.ip.
+  // With `trust proxy 1` alone it was a Render-internal proxy address.
+  // See src/middleware/clientIp.js for which header is trusted and why.
+  app.use(realClientIp);
 
   const server = http.createServer(app);
 

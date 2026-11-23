@@ -71,6 +71,13 @@ const adminLimiter = rateLimit({
   ...storeOption,
 });
 
+// NOT USED (admin hardening #87): this limiter was never wired to any route,
+// and it can't serve the AdminJS login, whose body is parsed inside AdminJS's
+// own router after any middleware placed in front. The per-account lockout
+// that IS enforced, on both admin logins, is services/adminLoginLockout.js
+// (via services/adminCredentials.js). Kept, unused, pending a decision to
+// delete it.
+//
 // ADMIN PLATFORM PHASE 2: per-account brute-force lockout for admin login,
 // same pattern as accountLoginLimiter below (security-fixes' H-5 fix,
 // reused here for the admin surface since it's not on this branch's base —

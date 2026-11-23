@@ -4,6 +4,18 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-21 — Admin hardening: real client IP for rate limits, session cookie and secret, role, lockout, dummy hash (#87, `launch/admin-hardening`)
+- **A0 / FI-088 (High), fixed:** with `trust proxy 1` and production's 3-entry `X-Forwarded-For`, `req.ip` was the right-most entry, a Render-internal proxy. Every per-IP limiter keyed on it. `middleware/clientIp.js` (mounted first) now sets `req.ip` from `CF-Connecting-IP`, on Render only and only if it's a valid IP; `X-Forwarded-For` is never used for the key. Tests use the real header shape: separate clients, the same client across edges, and spoofing via `X-Forwarded-For` and `True-Client-IP`.
+- **A2:** the cookie is `flash_admin_session`, httpOnly, Secure in production, SameSite=Strict, 8 h, and the session id is regenerated at login.
+- **A3:** `ADMIN_SESSION_SECRET` (32+ characters, not `ADMIN_JWT_SECRET`) is required in production. Without it the panel doesn't mount (404) and the API is unaffected.
+- **A4:** `role = 'admin'` only, and create, delete and bulk delete are off on `drivers`.
+- **A1b:** a per-account lockout (5 failures in 15 min, express-rate-limit's `MemoryStore`) shared by both admin logins.
+- **A7:** a dummy-hash comparison for unknown emails. Both logins share `services/adminCredentials.js`.
+- **Stamp-file test** added (held from #86).
+- **Found:** FI-087 (`authLimiter` applied twice; open), FI-089 (the per-account limiter was never wired; superseded).
+- **Verified:** unit 794/794, integration 18/18; a live production-mode run (no secret: panel 404, API 200; with it: cookie flags, a new session id over a planted one, the shared lockout returning 429).
+- **Founder action:** add `ADMIN_SESSION_SECRET` in Render **before** merging (checklist L-11).
+
 ## 2026-11-21 — v44 applied to production; readiness evidence kept per run (`docs/v44-applied`)
 - **v44 applied by the founder on 2026-11-21 at 14:17 SAST.**
   - Steps A–E passed; verified at 14:19 SAST.
