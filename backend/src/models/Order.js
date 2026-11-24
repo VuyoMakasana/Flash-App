@@ -1,11 +1,4 @@
 // backend/src/models/Order.js
-//
-// CHANGES FROM ORIGINAL:
-//   Added validateExternalItemPrice() — rejects external/partner store items
-//   whose client-supplied price is <= 0, NaN, Infinity, or negative.
-//   This closes the vulnerability where a user could submit { "price": 0 }
-//   or { "price": 0.01 } for external items that have no inventory row.
-//   Flash inventory items are still validated against the server price (unchanged).
 'use strict';
 
 const BaseModel = require('./BaseModel');
@@ -23,41 +16,25 @@ const UserBlock = require('./UserBlock');
 // dropoff point instead of a client-supplied ID match.
 const NEARBY_DELIVERY_RADIUS_KM = 5;
 
-// ─── EXTERNAL ITEM PRICE VALIDATOR ───────────────────────────────────────────
+// ─── EVERY ITEM MUST BE A REAL PRODUCT (C3, #94) ─────────────────────────────
 //
-// Called for every item that has no matching flash_inventory row (i.e. items
-// from partner stores or external catalogue entries). The flash_inventory path
-// already validates against a trusted server price and is not affected.
+// A client price is never trusted. Each item must name a real, active
+// flash_inventory product whose store is active and approved (the same rule
+// the storefront applies to stores, Store.listActive). Its price always comes
+// from that row. There used to be an "external/partner item" path that took
+// the client's price for any item with no productId, or with a productId
+// matching no active product; it is gone.
 //
-// Rules:
-//   • Must be a finite number (rejects NaN, Infinity, -Infinity, strings)
-//   • Must be > 0  (rejects zero and negative values)
-//   • Must be <= 100 000  (sanity cap; prevents absurd values from inflating totals)
-//
-// Throws a descriptive Error that is returned to the client as HTTP 400.
-// ─────────────────────────────────────────────────────────────────────────────
-function validateExternalItemPrice(rawPrice, itemName) {
-  const price = Number(rawPrice);
+// A productId that isn't a UUID is refused before touching the database: the
+// uuid column would otherwise throw, and the customer would get a 500 (the
+// app's offline demo products have ids like 'p1').
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-  if (!Number.isFinite(price)) {
-    throw new Error(
-      `Invalid price for "${itemName || 'item'}": price must be a valid number (received ${rawPrice})`
-    );
-  }
-
-  if (price <= 0) {
-    throw new Error(
-      `Invalid price for "${itemName || 'item'}": price must be greater than zero (received ${price})`
-    );
-  }
-
-  if (price > 100_000) {
-    throw new Error(
-      `Invalid price for "${itemName || 'item'}": price exceeds maximum allowed value (received ${price})`
-    );
-  }
-
-  return price; // safe, validated value
+// The name is the client's own cart label (the product may not exist), so
+// it's only echoed back, capped in length.
+function itemNoLongerAvailable(item) {
+  const name = String(item?.name || 'An item').slice(0, 80);
+  return new Error(`"${name}" is no longer available. Please remove it from your cart.`);
 }
 
 class Order extends BaseModel {
@@ -112,24 +89,18 @@ class Order extends BaseModel {
 
     return await this.transaction(async (client) => {
 
-      // ── SERVER-SIDE PRICE VALIDATION ───────────────────────────────────────
+      // ── SERVER-SIDE PRICE VALIDATION (C3, #94) ─────────────────────────────
       //
-      // FLASH INVENTORY ITEMS (item.productId matches flash_inventory.id):
-      //   Price is taken exclusively from the server. Client price is ignored.
-      //
-      // EXTERNAL / PARTNER STORE ITEMS (no matching inventory row, or no productId):
-      //   Price comes from the client but MUST pass validateExternalItemPrice().
-      //   Zero, negative, NaN, Infinity, and non-numeric strings are all rejected
-      //   with HTTP 400 before the transaction commits.
-      //
+      // Every item must be a real, active flash_inventory product whose store
+      // is active and approved (H4). Its price and name are taken from that
+      // locked row; the client's price and name are never used. Anything else
+      // refuses the whole basket with "... is no longer available" (HTTP 400).
       // ──────────────────────────────────────────────────────────────────────
       // Final admin-panel completion pass, §4 — the store-wide promotion's
       // discount_percent (Boost.createPromotion) now actually reduces price,
       // instead of just sitting in store_promotions unused. Only the best
       // (highest-percent) active promotion applies, computed once outside
-      // the item loop rather than re-queried per item. Only flash_inventory
-      // items are discounted — external/partner items aren't Flash's own
-      // stock, so a Flash promotion has no claim on their price.
+      // the item loop rather than re-queried per item.
       const promoResult = await client.query(
         `SELECT discount_percent FROM store_promotions
          WHERE is_active = true AND discount_percent IS NOT NULL
@@ -142,13 +113,12 @@ class Order extends BaseModel {
 
       let computedSubtotal = 0;
       const validatedItems  = [];
-      // Which store(s) this order's real Flash inventory belongs to. Collected
-      // from the same FOR UPDATE-locked reads below that already validate price
-      // and decrement stock, so attribution is derived from the authoritative
-      // row the order is actually built from -- no extra query, no second
-      // lookup that could disagree with it, and no race against a product being
-      // reassigned mid-checkout. External/partner items contribute nothing here
-      // because no Flash store owns them.
+      // Which store(s) this order's inventory belongs to. Collected from the
+      // same FOR UPDATE-locked reads below that validate price and decrement
+      // stock, so attribution is derived from the authoritative row the order
+      // is actually built from -- no extra query, no second lookup that could
+      // disagree with it, and no race against a product being reassigned
+      // mid-checkout.
       const inventoryStoreIds = new Set();
 
       for (const item of items) {
@@ -159,56 +129,49 @@ class Order extends BaseModel {
           );
         }
 
-        let serverPrice = null;
+        if (typeof item.productId !== 'string' || !UUID_RE.test(item.productId)) {
+          throw itemNoLongerAvailable(item);
+        }
 
-        if (item.productId) {
-          const invRow = await client.query(
-            `SELECT id, price, product_name, stock_by_size, store_id
-             FROM flash_inventory
-             WHERE id = $1 AND is_active = true
-             FOR UPDATE`,
-            [item.productId]
+        // FOR UPDATE OF flash_inventory: only the product row is locked; the
+        // store check is a plain read of stores (the same rule as
+        // Store.listActive).
+        const invRow = await client.query(
+          `SELECT id, price, product_name, stock_by_size, store_id
+           FROM flash_inventory
+           WHERE id = $1 AND is_active = true
+             AND EXISTS (
+               SELECT 1 FROM stores s
+               WHERE s.id = flash_inventory.store_id
+                 AND s.is_active = true AND s.status = 'approved'
+             )
+           FOR UPDATE OF flash_inventory`,
+          [item.productId]
+        );
+        if (!invRow.rows.length) {
+          throw itemNoLongerAvailable(item);
+        }
+
+        const product = invRow.rows[0];
+        inventoryStoreIds.add(String(product.store_id));
+        let serverPrice = parseFloat(product.price);
+        if (activeDiscountPercent > 0) {
+          serverPrice = Math.round(serverPrice * (1 - activeDiscountPercent / 100) * 100) / 100;
+        }
+
+        // Stock check — decrement atomically
+        const stock     = product.stock_by_size || {};
+        const available = parseInt(stock[item.size] || 0);
+        if (item.size && available < rawQty) {
+          throw new Error(
+            `${product.product_name} size ${item.size} is out of stock`
           );
-
-          if (invRow.rows.length) {
-            // ── FLASH INVENTORY PATH: use server price, ignore client price ──
-            if (invRow.rows[0].store_id) inventoryStoreIds.add(String(invRow.rows[0].store_id));
-            serverPrice = parseFloat(invRow.rows[0].price);
-            if (activeDiscountPercent > 0) {
-              serverPrice = Math.round(serverPrice * (1 - activeDiscountPercent / 100) * 100) / 100;
-            }
-
-            // Stock check — decrement atomically
-            const stock     = invRow.rows[0].stock_by_size || {};
-            const available = parseInt(stock[item.size] || 0);
-            if (item.size && available < rawQty) {
-              throw new Error(
-                `${item.name || invRow.rows[0].product_name} size ${item.size} is out of stock`
-              );
-            }
-            if (item.size) {
-              const newStock = { ...stock, [item.size]: available - rawQty };
-              await client.query(
-                `UPDATE flash_inventory SET stock_by_size = $1, updated_at = NOW() WHERE id = $2`,
-                [JSON.stringify(newStock), item.productId]
-              );
-            }
-          } else {
-            // ── PARTNER STORE PATH: productId present but not in inventory ──
-            // Validate client price before trusting it.
-            console.warn(
-              `[Order] productId ${item.productId} not in flash_inventory — validating client price`
-            );
-            serverPrice = validateExternalItemPrice(
-              item.price,
-              item.name || `product:${item.productId}`
-            );
-          }
-        } else {
-          // ── EXTERNAL STORE PATH: no productId — validate client price ─────
-          serverPrice = validateExternalItemPrice(
-            item.price,
-            item.name || 'external item'
+        }
+        if (item.size) {
+          const newStock = { ...stock, [item.size]: available - rawQty };
+          await client.query(
+            `UPDATE flash_inventory SET stock_by_size = $1, updated_at = NOW() WHERE id = $2`,
+            [JSON.stringify(newStock), item.productId]
           );
         }
 
@@ -216,8 +179,8 @@ class Order extends BaseModel {
         computedSubtotal += serverPrice * qty;
 
         validatedItems.push({
-          productId:   item.productId || null,
-          name:        item.name      || 'Product',
+          productId:   item.productId,
+          name:        product.product_name,
           size:        item.size      || null,
           quantity:    qty,
           serverPrice,
@@ -234,10 +197,8 @@ class Order extends BaseModel {
       // would be attributed to whichever store happened to sort first, and once
       // store payouts exist that misattributes real money.
       //
-      //   no Flash inventory items -> null. An external/partner-only order is
-      //     owned by no Flash store and must not be attributed to one. The old
-      //     heuristic got this case wrong too, silently.
-      //   exactly one store        -> that store.
+      //   exactly one store        -> that store. (Every item is now a real
+      //     product with a store, so there is always at least one; C3, #94.)
       //   more than one store      -> rejected, see below.
       //
       // Splitting a mixed-store cart into per-store orders is deliberately out

@@ -4,6 +4,31 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-24 — PR A: real-money blockers (#94, `launch/real-money-blockers`)
+- **Founder decisions (2026-11-24, after the read-only real-money audit):**
+  - **Partner stores will be paid by Paystack split payments** (design A), because Flash must never hold store money. **Store payments stay off until Paystack confirms how refunds on split transactions work** (the founder is asking). Checklist L-17, FI-093.
+  - **Sunday 2026-11-29's real-money test is Flash Closet only, card only, cash off.** Checklist L-16.
+  - **The returns policy and terms are being drafted separately.** Don't change return windows or fees yet. Checklist L-18, FI-102.
+- **C3 (FI-026, Critical): a client price is never trusted.**
+  - `Order.create` refuses any item that isn't a real, active product of an active, approved store, with 400 "… is no longer available". That includes items with no `productId`, unknown or inactive ids, and non-UUID ids (which used to give a 500).
+  - The price **and the name** stored on the order come from the server row. `validateExternalItemPrice` and the "external/partner item" path are deleted.
+- **H4 (FI-097): products from suspended, rejected, pending or inactive stores** are hidden from `Inventory.getProducts`/`getProduct` and refused by `Order.create`. The rule is `stores.is_active = true AND status = 'approved'`, the same one `Store.listActive` already uses.
+- **H1 (FI-016, the known launch blocker): the no-driver timeout now cancels cash orders too.**
+  - It moved from `server.js` to `orderStateMachineService.cancelNoDriverOrders`; the cron is a thin wrapper.
+  - Cash orders get no refund (never charged), a "You have not been charged." message, and a restock.
+  - The customer message is still a founder decision.
+- **H6 (FI-099):** `recoverPaidOrdersStuckAtPaymentPending`, run by the `recover-stuck-paid` cron, finishes paid orders left at `payment_pending` exactly as the webhook would (`paid`, then `scheduled_for_morning` when closed, otherwise `pending_store_acceptance` with the admin alert). A failure goes to Sentry.
+- **M8 (FI-107):** the webhook **and** the reconciliation job mark an order paid only if Paystack's amount equals the order total in cents and the currency is ZAR (`paystackService.amountMatchesOrder`). A mismatch is left unpaid and logged as CRITICAL. `verifyPayment` now returns `providerAmount`/`providerCurrency`.
+- **M4 (FI-041):** transfer recipients use `type: "basa"` (South Africa), per Paystack's Transfer Recipient API. Not yet exercised against Paystack.
+- **The audit:** every finding C1–L2 is recorded in `FOUND_ISSUES.md` §G (FI-092–FI-112). C3, H1 and M4 update FI-026, FI-016 and FI-041 in place; FI-065 is updated too.
+- **Tests (written first):**
+  - `orderClientPriceTrust.test.js` (C3), `realMoneyRecovery.test.js` (H1, H6) and `paymentAmountCheck.test.js` (M8, M4) failed 26 of 29 before the fix. The 3 that passed describe behaviour that was already correct.
+  - The **integration** test `storeProductVisibility.test.js` (H4 + C3 against real Postgres) failed 8 of 9 against the old code.
+  - `orderStoreAttribution.test.js` now uses real UUIDs, and its two "external item" cases became refusals. The `productPriceValidation.test.js` drift guard now asserts there's no client-price path.
+- **Verified:** unit 833/833 (55 suites); integration 27/27 (5 suites) on a fresh local Postgres 17 test DB.
+- **No migration, no new dependency.**
+- **Founder action before merging:** checklist L-15 (Flash Closet's store must be approved and active, or its catalogue disappears).
+
 ## 2026-11-24 — v45 applied to production; MFA code moved to next week (`docs/v45-applied`)
 - **v45 was applied by the founder on 2026-11-24 at 01:35 SAST**, outside the 06:45–19:45 awake window by founder decision (no traffic; it locks `admins` only). Verified at 01:39 SAST.
   - The step E record: https://github.com/VuyoMakasana/Flash-App/pull/92#issuecomment-7117592795. The second review: https://github.com/VuyoMakasana/Flash-App/pull/92#issuecomment-7116188335.

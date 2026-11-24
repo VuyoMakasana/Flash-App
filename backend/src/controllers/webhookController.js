@@ -17,6 +17,7 @@ const Order = require('../models/Order');
 const Subscription = require('../models/Subscription');
 const Boost = require('../models/Boost');
 const RefundService = require('../services/refundService');
+const paystackService = require('../services/paystackService');
 const { updateOrderStatus, notifyAdminNewOrderPendingAcceptance } = require('../services/orderStateMachineService');
 const PayoutService               = require('../services/payoutService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
@@ -152,7 +153,7 @@ class WebhookController {
       }
 
       const orderCheck = await client.query(
-        `SELECT id, payment_status FROM orders WHERE id = $1 FOR UPDATE`,
+        `SELECT id, payment_status, total FROM orders WHERE id = $1 FOR UPDATE`,
         [orderId],
       );
 
@@ -163,6 +164,20 @@ class WebhookController {
 
       if (orderCheck.rows[0].payment_status === 'paid') {
         await client.query('ROLLBACK');
+        return;
+      }
+
+      // M8 (#94): only mark the order paid if Paystack collected exactly the
+      // order total, in rand. A mismatch is never accepted: the order stays
+      // unpaid (the idempotency marker rolls back with it) and is logged as
+      // CRITICAL for a human. reconcilePendingPayments applies the same check.
+      if (!paystackService.amountMatchesOrder(data, orderCheck.rows[0].total)) {
+        await client.query('ROLLBACK');
+        console.error(
+          `[Webhook] CRITICAL: charge.success amount or currency does not match order ${orderId}: `
+          + `paystack=${data?.amount} ${data?.currency || 'no-currency'}, order total=${orderCheck.rows[0].total} ZAR, `
+          + `reference=${data?.reference}. The order was NOT marked paid.`,
+        );
         return;
       }
 

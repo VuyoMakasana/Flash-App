@@ -636,92 +636,16 @@ job("purge-expired-tokens", dailySast("06:54"), async () => {
     }
   });
 
-  // NO-DRIVER AUTO-CANCEL: Runs every 15 minutes
-  // WHY: When a user pays and no drivers are available, their money is trapped
-  // in a pending order with no resolution. After 30 minutes in waiting_for_driver
-  // we automatically cancel and trigger a full refund so users are not left stranded.
+  // NO-DRIVER AUTO-CANCEL: Runs every 15 minutes. After 30 minutes in
+  // waiting_for_driver with no driver, the order is cancelled: card orders
+  // get a full refund, cash orders (never charged) are just cancelled, so
+  // neither is left stranded. Logic in
+  // orderStateMachineService.cancelNoDriverOrders (H1, #94: it now covers
+  // cash orders too).
   job("cancel-no-driver-orders", "*/15 * * * *", async () => {
     try {
-      const stuckPaidOrders = await pool.query(`
-        SELECT o.id, o.user_id, o.payment_method, o.payment_status, o.total
-        FROM orders o
-        WHERE o.status = 'waiting_for_driver'
-          AND o.payment_status = 'paid'
-          AND o.updated_at < NOW() - INTERVAL '30 minutes'
-          AND o.driver_id IS NULL
-      `);
-
-      for (const order of stuckPaidOrders.rows) {
-        try {
-          const { updateOrderStatus } = require('./services/orderStateMachineService');
-          const RefundService = require('./services/refundService');
-          const pool2 = require('./config/database');
-          const ioInstance = _io;
-
-          // §2.9 audit fix: the order_cancellations record and the status
-          // transition now share one transaction (matching every other
-          // real cancellation path in this codebase -- orderController.
-          // cancelOrder, rejectPendingAcceptance) instead of the INSERT
-          // committing on its own, ahead of and independent from
-          // updateOrderStatus's own transition. Previously, if
-          // updateOrderStatus then threw (e.g. the order was no longer in
-          // a cancellable state by the time this ran -- a driver accepted
-          // it in the same window this query already missed), the INSERT
-          // stayed committed regardless: a phantom cancellation record for
-          // an order that was never actually cancelled by this attempt.
-          const client = await pool2.connect();
-          try {
-            await client.query('BEGIN');
-
-            await client.query(
-              `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
-               VALUES ($1, 'system', 'no_driver_available_timeout', 'full_refund')`,
-              [order.id],
-            );
-
-            await updateOrderStatus(order.id, 'cancelled', {
-              actorId: 'system',
-              actorRole: 'system',
-              io: ioInstance,
-              externalClient: client,
-            });
-
-            await client.query('COMMIT');
-          } catch (err) {
-            await client.query('ROLLBACK');
-            throw err;
-          } finally {
-            client.release();
-          }
-
-          // Payflex was fully removed as a payment method (paymentController.js,
-          // CRITICAL-3 fix) -- refundOrderPayment itself immediately rejects
-          // any payment_method other than 'card', so the old `['card',
-          // 'payflex'].includes(...)` check here implied a capability that
-          // no longer exists. Cash orders never reach this branch at all
-          // (order.payment_status would never be 'paid' pre-delivery), so
-          // this is just the one real case: a paid card order.
-          if (order.payment_method === 'card' && order.payment_status === 'paid') {
-            await RefundService.refundOrderPayment(
-              order.id,
-              order.user_id,
-              'no_driver_available_timeout'
-            ).catch(e => console.warn(`[Cron] Refund failed for ${order.id}:`, e.message));
-          }
-
-          if (ioInstance) {
-            ioInstance.to(`user:${order.user_id}`).emit('order_update', {
-              orderId: order.id,
-              status: 'cancelled',
-              message: 'No drivers were available. Your order has been cancelled and a full refund has been initiated.',
-            });
-          }
-
-          console.log(`[Cron] Auto-cancelled no-driver order ${order.id} and initiated refund`);
-        } catch (orderErr) {
-          console.warn(`[Cron] Failed to auto-cancel order ${order.id}:`, orderErr.message);
-        }
-      }
+      const { cancelNoDriverOrders } = require('./services/orderStateMachineService');
+      await cancelNoDriverOrders({ io: _io });
     } catch (e) {
       console.warn('[Cron] No-driver auto-cancel error:', e.message);
     }
@@ -804,13 +728,21 @@ job("purge-expired-tokens", dailySast("06:54"), async () => {
   // automatically right after payment confirms, but both real call sites
   // swallow a failure to make that transition, and nothing else ever
   // scanned for an order stuck at status='paid'. See
-  // orderStateMachineService.recoverStuckPaidOrders.
+  // orderStateMachineService.recoverStuckPaidOrders. Also finishes paid
+  // orders left at 'payment_pending' (recoverPaidOrdersStuckAtPaymentPending, H6 #94).
   job("recover-stuck-paid", "*/15 * * * *", async () => {
     try {
       const { recoverStuckPaidOrders } = require('./services/orderStateMachineService');
       await recoverStuckPaidOrders({ io: _io });
     } catch (e) {
       console.warn('[Cron] Stuck-at-paid detection error:', e.message);
+    }
+    // H6 (#94): paid orders the webhook left at payment_pending.
+    try {
+      const { recoverPaidOrdersStuckAtPaymentPending } = require('./services/orderStateMachineService');
+      await recoverPaidOrdersStuckAtPaymentPending({ io: _io });
+    } catch (e) {
+      console.warn('[Cron] Paid-but-payment_pending recovery error:', e.message);
     }
   });
 

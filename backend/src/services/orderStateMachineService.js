@@ -869,6 +869,128 @@ async function cancelStalePreparingOrders(context = {}) {
   return { cancelled, total: result.rows.length };
 }
 
+// H1 (#94): an order nobody picked up. Moved here from server.js's
+// cancel-no-driver-orders cron (now a thin wrapper), so it can be tested like
+// the functions around it, and fixed: the old query selected only
+// payment_status = 'paid', so a CASH order (payment_status 'pending_cash'
+// until the driver collects at the door) with no driver waited forever. The
+// launch-blocking bug HANDOFF_OCT_2026.md describes.
+//   card, paid   -> cancelled, full refund (unchanged)
+//   cash         -> cancelled, nothing to refund (never charged)
+//   return order -> cancelled as before (payment_status 'paid', method
+//                   'store_account': no refund, as before)
+// Stock is restocked by updateOrderStatus's own 'cancelled' branch.
+async function cancelNoDriverOrders(context = {}) {
+  const io = context.io;
+  const thresholdMinutes = context.thresholdMinutes ?? 30;
+
+  const result = await pool.query(
+    `SELECT id, user_id, payment_method, payment_status, total FROM orders
+     WHERE status = 'waiting_for_driver'
+       AND driver_id IS NULL
+       AND (payment_status = 'paid' OR (payment_method = 'cash' AND payment_status = 'pending_cash'))
+       AND updated_at < NOW() - ($1 || ' minutes')::interval`,
+    [thresholdMinutes],
+  );
+
+  let cancelled = 0;
+  for (const order of result.rows) {
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
+           VALUES ($1, 'system', 'no_driver_available_timeout', 'full_refund')`,
+          [order.id],
+        );
+        await updateOrderStatus(order.id, 'cancelled', {
+          actorId: 'system', actorRole: 'system', io, externalClient: client,
+        });
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK');
+        throw err;
+      } finally {
+        client.release();
+      }
+
+      const isCardPaid = order.payment_method === 'card' && order.payment_status === 'paid';
+      if (isCardPaid) {
+        const RefundService = require('./refundService');
+        await RefundService.refundOrderPayment(order.id, order.user_id, 'no_driver_available_timeout')
+          .catch((e) => console.warn(`[OrderStateMachine] Refund failed for ${order.id}:`, e.message));
+      }
+
+      if (io) {
+        io.to(`user:${order.user_id}`).emit('order_update', {
+          orderId: order.id,
+          status: 'cancelled',
+          message: isCardPaid
+            ? 'No drivers were available. Your order has been cancelled and a full refund has been initiated.'
+            : 'No drivers were available. Your order has been cancelled. You have not been charged.',
+        });
+      }
+      console.log(`[OrderStateMachine] Auto-cancelled no-driver order ${order.id} (${order.payment_method || 'unknown'})`);
+      cancelled += 1;
+    } catch (orderErr) {
+      console.warn(`[OrderStateMachine] Failed to auto-cancel no-driver order ${order.id}:`, orderErr.message);
+    }
+  }
+  return { cancelled, total: result.rows.length };
+}
+
+// H6 (#94): a card payment succeeded (payment_status = 'paid') but the status
+// change after it failed, leaving the order at 'payment_pending'. The webhook
+// commits payment_status first and moves the status in separate steps after
+// COMMIT, swallowing a failure; reconcilePendingPayments only selects
+// payment_status = 'pending', cancelAbandonedPaymentPendingOrders only
+// orders with no reference, and recoverStuckPaidOrders only status = 'paid'.
+// So nothing ever finished these: money taken, order never progressed.
+// Finishes exactly what the webhook would have done (handleChargeSuccess):
+// -> paid, then scheduled_for_morning when closed, else pending_store_acceptance.
+async function recoverPaidOrdersStuckAtPaymentPending(context = {}) {
+  const io = context.io;
+  const thresholdMinutes = context.thresholdMinutes ?? 10;
+  const { isClosedNow, getNextOpenTime } = require('./operatingHoursService');
+
+  const result = await pool.query(
+    `SELECT id FROM orders
+     WHERE status = 'payment_pending'
+       AND payment_status = 'paid'
+       AND updated_at < NOW() - ($1 || ' minutes')::interval`,
+    [thresholdMinutes],
+  );
+
+  let recovered = 0;
+  for (const order of result.rows) {
+    try {
+      await updateOrderStatus(order.id, 'paid', { actorId: 'system', actorRole: 'system', io });
+      if (isClosedNow()) {
+        const openAt = getNextOpenTime();
+        await pool.query(
+          `UPDATE orders SET scheduled_for = $1, updated_at = NOW() WHERE id = $2`,
+          [openAt, order.id],
+        );
+        await updateOrderStatus(order.id, 'scheduled_for_morning', { actorId: 'system', actorRole: 'system', io });
+      } else {
+        const updated = await updateOrderStatus(order.id, 'pending_store_acceptance', {
+          actorId: 'system', actorRole: 'system', io,
+        });
+        notifyAdminNewOrderPendingAcceptance(updated, io);
+      }
+      console.log(`[OrderStateMachine] Recovered paid order ${order.id} stuck at 'payment_pending'`);
+      recovered += 1;
+    } catch (orderErr) {
+      const Sentry = require('@sentry/node');
+      const recoveryErr = new Error(`Order ${order.id} paid but still stuck at 'payment_pending' after retry: ${orderErr.message}`);
+      console.error(`[OrderStateMachine] ${recoveryErr.message}`);
+      Sentry.captureException(recoveryErr);
+    }
+  }
+  return { recovered, total: result.rows.length };
+}
+
 // The paid -> pending_store_acceptance transition fires automatically
 // right after payment confirms (webhookController.handleChargeSuccess, and
 // paymentReconciliationJob.reconcilePendingPayments as its own webhook-
@@ -1040,6 +1162,8 @@ module.exports = {
   cancelAbandonedPaymentPendingOrders,
   cancelStalePreparingOrders,
   recoverStuckPaidOrders,
+  cancelNoDriverOrders,
+  recoverPaidOrdersStuckAtPaymentPending,
   notifyAdminNewOrderPendingAcceptance,
   escalateStuckPendingAcceptanceOrders,
   escalateStuckPreparingOrders,

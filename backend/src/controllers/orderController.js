@@ -23,7 +23,8 @@ const RefundService = require('../services/refundService');
 const s3Service = require('../services/s3Service');
 const { isWithinNelsonMandelaBay, OUTSIDE_SERVICE_AREA_MESSAGE, FLASH_STORE_LOCATION } = require('../utils/geoBoundary');
 
-// Errors thrown by validateExternalItemPrice() and inventory stock checks
+// Errors thrown by Order.create's item checks (an item that is not a real,
+// active product of an approved store, C3/H4 #94) and inventory stock checks
 // contain one of these fragments. Treat them as client errors (400) rather
 // than server errors (500).
 //
@@ -43,6 +44,7 @@ const CLIENT_ERROR_FRAGMENTS = [
   'Order must have items',
   'Order total must be positive',
   'more than one store',
+  'is no longer available',
 ];
 
 function isClientError(message) {

@@ -5,7 +5,7 @@ const { updateOrderStatus, notifyAdminNewOrderPendingAcceptance } = require("./o
 
 async function reconcilePendingPayments(io) {
   const result = await db.query(
-    `SELECT id, user_id, payment_status, paystack_reference, payment_method, updated_at
+    `SELECT id, user_id, payment_status, paystack_reference, payment_method, total, updated_at
      FROM orders
      WHERE payment_status IN ('pending')
        AND paystack_reference IS NOT NULL
@@ -23,6 +23,19 @@ async function reconcilePendingPayments(io) {
       }
 
       if (verify.providerStatus === "success") {
+        // M8 (#94): the same amount/currency check as the webhook, or a
+        // mismatch the webhook refused would be marked paid here instead.
+        if (!paystackService.amountMatchesOrder(
+          { amount: verify.providerAmount, currency: verify.providerCurrency },
+          order.total,
+        )) {
+          console.error(
+            `[Reconciliation] CRITICAL: Paystack success but amount or currency does not match order ${order.id}: `
+            + `paystack=${verify.providerAmount} ${verify.providerCurrency || "no-currency"}, order total=${order.total} ZAR. `
+            + "The order was NOT marked paid.",
+          );
+          continue;
+        }
         await db.query(
           `UPDATE orders
            SET payment_status = 'paid', payment_method = COALESCE(payment_method, 'card'),

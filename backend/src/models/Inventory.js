@@ -8,6 +8,14 @@ const BaseModel = require("./BaseModel");
 const PUBLIC_COLUMNS = `id, product_name, category, brand, price, sizes,
   stock_by_size, image_url, description, is_active, created_at, updated_at`;
 
+// H4 (#94): customers only see products whose store is active and approved —
+// the same rule Store.listActive applies to stores. A suspended, rejected or
+// pending store's products are hidden here and refused by Order.create.
+const STORE_IS_LIVE = `EXISTS (
+      SELECT 1 FROM stores s
+      WHERE s.id = flash_inventory.store_id AND s.is_active = true AND s.status = 'approved'
+    )`;
+
 class Inventory extends BaseModel {
   static async getProducts(category, page = 1, limit = 20) {
     const offset = (page - 1) * limit;
@@ -21,8 +29,8 @@ class Inventory extends BaseModel {
       WHERE sb.product_id = flash_inventory.id AND sb.status = 'active' AND sb.expires_at > NOW()
     ) DESC`;
     const query = category
-      ? `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true AND category=$3 ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`
-      : `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`;
+      ? `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true AND ${STORE_IS_LIVE} AND category=$3 ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`
+      : `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE is_active=true AND ${STORE_IS_LIVE} ORDER BY ${boostedFirst}, created_at DESC LIMIT $1 OFFSET $2`;
     const params = category ? [limit, offset, category] : [limit, offset];
     const result = await this.query(query, params);
     return result.rows;
@@ -30,7 +38,7 @@ class Inventory extends BaseModel {
 
   static async getProduct(productId) {
     const result = await this.query(
-      `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE id=$1 AND is_active=true`,
+      `SELECT ${PUBLIC_COLUMNS} FROM flash_inventory WHERE id=$1 AND is_active=true AND ${STORE_IS_LIVE}`,
       [productId],
     );
     return result.rows[0];

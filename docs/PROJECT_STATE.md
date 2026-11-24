@@ -12,6 +12,21 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-24, later (PR A, real-money blockers, #94).**
+> - **Founder decisions:**
+>   - Partner stores will be paid by **Paystack split payments**; store payments stay off until Paystack confirms how split refunds work (FI-093, L-17).
+>   - **Sunday 2026-11-29 is Flash Closet only, card only, cash off** (L-16).
+>   - The returns policy is being drafted; don't change return windows or fees (FI-102, L-18).
+> - **PR A fixes:**
+>   - client prices are never trusted (C3, FI-026);
+>   - non-approved stores' products are hidden and refused (H4, FI-097);
+>   - the no-driver timeout covers cash (H1, FI-016);
+>   - paid orders stuck at `payment_pending` are recovered (H6, FI-099);
+>   - payment amount and currency are checked (M8, FI-107);
+>   - transfer recipients use `basa` (M4, FI-041).
+> - **Every real-money audit finding is recorded** in `FOUND_ISSUES.md` §G.
+> - **Still needed before Sunday:** the L0.5b kill switches (FI-095) and the user-app change that shows card (FI-096).
+
 > **Status update, 2026-11-24 (v45 applied; plan for the real-money test).**
 > - **v45 (admin TOTP) was applied to production on 2026-11-24 at 01:35 SAST and verified at 01:39.** Production == the committed baseline `aefbc6af…` (69 tables); readiness 69/69/0, OK (`PROD_MIGRATIONS.md` §9). **No code uses the new columns or table yet.**
 > - **Founder decisions:**
