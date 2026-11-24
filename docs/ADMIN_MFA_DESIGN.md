@@ -1,6 +1,6 @@
 # Admin MFA (TOTP): design and lost-phone runbook
 
-**Status:** design for review (PR 2, #91). The schema is v45, written and proven, **not applied**. **The code is PR 3** and is built only after v45 is on production and this design is approved. Until PR 3 merges, **nothing in the running code uses any of this**.
+**Status:** design for review (PR 2, #91). The schema is v45, **applied to production on 2026-11-24 at 01:35 SAST** (`PROD_MIGRATIONS.md` §9). **The code is PR 3**, moved to the week after the 2026-11-29 real-money test (founder, 2026-11-24), and is built only once this design is approved. Until PR 3 merges, **nothing in the running code uses any of this**.
 
 **Founder decisions (2026-11-23):**
 - TOTP for every admin;

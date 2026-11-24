@@ -12,11 +12,19 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-24 (v45 applied; plan for the real-money test).**
+> - **v45 (admin TOTP) was applied to production on 2026-11-24 at 01:35 SAST and verified at 01:39.** Production == the committed baseline `aefbc6af…` (69 tables); readiness 69/69/0, OK (`PROD_MIGRATIONS.md` §9). **No code uses the new columns or table yet.**
+> - **Founder decisions:**
+>   - Both Flash Closet and partner stores must receive orders and payments at launch: separate orders, nothing shared, and no existing flow may break.
+>   - **The MFA code (PR 3) moves to next week.**
+>   - Kill switches (L0.5b) still come before any real money.
+>   - **Target: a real-money test on Sunday 2026-11-29** (small amounts, refunded afterwards).
+
 > **Status update, 2026-11-23, later (MFA schema; Render checked).**
 > - **PR #90 (#89)** is merged and deployed (live 21:50 SAST, admin panel mounted).
 > - **Founder's Render check:** `NODE_ENV=production` ✅; `APP_URL` set ✅; `DRIVER_TEST_MODE` was `true` (**FI-091**, High), so new drivers skipped document review. **The founder set it to `false` on 2026-11-23 at 22:53 SAST; FI-091 is fixed.** Drivers auto-approved before then are to be reviewed (checklist L-14).
 > - **L-12 decided:** the morning cold start is accepted during TestFlight; Render Starter before public launch (FI-090).
-> - **v45 (admin TOTP, #91)** is written and proven locally, **not applied**. It adds `admins.totp_secret_enc`, `totp_enrolled_at` and `totp_last_step` (+ `admins_totp_check`) and `admin_mfa_recovery_codes` (RLS on). The baseline is now v45's AFTER `aefbc6af…` (69 tables). **Production is still at v44 (`83a42d48…`, 68 tables) until the founder applies v45.** No code reads the new columns yet.
+> - **v45 (admin TOTP, #91)** is written and proven locally, **not applied**. It adds `admins.totp_secret_enc`, `totp_enrolled_at` and `totp_last_step` (+ `admins_totp_check`) and `admin_mfa_recovery_codes` (RLS on). The baseline is now v45's AFTER `aefbc6af…` (69 tables). Production was still at v44 (`83a42d48…`, 68 tables) at the time. **(Applied 2026-11-24, see above.)** No code reads the new columns yet.
 > - **The MFA design and lost-phone runbook** are in `docs/ADMIN_MFA_DESIGN.md`; the code is PR 3.
 
 > **Status update, 2026-11-23 (security and operations).**
