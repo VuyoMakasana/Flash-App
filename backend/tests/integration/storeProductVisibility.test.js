@@ -104,6 +104,20 @@ d('H4/C3: only products of active, approved stores can be seen and ordered', () 
     orderIds.push(created.id);
     expect(Number(created.subtotal)).toBe(100);
     expect(created.store_id).toBe(stores.approved);
+    // FI-113: the real jsonb stock was decremented for the chosen size.
+    const stock = await pool.query('SELECT stock_by_size FROM flash_inventory WHERE id = $1', [products.approved]);
+    expect(stock.rows[0].stock_by_size).toEqual({ M: 3 });
+  });
+
+  test('FI-113: a sized product ordered with no size, or an unknown size, is refused and stock is untouched', async () => {
+    await expect(order([{ productId: products.approved, name: 'Tee', quantity: 1 }]))
+      .rejects.toThrow(/Please choose a size for/);
+    await expect(order([{ productId: products.approved, name: 'Tee', size: 'XXL', quantity: 1 }]))
+      .rejects.toThrow(/isn't available in size XXL/);
+    await expect(order([{ productId: products.approved, name: 'Tee', size: 'M', quantity: 4 }]))
+      .rejects.toThrow(/size M is out of stock/);
+    const stock = await pool.query('SELECT stock_by_size FROM flash_inventory WHERE id = $1', [products.approved]);
+    expect(stock.rows[0].stock_by_size).toEqual({ M: 3 });
   });
 
   test.each(['approvedInactive', 'suspended', 'rejected', 'pending', 'inactiveProduct'])(

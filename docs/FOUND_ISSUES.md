@@ -126,7 +126,7 @@ These come from the founder's Render dashboard check. **Claude Code cannot read 
 
 ## G. Real-money readiness audit (2026-11-24, read-only; PR A #94)
 
-From the end-to-end audit before the 2026-11-29 real-money test. The audit's own IDs are in the second column. Findings that already had a row are updated in place, not duplicated: **C3 = FI-026**, **H1 = FI-016**, **M4 = FI-041**, and H5 overlaps FI-033.
+From the end-to-end audit before the 2026-11-29 real-money test. The audit's own IDs are in the second column. Findings that already had a row are updated in place, not duplicated: **C3 = FI-026**, **H1 = FI-016**, **M4 = FI-041**, and H5 overlaps FI-033. FI-113 and FI-114 came from the founder's size and stock review of PR #95.
 
 | ID | Ref | Sev | Issue | Evidence | Status |
 |---|---|---|---|---|---|
@@ -151,6 +151,8 @@ From the end-to-end audit before the 2026-11-29 real-money test. The audit's own
 | FI-110 | M11 | cancellations | Low | **The store's 10% cancellation share is recorded but never paid** (`order_cancellation_store_shares`), and driver compensation on cash cancellations is paid by Flash. | `orderController.js` (`cancelOrder`) | Open · part of the split-payment design (FI-093). |
 | FI-111 | L1 | user app | Low | **If the product API is down, the app shows demo products** (ids `p1`...). Ordering them used to fail with a 500. | `flash-user-app/context/FlashContext.js:32-42` | Partly fixed (#94): the backend now answers 400 "... is no longer available". The app still shows demo products. |
 | FI-112 | L2 | sockets | Low | **The socket `driver_location_update` event doesn't validate lat/lng** (the HTTP route does). | `socket/socketServer.js:179-186` | Open (about 0.1 day). |
+| FI-113 | — (founder, on PR #95) | orders / stock | **High** | **A sized product could be ordered without a stock check.** `Order.create` checked and decremented `stock_by_size` only when the item carried a size. An item with **no size** skipped both: it was ordered in any quantity, with stock untouched. (A size the product doesn't come in had 0 stock, so it was refused, but with a misleading "out of stock" message.) A product with **no sizes** had **no quantity limit** at all. | `Order.js` (item loop, before #94's second commit) | **Fixed (#94, PR #95):** a product with sizes requires the item's size to be one of `flash_inventory.sizes` ("Please choose a size for …" / "… isn't available in size …", both 400), and the stock check and decrement always run. A product with no sizes (stock isn't tracked per size) is capped at **10 per order**, counted across all lines (`MAX_QUANTITY_SIZELESS`; "You can order at most 10 of … per order."), and a size sent for it is ignored. Proven by unit tests and against real Postgres. |
+| FI-114 | — | user app | Low | **The app can't add a product with no sizes to the cart.** `ProductScreen.handleAddToCart` always requires a selected size, so a sizeless product (allowed by the backend, FI-113) can't be bought in the app. | `flash-user-app/screens/ProductScreen.js:19-23` | Open (app; about 0.1 day). No sizeless products are known in the catalogue today; I couldn't check production data. |
 
 ## F. Open founder decisions (summary)
 

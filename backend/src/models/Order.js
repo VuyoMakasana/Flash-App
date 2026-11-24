@@ -37,6 +37,23 @@ function itemNoLongerAvailable(item) {
   return new Error(`"${name}" is no longer available. Please remove it from your cart.`);
 }
 
+// FI-113 (#94): sizes and stock.
+//   Sized product (flash_inventory.sizes non-empty): the item must name one
+//     of those sizes, and the stock check and decrement on stock_by_size
+//     always run. Previously a missing or unknown size skipped both.
+//   Sizeless product (sizes empty): stock isn't tracked (stock_by_size is
+//     per size), so a fixed cap applies instead: at most
+//     MAX_QUANTITY_SIZELESS of the product per order, counted across all
+//     lines. A size sent for it is ignored (stored as NULL).
+const MAX_QUANTITY_SIZELESS = 10;
+
+// sizes / stock_by_size are jsonb, but older writes stored JSON strings
+// (storeInventoryController._parseJsonField exists for the same reason).
+function jsonField(value, fallback) {
+  if (typeof value !== 'string') return value ?? fallback;
+  try { return JSON.parse(value); } catch (_) { return fallback; }
+}
+
 class Order extends BaseModel {
   static tableName = 'orders';
 
@@ -120,6 +137,8 @@ class Order extends BaseModel {
       // disagree with it, and no race against a product being reassigned
       // mid-checkout.
       const inventoryStoreIds = new Set();
+      // Running quantity per sizeless product, for MAX_QUANTITY_SIZELESS.
+      const sizelessQuantities = new Map();
 
       for (const item of items) {
         const rawQty = Number(item.quantity);
@@ -137,7 +156,7 @@ class Order extends BaseModel {
         // store check is a plain read of stores (the same rule as
         // Store.listActive).
         const invRow = await client.query(
-          `SELECT id, price, product_name, stock_by_size, store_id
+          `SELECT id, price, product_name, sizes, stock_by_size, store_id
            FROM flash_inventory
            WHERE id = $1 AND is_active = true
              AND EXISTS (
@@ -159,20 +178,40 @@ class Order extends BaseModel {
           serverPrice = Math.round(serverPrice * (1 - activeDiscountPercent / 100) * 100) / 100;
         }
 
-        // Stock check — decrement atomically
-        const stock     = product.stock_by_size || {};
-        const available = parseInt(stock[item.size] || 0);
-        if (item.size && available < rawQty) {
-          throw new Error(
-            `${product.product_name} size ${item.size} is out of stock`
-          );
-        }
-        if (item.size) {
-          const newStock = { ...stock, [item.size]: available - rawQty };
+        // Sizes and stock (FI-113). The row is locked FOR UPDATE, and a later
+        // line for the same product re-reads it inside this transaction, so
+        // it sees the stock an earlier line already took.
+        const sizes = jsonField(product.sizes, []);
+        const isSized = Array.isArray(sizes) && sizes.length > 0;
+        let size = null;
+        if (isSized) {
+          size = typeof item.size === 'string' ? item.size.trim() : '';
+          if (!size) {
+            throw new Error(`Please choose a size for "${product.product_name}".`);
+          }
+          if (!sizes.map(String).includes(size)) {
+            throw new Error(`"${product.product_name}" isn't available in size ${size.slice(0, 20)}.`);
+          }
+          const stock     = jsonField(product.stock_by_size, {}) || {};
+          const available = parseInt(stock[size] || 0, 10);
+          if (available < rawQty) {
+            throw new Error(
+              `${product.product_name} size ${size} is out of stock`
+            );
+          }
+          const newStock = { ...stock, [size]: available - rawQty };
           await client.query(
             `UPDATE flash_inventory SET stock_by_size = $1, updated_at = NOW() WHERE id = $2`,
             [JSON.stringify(newStock), item.productId]
           );
+        } else {
+          const soFar = (sizelessQuantities.get(product.id) || 0) + rawQty;
+          if (soFar > MAX_QUANTITY_SIZELESS) {
+            throw new Error(
+              `You can order at most ${MAX_QUANTITY_SIZELESS} of "${product.product_name}" per order.`
+            );
+          }
+          sizelessQuantities.set(product.id, soFar);
         }
 
         const qty = rawQty;
@@ -181,7 +220,7 @@ class Order extends BaseModel {
         validatedItems.push({
           productId:   item.productId,
           name:        product.product_name,
-          size:        item.size      || null,
+          size,
           quantity:    qty,
           serverPrice,
         });

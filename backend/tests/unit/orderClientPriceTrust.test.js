@@ -117,6 +117,98 @@ describe('C3: Order.create never trusts a client price', () => {
   });
 });
 
+// FI-113 (#94): sizes and stock. A sized product used to skip the stock check
+// and decrement entirely when the item had no size (or a size the product
+// doesn't come in), and a sizeless product had no quantity limit at all.
+describe('FI-113: sizes are checked and stock is always enforced', () => {
+  const P2 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2';
+  const sized = { id: P1, price: '50.00', product_name: 'Tee', sizes: ['S', 'M'], stock_by_size: { S: 1, M: 5 }, store_id: STORE_A };
+  const sizeless = { id: P2, price: '20.00', product_name: 'Cap', sizes: [], stock_by_size: {}, store_id: STORE_A };
+  const stockUpdates = (client) => client.mock.calls.filter(([sql]) => /UPDATE flash_inventory SET stock_by_size/.test(String(sql)));
+
+  test('a sized product with no size is refused, and no stock or order is written', async () => {
+    const captured = makeClient({ inventory: { [P1]: sized } });
+    await expect(Order.create({ ...baseArgs, items: [{ productId: P1, name: 'Tee', quantity: 1 }] }))
+      .rejects.toThrow('Please choose a size for "Tee".');
+    expect(captured.insertOrderParams).toBeNull();
+    const client = await pool.connect.mock.results[0].value;
+    expect(stockUpdates(client.query)).toHaveLength(0);
+  });
+
+  test('a size the product does not come in is refused', async () => {
+    const captured = makeClient({ inventory: { [P1]: sized } });
+    await expect(Order.create({ ...baseArgs, items: [{ productId: P1, name: 'Tee', size: 'XXL', quantity: 1 }] }))
+      .rejects.toThrow('"Tee" isn\'t available in size XXL.');
+    expect(captured.insertOrderParams).toBeNull();
+  });
+
+  test('more than the stock of that size is refused (sized product)', async () => {
+    const captured = makeClient({ inventory: { [P1]: sized } });
+    await expect(Order.create({ ...baseArgs, items: [{ productId: P1, name: 'Tee', size: 'M', quantity: 6 }] }))
+      .rejects.toThrow(/Tee size M is out of stock/);
+    expect(captured.insertOrderParams).toBeNull();
+  });
+
+  test('a valid size within stock is accepted and its stock is decremented', async () => {
+    const captured = makeClient({ inventory: { [P1]: sized } });
+    await Order.create({ ...baseArgs, items: [{ productId: P1, name: 'Tee', size: 'M', quantity: 2 }] });
+    expect(captured.insertOrderParams).not.toBeNull();
+    const client = await pool.connect.mock.results[0].value;
+    const updates = stockUpdates(client.query);
+    expect(updates).toHaveLength(1);
+    expect(JSON.parse(updates[0][1][0])).toEqual({ S: 1, M: 3 });
+  });
+
+  test('sizes stored as a JSON string are understood too', async () => {
+    makeClient({ inventory: { [P1]: { ...sized, sizes: '["S","M"]' } } });
+    await expect(Order.create({ ...baseArgs, items: [{ productId: P1, name: 'Tee', quantity: 1 }] }))
+      .rejects.toThrow('Please choose a size for "Tee".');
+  });
+
+  test('a sizeless product is limited to 10 per order (over the limit, no size)', async () => {
+    const captured = makeClient({ inventory: { [P2]: sizeless } });
+    await expect(Order.create({ ...baseArgs, items: [{ productId: P2, name: 'Cap', quantity: 11 }] }))
+      .rejects.toThrow('You can order at most 10 of "Cap" per order.');
+    expect(captured.insertOrderParams).toBeNull();
+  });
+
+  test('the sizeless limit counts every line of the same product', async () => {
+    const captured = makeClient({ inventory: { [P2]: sizeless } });
+    await expect(Order.create({
+      ...baseArgs,
+      items: [{ productId: P2, name: 'Cap', quantity: 6 }, { productId: P2, name: 'Cap', quantity: 5 }],
+    })).rejects.toThrow(/at most 10 of "Cap"/);
+    expect(captured.insertOrderParams).toBeNull();
+  });
+
+  test('a sizeless product up to the limit is accepted; a client-sent size is ignored, not used for stock', async () => {
+    const captured = makeClient({ inventory: { [P2]: sizeless } });
+    await Order.create({ ...baseArgs, items: [{ productId: P2, name: 'Cap', size: 'M', quantity: 10 }] });
+    expect(captured.insertOrderParams).not.toBeNull();
+    const client = await pool.connect.mock.results[0].value;
+    expect(stockUpdates(client.query)).toHaveLength(0);
+    const itemInsert = client.query.mock.calls.find(([sql]) => /INSERT INTO order_items/.test(String(sql)));
+    expect(itemInsert[1][3]).toBeNull(); // size column
+  });
+
+  test.each([
+    'Please choose a size for "Tee".',
+    '"Tee" isn\'t available in size XXL.',
+    'You can order at most 10 of "Cap" per order.',
+  ])('the API answers "%s" with 400, not 500', async (message) => {
+    const OrderController = require('../../src/controllers/orderController');
+    const spy = jest.spyOn(Order, 'create').mockRejectedValue(new Error(message));
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    await OrderController.createOrder({
+      userId: 'user-1',
+      body: { items: [{ productId: P1, quantity: 1 }], dropoff_lat: -33.95, dropoff_lng: 25.61 },
+    }, res);
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: message });
+    spy.mockRestore();
+  });
+});
+
 describe('C3: the API answers a refused item with 400, not 500', () => {
   test('createOrder maps "is no longer available" to a 400 with the message', async () => {
     const OrderController = require('../../src/controllers/orderController');

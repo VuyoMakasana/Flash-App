@@ -45,6 +45,9 @@ const CLIENT_ERROR_FRAGMENTS = [
   'Order total must be positive',
   'more than one store',
   'is no longer available',
+  'Please choose a size for',
+  "isn't available in size",
+  'You can order at most',
 ];
 
 function isClientError(message) {
