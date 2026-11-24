@@ -4,6 +4,19 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-24 — v45 applied to production; MFA code moved to next week (`docs/v45-applied`)
+- **v45 was applied by the founder on 2026-11-24 at 01:35 SAST**, outside the 06:45–19:45 awake window by founder decision (no traffic; it locks `admins` only). Verified at 01:39 SAST.
+  - The step E record: https://github.com/VuyoMakasana/Flash-App/pull/92#issuecomment-7117592795. The second review: https://github.com/VuyoMakasana/Flash-App/pull/92#issuecomment-7116188335.
+  - File sha `5b341cf5…`; BEFORE `83a42d48…`; AFTER `aefbc6af…` (79,132 bytes, 69 tables).
+  - Backup `flash_public_20261124_012130_pre-v45.dump` (sha `dc36276a…`), verified by step C.
+- **Readiness:** 69/69/0, verdict OK. **Advisor (01:57 SAST):** no ERRORs or WARNs; INFO `rls_enabled_no_policy` on 69 tables (+1 is `admin_mfa_recovery_codes`, expected).
+- **Founder decisions:**
+  - Flash Closet and partner stores must both receive orders and payments at launch, as separate orders, with no existing flow broken.
+  - The MFA code (PR 3) moves to next week.
+  - Kill switches (L0.5b) still come before any real money.
+  - The real-money test is on Sunday 2026-11-29 (small amounts, refunded afterwards).
+- **Updated:** `PROD_MIGRATIONS.md` §9 (the v45 row and details), `SCHEMA_BASELINE.md`, `PROJECT_STATE.md`, `LAUNCH_INFRA_CHECKLIST.md` (L-13: steps 1–2 done, steps 3–4 next week).
+
 ## 2026-11-23 — `DRIVER_TEST_MODE` switched off in production (docs only, on PR #92)
 - **The founder set `DRIVER_TEST_MODE=false` in Render at 22:53 SAST.** The restart was verified in the Render logs (server running, admin panel mounted). New driver registrations start at `pending_documents` again (`models/Driver.js`). **FI-091 is fixed.**
 - **Follow-up, new checklist L-14:** drivers who registered while it was on stay auto-approved, with placeholder documents (`file_name = 'test-mode-placeholder'`, shown in the panel as "Verified" with no file) and a `TEST_MODE_GRANT` subscription. The founder reviews them in the admin panel and rejects or suspends anyone who isn't a known tester.
