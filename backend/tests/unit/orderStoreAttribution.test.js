@@ -22,6 +22,9 @@ jest.mock('../../src/config/database');
 
 const STORE_A = '11111111-1111-4111-8111-111111111111';
 const STORE_B = '22222222-2222-4222-8222-222222222222';
+// Product ids are real UUIDs: Order.create refuses anything else (C3, #94).
+const P1 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+const P2 = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2';
 
 // Builds a fake pg client whose responses depend on the SQL issued, mirroring
 // the real query sequence inside Order.create closely enough that the code path
@@ -87,16 +90,16 @@ describe('per-order store attribution', () => {
   test('a basket of one store\'s products is attributed to that store', async () => {
     const { captured } = makeClient({
       inventory: {
-        'p1': { id: 'p1', price: '50.00', product_name: 'A', stock_by_size: { M: 5 }, store_id: STORE_A },
-        'p2': { id: 'p2', price: '25.00', product_name: 'B', stock_by_size: { M: 5 }, store_id: STORE_A },
+        [P1]: { id: P1, price: '50.00', product_name: 'A', stock_by_size: { M: 5 }, store_id: STORE_A },
+        [P2]: { id: P2, price: '25.00', product_name: 'B', stock_by_size: { M: 5 }, store_id: STORE_A },
       },
     });
 
     await Order.create({
       ...baseArgs,
       items: [
-        { productId: 'p1', name: 'A', size: 'M', quantity: 1 },
-        { productId: 'p2', name: 'B', size: 'M', quantity: 1 },
+        { productId: P1, name: 'A', size: 'M', quantity: 1 },
+        { productId: P2, name: 'B', size: 'M', quantity: 1 },
       ],
     });
 
@@ -108,8 +111,8 @@ describe('per-order store attribution', () => {
   test('a basket spanning two stores is REJECTED, never silently misattributed', async () => {
     const { captured } = makeClient({
       inventory: {
-        'p1': { id: 'p1', price: '50.00', product_name: 'A', stock_by_size: { M: 5 }, store_id: STORE_A },
-        'p2': { id: 'p2', price: '25.00', product_name: 'B', stock_by_size: { M: 5 }, store_id: STORE_B },
+        [P1]: { id: P1, price: '50.00', product_name: 'A', stock_by_size: { M: 5 }, store_id: STORE_A },
+        [P2]: { id: P2, price: '25.00', product_name: 'B', stock_by_size: { M: 5 }, store_id: STORE_B },
       },
     });
 
@@ -117,8 +120,8 @@ describe('per-order store attribution', () => {
       Order.create({
         ...baseArgs,
         items: [
-          { productId: 'p1', name: 'A', size: 'M', quantity: 1 },
-          { productId: 'p2', name: 'B', size: 'M', quantity: 1 },
+          { productId: P1, name: 'A', size: 'M', quantity: 1 },
+          { productId: P2, name: 'B', size: 'M', quantity: 1 },
         ],
       }),
     ).rejects.toThrow(/more than one store/);
@@ -127,35 +130,36 @@ describe('per-order store attribution', () => {
     expect(captured.insertOrderParams).toBeNull();
   });
 
-  // An external/partner-only basket is owned by no Flash store. The old
-  // heuristic attributed these to the default store too, which was also wrong.
-  test('an order with no Flash inventory items is attributed to no store (null)', async () => {
+  // C3 (#94): there are no "external" items any more. A basket with an item
+  // that isn't a real product is refused outright, never attributed to no
+  // store (or to the other items' store) at a client price.
+  test('a basket with no real product is refused, never attributed to no store', async () => {
     const { captured } = makeClient({ inventory: {} });
 
-    await Order.create({
+    await expect(Order.create({
       ...baseArgs,
       items: [{ name: 'External item', price: 80, quantity: 1 }],
-    });
+    })).rejects.toThrow(/is no longer available/);
 
-    expect(captured.insertOrderParams[STORE_ID_PARAM_INDEX]).toBeNull();
+    expect(captured.insertOrderParams).toBeNull();
   });
 
-  test('a mix of one store\'s products and external items attributes to that store', async () => {
+  test("one store's product plus a non-product item is refused, not attributed", async () => {
     const { captured } = makeClient({
       inventory: {
-        'p1': { id: 'p1', price: '50.00', product_name: 'A', stock_by_size: { M: 5 }, store_id: STORE_A },
+        [P1]: { id: P1, price: '50.00', product_name: 'A', stock_by_size: { M: 5 }, store_id: STORE_A },
       },
     });
 
-    await Order.create({
+    await expect(Order.create({
       ...baseArgs,
       items: [
-        { productId: 'p1', name: 'A', size: 'M', quantity: 1 },
+        { productId: P1, name: 'A', size: 'M', quantity: 1 },
         { name: 'External item', price: 30, quantity: 1 },
       ],
-    });
+    })).rejects.toThrow(/is no longer available/);
 
-    expect(captured.insertOrderParams[STORE_ID_PARAM_INDEX]).toBe(STORE_A);
+    expect(captured.insertOrderParams).toBeNull();
   });
 
   // Attribution must come from the server's own locked row, never from the
@@ -163,14 +167,14 @@ describe('per-order store attribution', () => {
   test('a client-supplied store_id cannot override the derived attribution', async () => {
     const { captured } = makeClient({
       inventory: {
-        'p1': { id: 'p1', price: '50.00', product_name: 'A', stock_by_size: { M: 5 }, store_id: STORE_A },
+        [P1]: { id: P1, price: '50.00', product_name: 'A', stock_by_size: { M: 5 }, store_id: STORE_A },
       },
     });
 
     await Order.create({
       ...baseArgs,
       store_id: STORE_B, // attacker / stale caller value
-      items: [{ productId: 'p1', name: 'A', size: 'M', quantity: 1 }],
+      items: [{ productId: P1, name: 'A', size: 'M', quantity: 1 }],
     });
 
     expect(captured.insertOrderParams[STORE_ID_PARAM_INDEX]).toBe(STORE_A);

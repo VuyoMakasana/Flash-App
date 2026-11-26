@@ -328,8 +328,23 @@ class PaystackService {
       orderId,
       paymentStatus: order.payment_status,
       providerStatus: paystackRes?.data?.status || "unknown",
+      // M8 (#94): what Paystack actually collected, so a caller that marks
+      // the order paid (reconcilePendingPayments) can check it first.
+      providerAmount: paystackRes?.data?.amount ?? null,
+      providerCurrency: paystackRes?.data?.currency ?? null,
       awaitingWebhook: order.payment_status !== "paid",
     };
+  }
+
+  // M8 (#94): true only if Paystack collected exactly the order total (in
+  // cents; Paystack amounts are in the currency's subunit) and in ZAR.
+  // A missing amount or currency is a mismatch, never a pass.
+  amountMatchesOrder(providerData, orderTotal) {
+    const expectedCents = Math.round(parseFloat(orderTotal) * 100);
+    const amount = Number(providerData?.amount);
+    const currency = String(providerData?.currency || "").toUpperCase();
+    return Number.isFinite(expectedCents) && Number.isInteger(amount)
+      && amount === expectedCents && currency === "ZAR";
   }
 
   async chargeAuthorization(authCode, email, amount, metadata, reference) {
@@ -364,10 +379,14 @@ class PaystackService {
     return await this.request("GET", `/refund/${encodeURIComponent(refundId)}`);
   }
 
-  // FIX 7: Creates a Paystack transfer recipient for a driver — required before any bank transfer can be initiated
+  // FIX 7: Creates a Paystack transfer recipient (a store's or a driver's
+  // bank account) — required before any bank transfer can be initiated.
+  // M4 (#94): South African bank accounts are type "basa" (Banking
+  // Association South Africa) in Paystack's Transfer Recipient API; this sent
+  // "nuban", Nigeria's type.
   async createTransferRecipient({ name, accountNumber, bankCode, description = "" }) {
     return await this.request("POST", "/transferrecipient", {
-      type: "nuban",
+      type: "basa",
       name,
       account_number: accountNumber,
       bank_code: bankCode,

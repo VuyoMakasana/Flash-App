@@ -181,16 +181,14 @@ describe('migration v40 — shape guard only', () => {
   });
 });
 
-describe('drift guard against Order.js', () => {
-  // A SOURCE-TEXT check, not a behavioural one, and deliberately so:
-  // validateExternalItemPrice is module-private in Order.js and cannot be
-  // called from here. This asserts only that its literal bounds still read
-  // > 0 / 100_000. If someone changes them, this fails and names the drift.
-  //
-  // It cannot prove the two functions behave identically. What it prevents is
-  // the two halves of one business rule silently diverging — the external/
-  // partner rule in Order.js and the inventory write rule in helpers.js.
-  test('Order.js still bounds external item prices at > 0 and <= 100_000', () => {
+describe('Order.js takes no client price (C3, #94)', () => {
+  // This used to pin validateExternalItemPrice's bounds (> 0, <= 100_000) so
+  // the client-price rule for "external" items couldn't drift from
+  // helpers.js. That client-price path is gone: every item is a real product
+  // whose price comes from flash_inventory, written through the validators
+  // above. Behaviour is covered by orderClientPriceTrust.test.js and
+  // tests/integration/storeProductVisibility.test.js.
+  test('Order.js has no client-price validator left, and the write-path cap is unchanged', () => {
     const fs = require('fs');
     const path = require('path');
     const src = fs.readFileSync(
@@ -198,8 +196,8 @@ describe('drift guard against Order.js', () => {
       'utf8',
     );
 
-    expect(src).toMatch(/if\s*\(\s*price\s*<=\s*0\s*\)/);
-    expect(src).toMatch(/if\s*\(\s*price\s*>\s*100_000\s*\)/);
+    expect(src).not.toMatch(/validateExternalItemPrice/);
+    expect(src).not.toMatch(/item\.price/);
     expect(MAX_PRODUCT_PRICE).toBe(100000);
   });
 });
