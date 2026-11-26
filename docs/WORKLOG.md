@@ -4,6 +4,20 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-26 — PR D: the user app shows card, hides cash, handles the return from Paystack (#100, `launch/user-app-card-payments`)
+- **`screens/PaymentScreen.js`:**
+  - **card only**. Cash is hidden, because today it collects the whole total, items included (FI-092); the `cash_orders` switch refuses it server-side too.
+  - **The immediate `verify` after `Linking.openURL` is gone.** It ran when Safari opened, before the customer had paid.
+  - The payment page URL is kept, so **"Reopen payment page"** works. Within 2 minutes the backend returns the same reference without a URL, so it never starts a second charge.
+  - **Saved cards** wait for the same confirmation.
+- **`hooks/usePaymentConfirmation.js` (new):** it waits for the customer to return (AppState → active), then polls `GET /payments/status/:orderId` every 4 s for up to 90 s, only while the app is in front. The outcomes are paid → the order screen (with the chosen driver assigned once); failed or cancelled → a message and "Try again"; still pending → "Still confirming…, you won't be charged twice", plus "Check again" and "View my order". The webhook stays the source of truth.
+- **OTA vs build:**
+  - **No new dependency or native module** (`package.json` untouched); `expo export --platform ios` bundles cleanly.
+  - Expo's build records show **no iOS build of the user app exists**, and the Android builds have no update channel. So iPhone testers use **Expo Go with a published update**, and PR D ships by publishing one (no build).
+  - **Risks:** whether the store's Expo Go still opens SDK 54 is unverified (FI-117); publishing must set `EXPO_PUBLIC_API_BASE_URL` (FI-118); the Paystack callback page is unverified (FI-119).
+- **Not verified on a device.** The user app has no test runner, and adding one would be a new dependency. The founder checks on his iPhone after publishing (TESTING.md).
+- **Docs:** FOUND_ISSUES FI-096 updated, FI-117–FI-120 added; TESTING.md has the publish runbook; checklist L-16.
+
 ## 2026-11-26 — PR B: L0.5b kill switches (#98, `launch/l05b-kill-switches`)
 - **As approved (plan 2026-11-21):**
   - **`services/featureSwitches.js`:** `isEnabled(key)` with a 15 s cache. It keeps the last known value if a read fails (and retries 15 s later). On a cold start, `driver_payouts`, `premium` and `boosts` fail closed and the rest fail open. An env `FEATURE_<KEY>=off` always wins.
