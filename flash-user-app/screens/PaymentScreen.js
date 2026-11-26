@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, Pressable, ScrollView,
   ActivityIndicator, Alert, Platform, Linking,
@@ -7,37 +7,38 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import api from '../services/api';
 import analytics from '../services/analytics';
+import usePaymentConfirmation from '../hooks/usePaymentConfirmation';
 
-// TEMPORARY TEST-MODE — remove before real launch. Card payments are
-// confirmed broken in production right now (PAYSTACK_SECRET_KEY not
-// configured on Render — see docs/audits/PRODUCTION_SECRETS_CHECKLIST.md),
-// so a non-technical tester tapping "Card" would hit a genuine dead end,
-// not a test-mode simulation of one. Rather than leave a broken option
-// visible, Card is hidden entirely during this testing period and Cash on
-// Delivery — already a real, fully working order flow, no new code
-// needed — is the only method shown. To restore Card once real payments
-// are configured, delete this filter and the ALL_PAYMENT_METHODS alias
-// below, and change PAYMENT_METHODS back to the full array directly.
+// FI-096 (#100): card only. The live Paystack key is now in Render, so Card
+// is shown again (it was hidden while card payments couldn't work).
+// Cash is HIDDEN, deliberately: today "Pay on Delivery" collects the whole
+// order total in cash, items included, and nothing reconciles the item money
+// a driver collects (FI-092). Founder decision 3 is "items always by card;
+// only the delivery fee may be cash". Cash comes back only with that
+// fee-only flow. The cash_orders kill switch refuses it server-side too.
 const ALL_PAYMENT_METHODS = [
   { id: 'card',     label: 'Card / EFT / Capitec Pay', icon: 'card-outline',     description: 'Visa, Mastercard, Instant EFT, Capitec Pay', supported: true },
   // Payflex (BNPL) removed — integration not yet complete. Re-add when live.
   { id: 'cash',     label: 'Pay on Delivery',           icon: 'cash-outline',     description: 'Pay the driver face-to-face',                supported: true },
 ];
-const PAYMENT_METHODS = ALL_PAYMENT_METHODS.filter(m => m.id === 'cash');
+const PAYMENT_METHODS = ALL_PAYMENT_METHODS.filter(m => m.id === 'card');
 
 export default function PaymentScreen() {
   const navigation = useNavigation();
   const route      = useRoute();
   const { orderId, total: estimatedTotal, requestedDriverId } = route.params || {};
 
-  // TEMPORARY TEST-MODE — defaults to the only method currently shown
-  // (see PAYMENT_METHODS above). Change back to 'card' when Card is
-  // restored.
-  const [selected, setSelected] = useState('cash');
+  const [selected, setSelected] = useState('card');
   const [loading,  setLoading]  = useState(false);
   const [savedCards, setSavedCards] = useState([]);
   const [selectedCardId, setSelectedCardId] = useState(null);
   const [useNewCard, setUseNewCard] = useState(false);
+  // The Paystack page for this order, kept so "Reopen payment page" works:
+  // within 2 minutes the backend answers a second initialize with the same
+  // reference but no URL (it won't start a second charge).
+  const [paymentUrl, setPaymentUrl] = useState(null);
+  const confirmation = usePaymentConfirmation(orderId);
+  const waitingForPayment = ['waiting', 'checking'].includes(confirmation.state);
 
   useFocusEffect(useCallback(() => { analytics.screenViewed('Payment'); }, []));
   // The checkout screen's total is a client-side estimate (fleet mode
@@ -99,6 +100,27 @@ export default function PaymentScreen() {
     }
   };
 
+  const openPaymentPage = async (url) => {
+    const supported = await Linking.canOpenURL(url);
+    if (!supported) {
+      Alert.alert('Error', 'Could not open the secure payment page. Please try again.');
+      return;
+    }
+    confirmation.startAfterBrowser();
+    await Linking.openURL(url);
+  };
+
+  // Paid: assign the chosen driver (if any) once, then show the order.
+  const handledPaidRef = useRef(false);
+  useEffect(() => {
+    if (confirmation.state !== 'paid' || handledPaidRef.current) return;
+    handledPaidRef.current = true;
+    (async () => {
+      await assignPreferredDriverIfNeeded(orderId);
+      await goToOrderStatus(orderId);
+    })();
+  }, [confirmation.state]);
+
   const handlePayment = async () => {
     if (!orderId) {
       Alert.alert('Error', 'No order found. Please try again.');
@@ -119,54 +141,37 @@ export default function PaymentScreen() {
       // if (selected === 'payflex') { ... }
 
       if (selected === 'card' && selectedCardId && !useNewCard) {
-        const data = await api.payments.chargeSavedCard(orderId, selectedCardId);
-        if (data?.awaitingWebhook) {
-          Alert.alert('Waiting for confirmation', data.message || 'Payment submitted. We are waiting for secure confirmation.');
-          await assignPreferredDriverIfNeeded(orderId);
-          await goToOrderStatus(orderId);
-          return;
-        }
-
-        await assignPreferredDriverIfNeeded(orderId);
-        await goToOrderStatus(orderId);
+        // A saved card is charged by the backend; Paystack confirms it via
+        // the webhook. Wait here for that confirmation (no browser involved).
+        await api.payments.chargeSavedCard(orderId, selectedCardId);
+        confirmation.startNow();
         return;
       }
 
       // ── Card via Paystack ──────────────────────────────────────────────────
-      // Paystack opens a secure hosted payment page — no card details ever
-      // enter the app. The user pays on Paystack's page, then returns here.
-      // After returning, we verify the payment with our backend.
+      // Paystack's secure page opens in the browser (no card details ever
+      // enter the app). Opening it doesn't mean the customer has paid, so
+      // the app waits for them to come back and then asks the backend
+      // (usePaymentConfirmation), instead of checking straight away.
       const data = await api.payments.initialize(orderId);
 
-      if (data.awaitingWebhook) {
-        Alert.alert('Waiting for confirmation', data.message || 'Your payment is still being confirmed.');
-        await goToOrderStatus(orderId);
+      if (data.authorizationUrl) {
+        setPaymentUrl(data.authorizationUrl);
+        await openPaymentPage(data.authorizationUrl);
         return;
       }
 
-      if (data.authorizationUrl) {
-        // Open Paystack payment page in the device browser
-        const supported = await Linking.canOpenURL(data.authorizationUrl);
-        if (supported) {
-          await Linking.openURL(data.authorizationUrl);
-          // Verification can lag behind redirect/webhook timing. Continue to
-          // order status even if immediate verification is not ready yet.
-          let verified = false;
-          try {
-            const verifyRes = await api.payments.verify(data.reference);
-            if (verifyRes?.awaitingWebhook) {
-              Alert.alert('Waiting for confirmation', 'Payment submitted. We are waiting for secure confirmation.');
-            }
-            verified = true;
-          } catch (_) {}
-          if (verified) {
-            await assignPreferredDriverIfNeeded(orderId);
-          }
-          await goToOrderStatus(orderId);
+      if (data.awaitingWebhook) {
+        // A payment for this order was already started a moment ago.
+        if (paymentUrl) {
+          await openPaymentPage(paymentUrl);
         } else {
-          Alert.alert('Error', 'Could not open payment page. Please try cash on delivery.');
+          confirmation.startNow();
         }
+        return;
       }
+
+      Alert.alert('Payment', 'Could not start the payment. Please try again.');
 
     } catch (err) {
       // Handle session expiry gracefully — don't show error, just redirect to login
@@ -287,6 +292,56 @@ export default function PaymentScreen() {
         </View>
       )}
 
+      {confirmation.state !== 'idle' && confirmation.state !== 'paid' && (
+        <View style={s.statusBox}>
+          {confirmation.state === 'waiting' && (
+            <>
+              <Text style={s.statusTitle}>Finish paying on the Paystack page</Text>
+              <Text style={s.statusText}>
+                When you've paid, come back to Flash. We'll confirm your payment here automatically.
+              </Text>
+              {paymentUrl && (
+                <Pressable style={s.statusBtn} onPress={() => openPaymentPage(paymentUrl)}>
+                  <Text style={s.statusBtnText}>Reopen payment page</Text>
+                </Pressable>
+              )}
+              <Pressable style={s.statusLink} onPress={confirmation.checkNow}>
+                <Text style={s.statusLinkText}>I've paid. Check now</Text>
+              </Pressable>
+            </>
+          )}
+          {confirmation.state === 'checking' && (
+            <View style={s.statusRow}>
+              <ActivityIndicator color="#111827" />
+              <Text style={s.statusText}>Confirming your payment…</Text>
+            </View>
+          )}
+          {confirmation.state === 'timeout' && (
+            <>
+              <Text style={s.statusTitle}>Still confirming your payment</Text>
+              <Text style={s.statusText}>
+                We haven't heard from Paystack yet. If you paid, it will show on your order shortly. You won't be charged twice.
+              </Text>
+              <Pressable style={s.statusBtn} onPress={confirmation.checkNow}>
+                <Text style={s.statusBtnText}>Check again</Text>
+              </Pressable>
+              <Pressable style={s.statusLink} onPress={() => goToOrderStatus(orderId)}>
+                <Text style={s.statusLinkText}>View my order</Text>
+              </Pressable>
+            </>
+          )}
+          {confirmation.state === 'failed' && (
+            <>
+              <Text style={s.statusTitle}>Payment not completed</Text>
+              <Text style={s.statusText}>{confirmation.detail}</Text>
+              <Pressable style={s.statusBtn} onPress={() => { setPaymentUrl(null); confirmation.reset(); }}>
+                <Text style={s.statusBtnText}>Try again</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
+      )}
+
       <View style={s.secureRow}>
         <Ionicons name="shield-checkmark-outline" size={16} color="#16a34a" />
         <Text style={s.secureText}>
@@ -295,9 +350,9 @@ export default function PaymentScreen() {
       </View>
 
       <Pressable
-        style={[s.payBtn, loading && s.payBtnDisabled]}
+        style={[s.payBtn, (loading || waitingForPayment) && s.payBtnDisabled]}
         onPress={handlePayment}
-        disabled={loading}
+        disabled={loading || waitingForPayment}
       >
         {loading
           ? <ActivityIndicator color="#fff" />
@@ -356,4 +411,12 @@ const s = StyleSheet.create({
   payBtn:           { backgroundColor: '#0a0a0a', borderRadius: 16, paddingVertical: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 4 },
   payBtnDisabled:   { opacity: 0.6 },
   payBtnText:       { color: '#fff', fontWeight: '800', fontSize: 16 },
+  statusBox:        { backgroundColor: '#fff', borderRadius: 16, padding: 16, gap: 10, borderWidth: 1, borderColor: '#e5e7eb' },
+  statusRow:        { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  statusTitle:      { color: '#111827', fontWeight: '800', fontSize: 15 },
+  statusText:       { color: '#374151', fontSize: 13, lineHeight: 19, flexShrink: 1 },
+  statusBtn:        { backgroundColor: '#0a0a0a', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  statusBtnText:    { color: '#fff', fontWeight: '800' },
+  statusLink:       { alignItems: 'center', paddingVertical: 4 },
+  statusLinkText:   { color: '#2563eb', fontWeight: '700' },
 });

@@ -12,6 +12,10 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-26, later (PR D, user app, #100).**
+> - **PR #99 (kill switches) is merged.** PR D shows card, hides cash, and confirms payment when the customer returns from Paystack. It's JS-only.
+> - **The user app has no iOS build; iPhone testers use Expo Go.** PR D ships as an EAS update (TESTING.md). Check first that the store's Expo Go still opens SDK 54 (FI-117), and set `EXPO_PUBLIC_API_BASE_URL` when publishing (FI-118).
+
 > **Status update, 2026-11-26 (PR B, L0.5b kill switches, #98).**
 > - **The kill switches are built:** guards on the approved routes, an admin "Switch off" / "Switch on" with a typed reason and an audit row, and `GET /api/status/features`. Runbook: `docs/KILL_SWITCHES.md`. FI-095 fixed once merged.
 > - **Still needed for the 2026-11-29 test:** the user-app change that shows card (FI-096). And on the day, switch `cash_orders` off (L-16).

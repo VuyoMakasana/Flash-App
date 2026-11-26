@@ -32,3 +32,24 @@ npm run test:db:down      # remove the container (data is discarded)
 New schema changes are standalone files in `backend/src/db/migrations/` (from v42). How to write one and how it reaches production: `docs/PROD_MIGRATIONS.md`. `tests/integration/migrationLedger.test.js` needs `psql` on PATH in CI; locally it skips the psql cases when `psql` is absent.
 
 `bash scripts/schema-baseline/schema_check.sh` builds a fresh database from `migrate.js` in its own throwaway local container and compares it with the committed production baseline (`docs/SCHEMA_BASELINE.md` §10).
+
+## Publishing the user app to iPhone testers (Expo Go, EAS Update)
+The user app has **no iOS build**. iPhone testers open it in **Expo Go**, from a published update (FI-117). A JS-only change such as PR D (#100) ships by publishing an update; no build is needed. A change that adds a native module needs a new build instead.
+
+**Before publishing:**
+- check on your iPhone that the **current** tester link still opens in Expo Go (FI-117: SDK 54 support in the store's Expo Go);
+- the backend must be deployed with the change it needs.
+
+From `flash-user-app/`, in PowerShell, on an up-to-date `main`:
+
+```powershell
+$env:EXPO_PUBLIC_API_BASE_URL = "https://api.flashdelivery.co.za"   # REQUIRED (FI-118), or the update points at localhost
+npx eas-cli update --branch preview --platform ios --message "Card payments, cash hidden, Paystack return handled (#100)"
+Remove-Item Env:EXPO_PUBLIC_API_BASE_URL
+```
+
+- **The link:** use the **https** link it prints (`https://u.expo.dev/update/<id>`), **never `exp://`**. A new update means a new link to send testers.
+- **The branch:** any EAS branch name works, because testers open a per-update link. I couldn't see which branch past tester links used; `preview` is a suggestion, not a convention found in the repo.
+- **Who can open it:** testers must be invited to the `vuyomakasana` Expo organization (Viewer), or Expo Go answers 403.
+- **Check on the device:** log in; the products load (so it's not the localhost/demo fallback); the payment screen shows **Card only**.
+
