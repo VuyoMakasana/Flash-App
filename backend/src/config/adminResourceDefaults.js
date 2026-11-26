@@ -75,6 +75,9 @@ const RESOURCE_TIMESTAMP_COLUMNS = {
   // driver_wallets above.
   driver_subscriptions: 'updated_at',
   premium_subscriptions: 'updated_at',
+  // Kill switches (L0.5b, #98): one row per switch; updated_at is the last
+  // switch on/off, which is the question asked of this screen.
+  feature_switches: 'updated_at',
 };
 
 // Applied via the same options object every resource already builds, not a

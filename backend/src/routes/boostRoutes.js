@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { authenticate, requireRole } = require("../middleware/auth");
 const BoostController = require("../controllers/boostController");
+const { requireFeature } = require("../middleware/requireFeature");
 
 // Reads are public — boosted stores/promotions are shown to customers.
 router.get("/active", BoostController.getActiveBoosts);
@@ -14,7 +15,7 @@ router.get("/plans", BoostController.getPlans);
 // not a self-serve purchase a customer or driver account should ever be
 // able to trigger. Previously these had no role check at all, so any
 // authenticated user or driver could grant a store a free, unpaid boost.
-router.post("/purchase", authenticate, requireRole("admin"), BoostController.purchaseBoost);
-router.post("/promotions", authenticate, requireRole("admin"), BoostController.createPromotion);
+router.post("/purchase", authenticate, requireRole("admin"), requireFeature("boosts"), BoostController.purchaseBoost);
+router.post("/promotions", authenticate, requireRole("admin"), requireFeature("boosts"), BoostController.createPromotion);
 
 module.exports = router;

@@ -10,6 +10,10 @@ const {
   requireStoreRole,
 } = require('../middleware/auth');
 const { storeWriteLimiter } = require('../middleware/rateLimiter');
+const { requireFeature } = require('../middleware/requireFeature');
+// Kill switch (L0.5b): every write here is a store setting. Order handling
+// (store-orders accept/reject/mark ready) is deliberately NOT guarded.
+const storeSettingsWrite = requireFeature('store_portal_writes');
 const StoreBankingController = require('../controllers/storeBankingController');
 
 // Phase 2a — the store's payout destination.
@@ -44,7 +48,7 @@ router.get('/banks', StoreBankingController.listBanks);
 // controller does; a length rule cannot establish that an account is real.
 router.post(
   '/',
-  storeWriteLimiter,
+  storeSettingsWrite, storeWriteLimiter,
   [
     body('account_number').isString().trim().matches(/^[0-9]{6,20}$/)
       .withMessage('Enter the account number as digits only.'),

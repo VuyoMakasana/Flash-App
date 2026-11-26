@@ -4,6 +4,7 @@ const { authenticate, requireRole } = require("../middleware/auth");
 const { validateId } = require("../middleware/validation");
 const { orderLimiter } = require("../middleware/rateLimiter");
 const OrderController = require("../controllers/orderController");
+const { requireFeature } = require("../middleware/requireFeature");
 
 // orderLimiter (5/min) is scoped to this exact route, not the whole
 // /api/orders/* prefix -- it was previously mounted in server.js as
@@ -19,6 +20,7 @@ router.post(
   orderLimiter,
   authenticate,
   requireRole("user"),
+  requireFeature("new_orders"), // kill switch (L0.5b)
   OrderController.createOrder,
 );
 router.get(

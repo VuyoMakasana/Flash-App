@@ -100,6 +100,7 @@ const messagesRoutes = require("./routes/messageRoutes");
 const trustedDriverRoutes = require("./routes/trustedDriverRoutes");
 const sosRoutes = require("./routes/sosRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
+const statusRoutes = require("./routes/statusRoutes");
 const { createHealthRouter } = require("./routes/healthRoutes");
 const { realClientIp } = require("./middleware/clientIp");
 const { createCronRunner, dailySast } = require("./jobs/cronRunner");
@@ -240,6 +241,8 @@ function createApp({ withCronJobs = false } = {}) {
   app.use("/api/messages", messagesRoutes);
   app.use("/api/trusted-drivers", trustedDriverRoutes);
   app.use("/api/sos", sosRoutes);
+  // Kill-switch status (L0.5b, #98): public, cached, no secrets.
+  app.use("/api/status", statusRoutes);
 // Public marketing-site forms (waitlist, contact, driver/seller applications)
 // — no auth, same as flash-website-rebuild's original standalone backend;
 // mounted at /api directly since the frontend already calls /api/waitlist,

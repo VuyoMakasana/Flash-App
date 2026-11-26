@@ -5,6 +5,10 @@ const router = express.Router();
 const { authenticateStore, requireStoreRole, requireOwnStore, requireStorePasswordCurrent } = require('../middleware/auth');
 const { validateId } = require('../middleware/validation');
 const { storeWriteLimiter } = require('../middleware/rateLimiter');
+const { requireFeature } = require('../middleware/requireFeature');
+// Kill switch (L0.5b): every write here is a store setting. Order handling
+// (store-orders accept/reject/mark ready) is deliberately NOT guarded.
+const storeSettingsWrite = requireFeature('store_portal_writes');
 const StoreStaffController = require('../controllers/storeStaffController');
 
 // FLASH_STORE_ADMIN_DESIGN.md §6.2 and DOMAIN_OWNERSHIP_AUTHORITY_
@@ -18,8 +22,8 @@ const StoreStaffController = require('../controllers/storeStaffController');
 router.use(authenticateStore, requireOwnStore, requireStorePasswordCurrent, requireStoreRole('owner'));
 
 router.get('/', StoreStaffController.listStaff);
-router.post('/', storeWriteLimiter, StoreStaffController.createStaff);
-router.patch('/:staffId/deactivate', storeWriteLimiter, validateId, StoreStaffController.deactivateStaff);
-router.patch('/:staffId/reactivate', storeWriteLimiter, validateId, StoreStaffController.reactivateStaff);
+router.post('/', storeSettingsWrite, storeWriteLimiter, StoreStaffController.createStaff);
+router.patch('/:staffId/deactivate', storeSettingsWrite, storeWriteLimiter, validateId, StoreStaffController.deactivateStaff);
+router.patch('/:staffId/reactivate', storeSettingsWrite, storeWriteLimiter, validateId, StoreStaffController.reactivateStaff);
 
 module.exports = router;

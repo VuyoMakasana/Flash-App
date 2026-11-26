@@ -42,6 +42,7 @@ const Fleet = require('./models/Fleet');
 const s3Service = require('./services/s3Service');
 const { clearCache } = require('./middleware/cache');
 const { withChronologicalDefaults, RESOURCE_TIMESTAMP_COLUMNS } = require('./config/adminResourceDefaults');
+const { buildFeatureSwitchResource } = require('./adminFeatureSwitches');
 // Named pgPool, deliberately not db — mountAdminPanel already has a local
 // `db` variable for the @adminjs/sql adapter; reusing that name here for an
 // unrelated plain pg Pool would be exactly the kind of mistake worth
@@ -922,7 +923,7 @@ function suppressReferencesToUnregisteredTables(resources) {
   return resources;
 }
 
-function buildResources(db) {
+function buildResources(db, components = {}) {
   return [
       {
         resource: db.table('drivers'),
@@ -2098,6 +2099,8 @@ function buildResources(db) {
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.stores),
       },
+      // Kill switches (L0.5b, #98): see adminFeatureSwitches.js.
+      buildFeatureSwitchResource(db, components),
   ];
 }
 
@@ -2273,6 +2276,11 @@ async function mountAdminPanel(app) {
     'FleetClusters',
     path.join(__dirname, 'adminComponents', 'FleetClusters.jsx'),
   );
+  // L0.5b (#98): the reason form for "Switch off" / "Switch on".
+  const featureSwitchToggleComponent = componentLoader.add(
+    'FeatureSwitchToggle',
+    path.join(__dirname, 'adminComponents', 'FeatureSwitchToggle.jsx'),
+  );
 
   const dbName = new URL(process.env.DATABASE_URL).pathname.replace(/^\//, '');
   // Explicit `schema: 'public'` (previously unset, silently falling back to
@@ -2294,7 +2302,7 @@ async function mountAdminPanel(app) {
   // the marketing_* resources even before this section's own five
   // additions) — full visibility should extend to what the logs
   // themselves say is actually mounted, not just the panel's own UI.
-  const resources = suppressReferencesToUnregisteredTables(buildResources(db));
+  const resources = suppressReferencesToUnregisteredTables(buildResources(db, { FeatureSwitchToggle: featureSwitchToggleComponent }));
 
   const admin = new AdminJS({
     rootPath: ADMIN_PANEL_PATH,

@@ -14,6 +14,7 @@ const { generateToken, generateRefreshToken } = require('../utils/helpers');
 const { validationResult } = require('express-validator');
 const { verifyAppleToken }  = require('../services/appleAuthService');
 const { verifyGoogleToken } = require('../services/googleAuthService');
+const { featureIsOn, refuseFeature } = require('../middleware/requireFeature');
 const { sendPasswordResetEmail, sendEmailVerificationEmail } = require('../services/emailService');
 
 const REFRESH_EXPIRY_DAYS = 7;
@@ -330,6 +331,9 @@ class AuthController {
         }
       }
 
+      // Kill switch (L0.5b): a NEW account is a sign-up. Existing accounts
+      // (matched above) still sign in while signups is off.
+      if (!(await featureIsOn('signups'))) return refuseFeature(res, 'signups');
       // 3. Create new user (Google accounts are pre-verified)
       const password_hash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
       const newUser = await pool.query(
@@ -393,6 +397,9 @@ class AuthController {
         }
       }
 
+      // Kill switch (L0.5b): a NEW account is a sign-up. Existing accounts
+      // (matched above) still sign in while signups is off.
+      if (!(await featureIsOn('signups'))) return refuseFeature(res, 'signups');
       const password_hash = await bcrypt.hash(crypto.randomBytes(32).toString('hex'), 12);
       const newDriver = await pool.query(
         `INSERT INTO drivers (name, email, password_hash, google_id, status) VALUES ($1, $2, $3, $4, 'pending_documents') RETURNING *`,
@@ -623,6 +630,9 @@ class AuthController {
         }
       }
 
+      // Kill switch (L0.5b): a NEW account is a sign-up. Existing accounts
+      // (matched above) still sign in while signups is off.
+      if (!(await featureIsOn('signups'))) return refuseFeature(res, 'signups');
       const name = fullName?.givenName
         ? `${fullName.givenName} ${fullName.familyName || ''}`.trim()
         : email?.split('@')[0] || 'Flash User';
@@ -682,6 +692,9 @@ class AuthController {
         }
       }
 
+      // Kill switch (L0.5b): a NEW account is a sign-up. Existing accounts
+      // (matched above) still sign in while signups is off.
+      if (!(await featureIsOn('signups'))) return refuseFeature(res, 'signups');
       const name = fullName?.givenName
         ? `${fullName.givenName} ${fullName.familyName || ''}`.trim()
         : email?.split('@')[0] || 'Flash Driver';

@@ -41,6 +41,7 @@
 
 module.exports = {
   covered: {
+    feature_switches: 'Kill switches (L0.5b, #98): list and show only, plus dedicated "Switch off" / "Switch on" record actions that need a typed reason and write admin_actions (feature_switch_changed). No generic edit, new or delete; messages are fixed in code.',
     // ── Already real today ──────────────────────────────────────────────
     return_requests:                'Returns queue (admin.js) — approve/reject/finalize-refund, real endpoints.',
     return_request_items:           'Line-item detail behind the returns queue (Return.getPendingForAdmin joins this).',
@@ -107,7 +108,6 @@ module.exports = {
     webhook_events:  'Internal Paystack webhook-idempotency ledger (unique constraint on paystack_event_id) — infrastructure only, no content to view.',
     schema_migrations_ledger: 'Schema-migration ledger (v42, L0.2 #71): which standalone migration files were applied and their sha256. Deploy infrastructure only, no business content; the founder reads it in step E of docs/PROD_MIGRATIONS.md.',
     admin_mfa_recovery_codes: 'Admin MFA recovery codes (v45, #91): sha256 hashes of single-use login codes. Security infrastructure, never browsable: even a hash list tells an attacker how many unused codes remain. The admin sees only "N codes left" on the MFA page (a later PR).',
-    feature_switches: 'Kill switches (v44, L0.5a #84). Deliberately NOT a default AdminJS resource: a generic edit form would allow changes with no reason and no audit row. L0.5b adds dedicated "Switch off" / "Switch on" actions (confirmation + typed reason, audited in admin_actions); move this to covered then.',
 
     store_transfer_recipients: 'Phase 2a — holds a PAYMENT CREDENTIAL (Paystack recipient_code), which is why it is excluded rather than browsable: an AdminJS resource exposes every column by default, and a transfer recipient code is the thing that authorises sending money to an account. The account number itself is deliberately not stored at all (migration v38), so the only genuinely useful support question -- "which account is on file for this store?" -- is answerable from bank_name + account_last4 + account_name. If that becomes a real support need, add a column-limited read-only view that excludes recipient_code, never a default resource over this table.',
     store_password_tokens: 'Internal auth-flow infrastructure (store-portal password reset tokens) — same reasoning as refresh_tokens/email_tokens above. Short-lived secrets, no business content.',

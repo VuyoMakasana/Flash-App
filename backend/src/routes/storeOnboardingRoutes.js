@@ -5,6 +5,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const { storeOnboardingLimiter } = require('../middleware/rateLimiter');
 const StoreOnboardingController = require('../controllers/storeOnboardingController');
+const { requireFeature } = require('../middleware/requireFeature');
 
 // Phase 3 — public store-onboarding application.
 //
@@ -18,6 +19,7 @@ const StoreOnboardingController = require('../controllers/storeOnboardingControl
 // anyone test which businesses have applied.
 router.post(
   '/apply',
+  requireFeature('signups'), // kill switch (L0.5b)
   storeOnboardingLimiter,
   [
     body('store_name').trim().isLength({ min: 2, max: 200 }),
