@@ -33,6 +33,22 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 - **Verified:** unit 936/936 (58 suites), integration 28/28 (5 suites). No migration, no new dependency.
 - **Docs:** new `docs/KILL_SWITCHES.md` (runbook); FOUND_ISSUES FI-095 fixed; SECRETS_INVENTORY (the optional `FEATURE_*` overrides); checklist L-16 (how to switch cash off for Sunday).
 
+## 2026-11-26 — Admin panel: saving Flash Closet and products with sizes failed (#96, `fix/admin-panel-jsonb-edits`)
+- **Founder-reported:** saving an edit to the Flash Closet store shows an error.
+- **Found read-only, then reproduced locally** through AdminJS's real edit and new actions against the local test DB:
+  - Postgres refuses `SET "service_area_bounds"."maxLat" = ...` ("its type jsonb is not a composite type").
+  - **The cause:** AdminJS posts a jsonb ("key-value") field flattened, `prepareParams` keeps the dotted keys beside the rebuilt value, and `@adminjs/sql` hands them all to knex.
+  - Only Flash Closet has bounds set, so only its edit failed. **Editing and adding any product with sizes failed the same way** (`"sizes"."0"`).
+- **Second finding (FI-116):** the edit form re-posts the fields it hides, so a form left open could silently undo a suspension, an approval or a product deactivation done meanwhile.
+- **Fix (`adminPanel.js` before-hooks only; no migration, no dependency):**
+  - `prepareJsonbFields`: stores edit, and flash_inventory edit and new;
+  - `dropFieldsHiddenFromEdit`: stores, drivers and flash_inventory edit.
+  - The jsonb values are validated, and bad input is a field error on the form.
+- **Tests:**
+  - `tests/unit/adminJsonbFields.test.js` uses the exact payloads AdminJS posted and compiles the SQL with knex (the builder `@adminjs/sql` uses; its own dependency). It failed 18 of 19 before the fix (the 1 that passed is the control showing the old payload's bad SQL), and checks the hook order on each resource.
+  - **End to end:** the same AdminJS reproduction now saves the Flash Closet edit, the product edit and the product create, with the stored jsonb correct.
+- FOUND_ISSUES FI-115 and FI-116.
+
 ## 2026-11-24 — PR A: real-money blockers (#94, `launch/real-money-blockers`)
 - **Founder decisions (2026-11-24, after the read-only real-money audit):**
   - **Partner stores will be paid by Paystack split payments** (design A), because Flash must never hold store money. **Store payments stay off until Paystack confirms how refunds on split transactions work** (the founder is asking). Checklist L-17, FI-093.

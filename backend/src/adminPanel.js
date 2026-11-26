@@ -875,6 +875,136 @@ function nullifyEmptyNonTextFields(request, context) {
   return request;
 }
 
+// ── #96: jsonb fields and hidden fields on admin edit/new forms ──────────────
+//
+// FI-115. AdminJS treats a jsonb column as a "key-value" field and posts it
+// FLATTENED: service_area_bounds.maxLat, sizes.0, stock_by_size.M, ... Its
+// prepareParams() then returns {...rawPayload, ...converted}, so those dotted
+// keys travel on beside the rebuilt value, and @adminjs/sql hands every key to
+// knex, which turns "service_area_bounds.maxLat" into
+// SET "service_area_bounds"."maxLat" = ... Postgres refuses ("cannot assign to
+// field ... its type jsonb is not a composite type"), so the save fails. That
+// broke editing Flash Closet (the only store with bounds) and editing or
+// creating ANY product with sizes. (A JS array would also be sent by pg as a
+// Postgres array literal, not JSON.)
+//
+// prepareJsonbFields rebuilds each jsonb value from whatever was posted
+// (flattened keys, a JSON string, or an already-parsed value), validates it,
+// removes the dotted keys, and sets the column to ONE JSON string, which
+// Postgres casts to jsonb. A column that wasn't posted at all is left out of
+// the update. Bad input is a field error on the form, never a 500.
+const JSONB_FIELDS = {
+  stores: { service_area_bounds: 'numberMap' },
+  flash_inventory: { sizes: 'labelList', stock_by_size: 'stockMap' },
+};
+
+// What an emptied field stores: the column's own default.
+const JSONB_EMPTY = { numberMap: null, labelList: [], stockMap: {} };
+
+function collectJsonbValue(payload, column) {
+  const prefix = `${column}.`;
+  const dotted = Object.keys(payload).filter((k) => k.startsWith(prefix));
+  if (dotted.length) {
+    const entries = dotted.map((k) => [k.slice(prefix.length), payload[k]]);
+    dotted.forEach((k) => { delete payload[k]; });
+    const isList = entries.every(([k]) => /^\d+$/.test(k));
+    if (isList) {
+      return { present: true, value: entries.sort((a, b) => Number(a[0]) - Number(b[0])).map(([, v]) => v) };
+    }
+    return { present: true, value: Object.fromEntries(entries) };
+  }
+  if (!Object.prototype.hasOwnProperty.call(payload, column)) return { present: false };
+  let value = payload[column];
+  if (typeof value === 'string') {
+    if (value.trim() === '') return { present: true, value: null };
+    try { value = JSON.parse(value); } catch (_) { return { present: true, error: 'Must be valid JSON.' }; }
+  }
+  return { present: true, value };
+}
+
+const JSONB_RULES = {
+  // An object of numbers (service_area_bounds: minLat/maxLat/minLng/maxLng).
+  numberMap(value) {
+    if (value === null || (typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length)) return { value: null };
+    if (typeof value !== 'object' || Array.isArray(value)) return { error: 'Must be a set of named numbers.' };
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      const n = typeof v === 'number' ? v : Number(String(v).trim());
+      if (String(v).trim() === '' || !Number.isFinite(n)) return { error: `"${k}" must be a number.` };
+      out[k] = n;
+    }
+    return { value: out };
+  },
+  // A list of size labels (sizes): trimmed, non-empty, no duplicates.
+  labelList(value) {
+    if (value === null) return { value: [] };
+    if (!Array.isArray(value)) return { error: 'Must be a list of sizes.' };
+    const out = value.map((v) => String(v ?? '').trim());
+    if (out.some((v) => !v)) return { error: 'A size cannot be empty.' };
+    if (out.some((v) => v.length > 20)) return { error: 'A size can be at most 20 characters.' };
+    if (new Set(out).size !== out.length) return { error: 'Each size can appear only once.' };
+    return { value: out };
+  },
+  // Stock per size (stock_by_size): whole numbers of 0 or more.
+  stockMap(value) {
+    if (value === null) return { value: {} };
+    if (typeof value !== 'object' || Array.isArray(value)) return { error: 'Must be stock per size.' };
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      const s = String(v ?? '').trim();
+      if (!/^\d+$/.test(s)) return { error: `Stock for "${k}" must be a whole number of 0 or more.` };
+      out[k] = Number(s);
+    }
+    return { value: out };
+  },
+};
+
+function prepareJsonbFields(fields) {
+  const hook = function prepareJsonbFields(request) {
+    const payload = request?.payload;
+    if (!payload) return request;
+    const errors = {};
+    for (const [column, rule] of Object.entries(fields)) {
+      const collected = collectJsonbValue(payload, column);
+      if (!collected.present) continue;
+      const result = collected.error
+        ? { error: collected.error }
+        : JSONB_RULES[rule](collected.value ?? JSONB_EMPTY[rule]);
+      if (result.error) {
+        errors[column] = { message: result.error };
+        continue;
+      }
+      payload[column] = result.value === null ? null : JSON.stringify(result.value);
+    }
+    if (Object.keys(errors).length) throw buildValidationError(errors);
+    return request;
+  };
+  hook.hookName = 'prepareJsonbFields';
+  return hook;
+}
+
+// FI-116. The edit form posts back EVERY param of the record it loaded,
+// including fields it hides (flat.merge(record.params, ...) in AdminJS's
+// useRecord). So "status can only change through approve/suspend" was never
+// enforced on the server, and a form left open while someone suspended a
+// store (or approved a driver) silently wrote the old status back on save.
+// These fields are removed from the edit payload; only the dedicated actions
+// change them.
+function dropFieldsHiddenFromEdit(fields) {
+  const hook = function dropFieldsHiddenFromEdit(request) {
+    const payload = request?.payload;
+    if (!payload) return request;
+    for (const field of fields) delete payload[field];
+    return request;
+  };
+  hook.hookName = 'dropFieldsHiddenFromEdit';
+  return hook;
+}
+
+const STORE_FIELDS_NOT_EDITABLE = ['status', 'is_active', 'reviewed_by', 'reviewed_at', 'rejection_reason'];
+const DRIVER_FIELDS_NOT_EDITABLE = ['status'];
+const INVENTORY_FIELDS_NOT_EDITABLE = ['is_active'];
+
 // Refactored out of mountAdminPanel (chronological-ordering pass) so it's
 // independently testable without booting the full Express app/session --
 // adminChronologicalSort.test.js imports this directly, builds its own `db`
@@ -1002,7 +1132,9 @@ function buildResources(db, components = {}) {
             new: { isAccessible: false },
             delete: { isAccessible: false },
             bulkDelete: { isAccessible: false },
-            edit: { before: [nullifyEmptyNonTextFields], after: [stripSensitive] },
+            // status is dropped from the edit payload (#96, FI-116): only
+            // approveDriver/rejectDriver may change it.
+            edit: { before: [dropFieldsHiddenFromEdit(DRIVER_FIELDS_NOT_EDITABLE), nullifyEmptyNonTextFields], after: [stripSensitive] },
             approveDriver: {
               actionType: 'record',
               component: false,
@@ -1785,12 +1917,16 @@ function buildResources(db, components = {}) {
             // validateInventoryPrices runs SECOND, deliberately: the first
             // hook turns a cleared field's "" into null, and only then is a
             // null cost_price correctly "not recorded" rather than invalid.
+            // prepareJsonbFields runs before both (#96, FI-115): sizes and
+            // stock_by_size arrive flattened and would otherwise break the
+            // save. The edit also drops is_active (FI-116): only the
+            // deactivate/reactivate actions change it.
             new: {
-              before: [nullifyEmptyNonTextFields, validateInventoryPrices],
+              before: [prepareJsonbFields(JSONB_FIELDS.flash_inventory), nullifyEmptyNonTextFields, validateInventoryPrices],
               after: [clearInventoryCacheAfter],
             },
             edit: {
-              before: [nullifyEmptyNonTextFields, validateInventoryPrices],
+              before: [dropFieldsHiddenFromEdit(INVENTORY_FIELDS_NOT_EDITABLE), prepareJsonbFields(JSONB_FIELDS.flash_inventory), nullifyEmptyNonTextFields, validateInventoryPrices],
               after: [clearInventoryCacheAfter],
             },
             // Generic delete would be a real, permanent DELETE FROM --
@@ -1983,7 +2119,11 @@ function buildResources(db, components = {}) {
             // Editing real details (name, address, logo) stays available; the
             // before-hook is the same one every other form here uses, so a
             // cleared lat/lng or timestamp stores NULL instead of "".
-            edit: { before: [nullifyEmptyNonTextFields] },
+            // #96: the lifecycle fields are dropped from the payload (only
+            // the actions below change them, FI-116), and
+            // service_area_bounds is saved as one jsonb value (FI-115: its
+            // flattened keys made every Flash Closet edit fail).
+            edit: { before: [dropFieldsHiddenFromEdit(STORE_FIELDS_NOT_EDITABLE), prepareJsonbFields(JSONB_FIELDS.stores), nullifyEmptyNonTextFields] },
 
             approveStore: {
               actionType: 'record',
@@ -2498,4 +2638,6 @@ module.exports = {
   // run in is load-bearing (see validateInventoryPrices' comment), and
   // adminInventoryPriceValidation.test.js asserts it.
   nullifyEmptyNonTextFields, validateInventoryPrices,
+  // #96, exported for unit tests.
+  prepareJsonbFields, dropFieldsHiddenFromEdit, JSONB_FIELDS,
 };

@@ -180,13 +180,17 @@ describe('the hook is actually wired into flash_inventory', () => {
   // look "caught" regardless of whether it was.
   test('flash_inventory new runs validateInventoryPrices after nullifyEmptyNonTextFields', () => {
     expect(src).toMatch(
-      /new: \{\s*before: \[nullifyEmptyNonTextFields, validateInventoryPrices\]/,
+      // #96: prepareJsonbFields now runs first (FI-115); the order that
+      // matters here, nullify then validate, is unchanged.
+      /new: \{\s*before: \[prepareJsonbFields\(JSONB_FIELDS\.flash_inventory\), nullifyEmptyNonTextFields, validateInventoryPrices\]/,
     );
   });
 
   test('flash_inventory edit runs validateInventoryPrices after nullifyEmptyNonTextFields', () => {
     expect(src).toMatch(
-      /edit: \{\s*before: \[nullifyEmptyNonTextFields, validateInventoryPrices\]/,
+      // #96: dropFieldsHiddenFromEdit and prepareJsonbFields now run first
+      // (FI-116, FI-115); nullify then validate is unchanged.
+      /edit: \{\s*before: \[dropFieldsHiddenFromEdit\(INVENTORY_FIELDS_NOT_EDITABLE\), prepareJsonbFields\(JSONB_FIELDS\.flash_inventory\), nullifyEmptyNonTextFields, validateInventoryPrices\]/,
     );
   });
 
