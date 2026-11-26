@@ -3,6 +3,7 @@
 'use strict';
 
 const express = require('express');
+const { requireFeature } = require('../middleware/requireFeature');
 const router  = express.Router();
 const { body } = require('express-validator');
 const AuthController = require('../controllers/authController');
@@ -32,6 +33,7 @@ const dateOfBirthValidator = body('date_of_birth')
 
 // ── User Registration & Login ──────────────────────────────────────────────
 router.post('/user/register',
+  requireFeature('signups'), // kill switch (L0.5b)
   [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 10 }), dateOfBirthValidator],
   AuthController.registerUser
 );
@@ -69,6 +71,7 @@ router.post('/user/reset-password',
 
 // ── Driver Registration & Login ────────────────────────────────────────────
 router.post('/driver/register',
+  requireFeature('signups'), // kill switch (L0.5b)
   [body('name').trim().notEmpty(), body('email').isEmail().normalizeEmail(), body('password').isLength({ min: 10 }), body('phone').notEmpty(), dateOfBirthValidator],
   AuthController.registerDriver
 );

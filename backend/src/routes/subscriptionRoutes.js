@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { authenticate, requireRole } = require("../middleware/auth");
 const SubscriptionController = require("../controllers/subscriptionController");
+const { requireFeature } = require("../middleware/requireFeature");
 
 router.get(
   "/driver",
@@ -37,12 +38,14 @@ router.post(
   "/premium/purchase",
   authenticate,
   requireRole("user"),
+  requireFeature("premium"), // kill switch (L0.5b)
   SubscriptionController.purchasePremium,
 );
 router.post(
   "/premium/purchase-with-card",
   authenticate,
   requireRole("user"),
+  requireFeature("premium"), // kill switch (L0.5b)
   SubscriptionController.purchasePremiumWithCard,
 );
 router.post(

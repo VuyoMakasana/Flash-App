@@ -12,6 +12,10 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-26 (PR B, L0.5b kill switches, #98).**
+> - **The kill switches are built:** guards on the approved routes, an admin "Switch off" / "Switch on" with a typed reason and an audit row, and `GET /api/status/features`. Runbook: `docs/KILL_SWITCHES.md`. FI-095 fixed once merged.
+> - **Still needed for the 2026-11-29 test:** the user-app change that shows card (FI-096). And on the day, switch `cash_orders` off (L-16).
+
 > **Status update, 2026-11-26 (admin panel, #96).**
 > - **PR #95 (PR A) is merged.**
 > - **#96:** saving the Flash Closet store, and editing or adding any product with sizes, failed in the admin panel: jsonb fields were posted flattened (FI-115). Also, the edit forms re-posted hidden lifecycle fields, which could undo a suspension (FI-116). Both are fixed with admin-panel before-hooks.

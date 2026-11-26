@@ -7,6 +7,16 @@ class PayoutService {
   // Picks up the payout request, creates a real Paystack transfer,
   // and writes the result back to payout_transactions.
   static async processRequestedPayout(payoutRequestId) {
+    // Kill switch (L0.5b): driver_payouts guards the transfer itself, so the
+    // L3 nightly job and any future caller are stopped before any database
+    // write or Paystack call. It fails CLOSED on a cold start.
+    const { featureIsOn } = require("../middleware/requireFeature");
+    if (!(await featureIsOn("driver_payouts"))) {
+      const err = new Error("Driver payouts are switched off (feature switch driver_payouts).");
+      err.code = "FEATURE_OFF";
+      err.feature = "driver_payouts";
+      throw err;
+    }
     const client = await db.connect();
     try {
       await client.query("BEGIN");

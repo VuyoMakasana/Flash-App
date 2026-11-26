@@ -13,11 +13,13 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const { validateId } = require('../middleware/validation');
 const PaymentController = require('../controllers/paymentController');
 const { otpLimiter, paymentLimiter } = require('../middleware/rateLimiter');
+const { requireFeature } = require('../middleware/requireFeature');
 
 router.post(
   '/initialize',
   authenticate,
   requireRole('user'),
+  requireFeature('card_payments'), // kill switch (L0.5b)
   paymentLimiter,
   PaymentController.initializePayment,
 );
@@ -28,6 +30,7 @@ router.post(
   '/cash-on-delivery',
   authenticate,
   requireRole('user'),
+  requireFeature('cash_orders'), // kill switch (L0.5b)
   PaymentController.cashOnDelivery,
 );
 
@@ -66,6 +69,7 @@ router.post(
   '/charge-saved-card',
   authenticate,
   requireRole('user'),
+  requireFeature('card_payments'), // kill switch (L0.5b)
   paymentLimiter,
   PaymentController.chargeSavedCard,
 );

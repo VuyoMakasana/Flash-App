@@ -6,6 +6,10 @@ const multer = require('multer');
 const { authenticateStore, requireStoreRole, requireOwnStore, requireStorePasswordCurrent } = require('../middleware/auth');
 const { validateId } = require('../middleware/validation');
 const { storeWriteLimiter } = require('../middleware/rateLimiter');
+const { requireFeature } = require('../middleware/requireFeature');
+// Kill switch (L0.5b): every write here is a store setting. Order handling
+// (store-orders accept/reject/mark ready) is deliberately NOT guarded.
+const storeSettingsWrite = requireFeature('store_portal_writes');
 const StoreInventoryController = require('../controllers/storeInventoryController');
 
 // Product images. Mirrors driverRoutes.js's own uploadPhoto config
@@ -37,15 +41,15 @@ router.use(authenticateStore, requireOwnStore, requireStorePasswordCurrent, requ
 
 router.get('/', StoreInventoryController.listProducts);
 router.get('/:productId', validateId, StoreInventoryController.getProduct);
-router.post('/', storeWriteLimiter, uploadImage.single('image'), StoreInventoryController.addProduct);
-router.patch('/:productId/stock', storeWriteLimiter, validateId, StoreInventoryController.updateStock);
-router.patch('/:productId/image', storeWriteLimiter, validateId, uploadImage.single('image'), StoreInventoryController.updateImage);
+router.post('/', storeSettingsWrite, storeWriteLimiter, uploadImage.single('image'), StoreInventoryController.addProduct);
+router.patch('/:productId/stock', storeSettingsWrite, storeWriteLimiter, validateId, StoreInventoryController.updateStock);
+router.patch('/:productId/image', storeSettingsWrite, storeWriteLimiter, validateId, uploadImage.single('image'), StoreInventoryController.updateImage);
 // Correcting a product after creation. Same guards as every other write on
 // this router -- validateId first, so a malformed id is a 400 before any
 // handler runs, and the store-scoped SELECT ... FOR UPDATE inside the handler
 // is what enforces tenant isolation.
-router.patch('/:productId', storeWriteLimiter, validateId, StoreInventoryController.updateProduct);
-router.patch('/:productId/deactivate', storeWriteLimiter, validateId, StoreInventoryController.deactivateProduct);
-router.patch('/:productId/reactivate', storeWriteLimiter, validateId, StoreInventoryController.reactivateProduct);
+router.patch('/:productId', storeSettingsWrite, storeWriteLimiter, validateId, StoreInventoryController.updateProduct);
+router.patch('/:productId/deactivate', storeSettingsWrite, storeWriteLimiter, validateId, StoreInventoryController.deactivateProduct);
+router.patch('/:productId/reactivate', storeSettingsWrite, storeWriteLimiter, validateId, StoreInventoryController.reactivateProduct);
 
 module.exports = router;

@@ -4,6 +4,35 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-26 — PR B: L0.5b kill switches (#98, `launch/l05b-kill-switches`)
+- **As approved (plan 2026-11-21):**
+  - **`services/featureSwitches.js`:** `isEnabled(key)` with a 15 s cache. It keeps the last known value if a read fails (and retries 15 s later). On a cold start, `driver_payouts`, `premium` and `boosts` fail closed and the rest fail open. An env `FEATURE_<KEY>=off` always wins.
+  - **`setSwitch`** updates the row and writes `admin_actions` (`feature_switch_changed`: key, old value, new value, reason, admin) in one transaction, plus a log line without the free-text reason.
+- **Guards (`middleware/requireFeature.js`):** refusals are 503, `Retry-After: 300`, `{error, code: "FEATURE_OFF", feature}`, with the approved messages, on:
+  - `card_payments`: initialize, charge-saved-card;
+  - `new_orders`: `POST /orders`;
+  - `cash_orders`: cash-on-delivery;
+  - `store_portal_writes`: all store inventory, staff and banking writes, but **not** store order handling;
+  - `signups`: user and driver register, store onboarding apply, **and new accounts through Google/Apple sign-in** (existing accounts still sign in);
+  - `premium`: the two purchase routes;
+  - `boosts`: purchase, promotions;
+  - `driver_payouts`: guards **`PayoutService.processRequestedPayout` itself**, so the L3 nightly job and any future caller are stopped before any database write or Paystack call.
+- **Never blocked:** webhooks, verification, reconciliation, refunds, cash OTP, cancellations, store order handling, driver status updates, login and refresh.
+- **Admin panel:** a `feature_switches` resource (list and show only; no generic edit, new or delete) with **"Switch off" / "Switch on"**. They use a custom page with a **required typed reason** (`adminComponents/FeatureSwitchToggle.jsx`), and the handler refuses an empty reason too. The list's "Effective now" shows an env override. `adminCoverage`: `feature_switches` moved to covered.
+- **`GET /api/status/features`:** public, `Cache-Control: public, max-age=15`, `{features: {key: {enabled, message}}}` and nothing else.
+- **Tests:**
+  - `featureSwitchGuards.test.js` runs on the real `createApp`. Every guarded route gives the approved 503 with every switch off; every never-blocked route is not refused; nothing is refused with every switch on; and it checks the status endpoint. **Before the routes were wired: 22 of 57 failed**, and all the never-blocked cases passed.
+  - `featureSwitches.test.js` covers the cache, last-known values, cold start, the env override, exact messages, the audit transaction, rollback, the reason rules, the guard, the payout guard, and OAuth new and existing accounts. **The 5 payout and OAuth guards failed before they were wired.**
+  - `adminFeatureSwitches.test.js` covers the admin actions.
+- **End to end on the local test DB, through AdminJS's real actions:**
+  - a missing reason is refused;
+  - Switch off `cash_orders` → row off, `updated_by` set, the audit row correct, the guard sees off at once;
+  - the list shows "Effective now";
+  - switch back on;
+  - **AdminJS bundles the new component.**
+- **Verified:** unit 936/936 (58 suites), integration 28/28 (5 suites). No migration, no new dependency.
+- **Docs:** new `docs/KILL_SWITCHES.md` (runbook); FOUND_ISSUES FI-095 fixed; SECRETS_INVENTORY (the optional `FEATURE_*` overrides); checklist L-16 (how to switch cash off for Sunday).
+
 ## 2026-11-26 — Admin panel: saving Flash Closet and products with sizes failed (#96, `fix/admin-panel-jsonb-edits`)
 - **Founder-reported:** saving an edit to the Flash Closet store shows an error.
 - **Found read-only, then reproduced locally** through AdminJS's real edit and new actions against the local test DB:
