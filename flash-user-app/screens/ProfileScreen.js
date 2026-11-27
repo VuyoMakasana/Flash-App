@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, ScrollView, Alert, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet, ScrollView, Alert, ActivityIndicator, Linking, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useFlash } from '../context/FlashContext';
@@ -91,8 +91,11 @@ export default function ProfileScreen() {
           { icon: 'card-outline',    label: 'Saved Cards',     sublabel: 'Manage payment cards', color: '#2563eb', onPress: () => navigation.navigate('SavedCards') },
           { icon: 'people-outline',  label: 'Trusted Drivers', sublabel: 'Your preferred drivers', color: '#059669', onPress: () => navigation.navigate('TrustedDrivers') },
           { icon: 'gift-outline',    label: 'Store Credits',   sublabel: 'Your return credits', color: '#f59e0b', onPress: () => navigation.navigate('StoreCredits') },
-          { icon: 'flash',           label: 'Flash Premium',   sublabel: '25% off delivery fees', color: '#f59e0b', onPress: () => navigation.navigate('Premium') },
-        ].map(item => (
+          // PR E (#104): Premium is a subscription paid outside Apple's in-app
+          // purchase, which App Store rule 3.1.1 doesn't allow, so it's not
+          // shown on iOS. Android is unchanged (the premium switch is off).
+          Platform.OS !== 'ios' && { icon: 'flash', label: 'Flash Premium', sublabel: '25% off delivery fees', color: '#f59e0b', onPress: () => navigation.navigate('Premium') },
+        ].filter(Boolean).map(item => (
           <Pressable key={item.label} style={styles.featureRow} onPress={item.onPress}>
             <View style={[styles.featureIcon, { backgroundColor: item.color + '15' }]}>
               <Ionicons name={item.icon} size={20} color={item.color} />

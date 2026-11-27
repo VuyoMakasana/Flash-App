@@ -12,6 +12,17 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-27, later (PR E, iOS release config, #104).**
+> - **#103 (Step 1) is merged.** The App Store's Expo Go is now SDK 58 and can't run the SDK 54 apps, so both apps go to **TestFlight** once Apple reactivates the founder's developer account.
+> - **PR E (#104) built the release config:**
+>   - `eas.json` channels, the API URL in every profile, `pk_test` removed, submit values as TODOs;
+>   - the founder's icons and the privacy manifest;
+>   - permission texts that say what the apps actually do;
+>   - Google sign-in and Flash Premium hidden on iOS;
+>   - Apple Maps on iOS, and the Expo Go `jsc` workaround removed.
+> - **Steps:** `docs/IOS_RELEASE.md`. The real-money test (L-16) now runs on the day the TestFlight builds install.
+> - Later step 1 ("iOS build config") is now done, apart from the founder's Apple ID email, Team ID and store names (FI-137).
+
 > **Status update, 2026-11-27 (Step 1 for Sunday's test, #102).**
 > - **Done in #102:** driver plans free (FI-127); every charge recorded or refunded (FI-122); refund retries capped at 3 with an alert and a manual retry (FI-123); stale unpaid orders cancelled only on a definite Paystack answer, restocked once (FI-124); the delivery code never reaches the driver (FI-125); Google/Apple link only verified emails (FI-013); the webhook fails closed on a missing or test key (FI-121); the Paystack return page (FI-119); and refunds can be finalized at all (FI-126).
 > - **App side:** driver app only (plans hidden). Ships as an EAS update for Expo Go (TESTING.md).

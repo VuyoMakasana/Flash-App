@@ -42,32 +42,58 @@ module.exports = () => ({
       supportsTablet: false,
       bundleIdentifier: 'co.za.flash.driverapp',
       usesAppleSignIn: true,
-      // DIAGNOSTIC — testing period only, revert once resolved. Every
-      // published EAS Update (Hermes bytecode) blank-screens in Expo Go on
-      // a real iPhone 11 — no error, no crash, confirmed reproducible on
-      // every publish tonight — while the exact same source served as
-      // plain JS through a live Metro tunnel works correctly every time.
-      // Per Expo's own docs/changelog: Hermes-bytecode-over-EAS-Update
-      // support requires "the latest version of Expo Go," and an
-      // incompatible Hermes VM version between the bytecode and the
-      // installed Expo Go binary causes exactly this failure mode (native
-      // bytecode-format mismatch, below the JS layer — nothing for our
-      // ErrorBoundary or Sentry to ever catch). Expo Go's SDK 55 build has
-      // been stuck in Apple App Store review since at least May 2026
-      // (confirmed via Expo's changelog), so the installed client is
-      // plausibly not current. Forcing jsc (JavaScriptCore, not Hermes)
-      // for iOS makes this publish plain JS instead of Hermes bytecode —
-      // sidesteps the failure class entirely if this diagnosis is right.
-      // Not yet confirmed on-device — this is the test.
-      jsEngine: 'jsc',
+      // PR E (#104): the founder's 1024x1024 App Store icon (opaque RGB, no
+      // alpha). iOS only; Android and the splash keep ./assets/flash-logo.png.
+      icon: './assets/icon-ios-1024.png',
+      // PR E (#104): Apple's required-reason APIs, copied from the libraries'
+      // own PrivacyInfo.xcprivacy files in node_modules (scanned 2026-11-27,
+      // expo 54.0.37, react-native 0.81.5). Re-scan when dependencies change.
+      privacyManifests: {
+        NSPrivacyAccessedAPITypes: [
+          {
+            // react-native, async-storage, expo-application, react-native-maps (C617.1);
+            // expo-file-system (0A2A.1, 3B52.1)
+            NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryFileTimestamp',
+            NSPrivacyAccessedAPITypeReasons: ['C617.1', '0A2A.1', '3B52.1'],
+          },
+          {
+            // react-native, expo-constants, expo-localization, expo-notifications,
+            // expo-system-ui, expo-task-manager (CA92.1); Google Maps SDK in react-native-maps (1C8F.1)
+            NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults',
+            NSPrivacyAccessedAPITypeReasons: ['CA92.1', '1C8F.1'],
+          },
+          {
+            // react-native (boost), expo-device, react-native-maps
+            NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategorySystemBootTime',
+            NSPrivacyAccessedAPITypeReasons: ['35F9.1'],
+          },
+          {
+            // expo-file-system (E174.1, 85F4.1), react-native-maps (85F4.1)
+            NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryDiskSpace',
+            NSPrivacyAccessedAPITypeReasons: ['E174.1', '85F4.1'],
+          },
+        ],
+      },
+
+      // PR E (#104): the Expo Go "DIAGNOSTIC" jsEngine: 'jsc' override is
+      // removed. Real builds use Hermes, Expo SDK 54's default engine, and
+      // Expo Go is no longer used (the store's Expo Go is SDK 58).
       config: {
         googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
       },
       infoPlist: {
         NSCameraUsageDescription: 'Flash Driver needs camera access to photograph documents for account verification, and to take pickup/drop-off proof photos for each delivery.',
         NSPhotoLibraryUsageDescription: 'Flash Driver needs photo library access to upload profile and document photos.',
-        NSLocationWhenInUseUsageDescription: 'Flash Driver uses your location so customers can track their deliveries.',
-        NSLocationAlwaysAndWhenInUseUsageDescription: 'Flash Driver uses your location in the background to update your delivery position while on a job.',
+        // PR E (#104): honest texts. Background tracking runs whenever the
+        // driver is online and stops on going offline or logging out
+        // (context/DriverContext.js setOnline / logout). The app itself only
+        // needs 'location'; 'fetch' stays because expo-task-manager's own
+        // config plugin always adds it (the location task runs on that
+        // library), and changing a library's requirement untested is riskier
+        // than an unused background mode.
+        NSLocationWhenInUseUsageDescription: 'Flash Driver uses your location while you are online to offer you nearby deliveries and show customers where their delivery is.',
+        NSLocationAlwaysAndWhenInUseUsageDescription: 'Flash Driver uses your location in the background while you are online, so we can offer you nearby deliveries and customers can follow the delivery you are on. It stops when you go offline.',
+        NSLocationAlwaysUsageDescription: 'Flash Driver uses your location in the background while you are online, so we can offer you nearby deliveries and customers can follow the delivery you are on. It stops when you go offline.',
         UIBackgroundModes: ['location', 'fetch'],
         ITSAppUsesNonExemptEncryption: false,
       },
@@ -95,7 +121,17 @@ module.exports = () => ({
       },
     },
     plugins: [
-      'expo-location',
+      [
+        'expo-location',
+        {
+          // Same texts as infoPlist above, so the plugin never falls back to
+          // its generic "Allow $(PRODUCT_NAME) to access your location".
+          locationWhenInUsePermission: 'Flash Driver uses your location while you are online to offer you nearby deliveries and show customers where their delivery is.',
+          locationAlwaysAndWhenInUsePermission: 'Flash Driver uses your location in the background while you are online, so we can offer you nearby deliveries and customers can follow the delivery you are on. It stops when you go offline.',
+          locationAlwaysPermission: 'Flash Driver uses your location in the background while you are online, so we can offer you nearby deliveries and customers can follow the delivery you are on. It stops when you go offline.',
+          isIosBackgroundLocationEnabled: true,
+        },
+      ],
       'expo-notifications',
       'expo-document-picker',
       'expo-image-picker',

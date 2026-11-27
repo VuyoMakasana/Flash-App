@@ -334,7 +334,11 @@ export default function TrackingScreen() {
           <MapView
             ref={mapRef}
             style={StyleSheet.absoluteFillObject}
-            provider={PROVIDER_GOOGLE}
+            // PR E (#104): Google Maps on Android, Apple Maps on iOS. On iOS,
+            // PROVIDER_GOOGLE only works if the Google Maps SDK was built in
+            // (GOOGLE_MAPS_API_KEY set in EAS at build time); Apple Maps
+            // needs no key, so the iOS tracking map can't break on it.
+            provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
             initialRegion={defaultRegion}
             showsUserLocation
             showsMyLocationButton={false}

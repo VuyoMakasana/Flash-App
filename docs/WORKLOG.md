@@ -4,6 +4,25 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-27 — PR E: iOS release config for TestFlight (#104, `launch/ios-release-config`)
+- **Why:** the App Store's Expo Go is SDK 58; the SDK 54 apps go to TestFlight instead.
+- **`eas.json` (both apps):** channels `production` and `preview`; `https://api.flashdelivery.co.za` in every profile; `pk_test` removed (FI-120); `submit.production.ios` values are `TODO_FOUNDER_…`, with no `ascAppId` (FI-137).
+- **`app.config.js`:**
+  - **iOS icons:** the founder's 1024×1024 opaque PNGs;
+  - **`ios.privacyManifests`:** the union of the libraries' own `PrivacyInfo.xcprivacy` reasons (scanned in `node_modules`);
+  - **user app:** while-using location only (FI-133);
+  - **driver app:** honest background-location text (FI-134); the `jsc` workaround removed (FI-135).
+- **Code:**
+  - Google sign-in not loaded on iOS, in both apps (FI-131);
+  - Flash Premium hidden on iOS (FI-132);
+  - the tracking map uses Apple Maps on iOS (FI-136);
+  - `bank.js` now says "Your earnings will be paid to this account automatically."
+- **Checked:**
+  - `expo config --type introspect` for both apps (the final Info.plist and privacy manifest);
+  - both apps bundle for iOS;
+  - lint of the changed driver files.
+- **Docs:** new `docs/IOS_RELEASE.md`; L-16 moved to the day the TestFlight builds install; TESTING.md points there.
+
 ## 2026-11-27 — Step 1: Sunday's real-money fixes (#102, `launch/step1-sunday-fixes`)
 - **Audit first:** `AUDIT_REPORT.md` + `audit/` (verdict NOT READY; kept uncommitted until the founder confirms the repo is private).
 - **Driver plans free** (FI-127): the plan check is gone from go-online and available orders; the driver app shows no plans.
