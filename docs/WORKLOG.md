@@ -7,6 +7,8 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 ## 2026-11-27 — Step 1: Sunday's real-money fixes (#102, `launch/step1-sunday-fixes`)
 - **Audit first:** `AUDIT_REPORT.md` + `audit/` (verdict NOT READY; kept uncommitted until the founder confirms the repo is private).
 - **Driver plans free** (FI-127): the plan check is gone from go-online and available orders; the driver app shows no plans.
+- **Plan purchase switched off** (founder, 27 Nov): `POST /api/subscriptions/driver/purchase` answers 410 to every request and takes no payment.
+- **Founder's production check (27 Nov, read-only):** the only rule on `payments`/`payment_refunds` is UNIQUE (`provider_transaction_id`); 0 saved cards, 0 pending orders with a reference, 0 cancelled-but-paid orders, 0 refunds. So no test-mode leftovers, and the new `stray` statuses meet no constraint.
 - **Every charge recorded or refunded** (FI-122): new `services/orderChargeService.js`, shared by the webhook and the reconciliation job. Paying an older Paystack page now pays the order; a late, duplicate, wrong-amount or wrong-reference charge is recorded as `stray`, refunded in full, and emailed to admins.
 - **Retry caps** (FI-123, FI-124): unpaid card orders are cancelled after 60 min only on a definite Paystack answer, and restocked once (charge.failed no longer restocks). Refunds: 3 automatic attempts, then an admin email and a manual **Retry refund** in the admin panel.
 - **Delivery code** (FI-125): stripped from every JSON response.
