@@ -99,6 +99,10 @@ $env:EXPO_PUBLIC_API_BASE_URL = "https://api.flashdelivery.co.za"   # REQUIRED, 
 npx eas-cli update --channel production --platform ios --message "what changed"
 Remove-Item Env:EXPO_PUBLIC_API_BASE_URL
 ```
+- **Check your local `.env` first.** `eas update` bundles on your computer, and Expo also reads the app folder's local `.env` (git-ignored, never uploaded to EAS builds).
+  - On 27 Nov a local bundle of the customer app came out with `https://flash-app-hplc.onrender.com` even with the variable above set, so that `.env` sets the old address.
+  - Open `flash-user-app\.env` (and `flash-driver-app\.env`) and make `EXPO_PUBLIC_API_BASE_URL=https://api.flashdelivery.co.za`, or delete that line.
+  - TestFlight builds are not affected: they use `eas.json`.
 - Publish from an up-to-date `main`, after the backend change it needs is deployed.
 - **How it reaches phones:** the app downloads the update on launch and uses it **the next time it's opened**, so close and reopen the app twice to be sure.
 - **When a new build is needed instead:** a new native module, a permission or other `app.config.js` change, or an SDK change. For these, raise `version` in `app.config.js` (e.g. 1.0.0 → 1.0.1), because updates are tied to the version (`runtimeVersion: appVersion`). Then repeat steps 3–5.
