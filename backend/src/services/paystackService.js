@@ -2,6 +2,7 @@ const https = require("https");
 const crypto = require("crypto");
 const pool = require("../config/database");
 const { getOptional, isProd } = require("../config/env");
+const { paymentReturnUrl } = require("../routes/paymentReturnRoutes");
 
 class PaystackService {
   constructor() {
@@ -192,7 +193,7 @@ class PaystackService {
         amount: amountInCents,
         currency: "ZAR",
         reference,
-        callback_url: `${callbackUrl}/payment/callback`,
+        callback_url: paymentReturnUrl(), // Step 1 (#102), FI-119
         metadata: {
           orderId,
           userId,
@@ -242,7 +243,7 @@ class PaystackService {
       amount: amountInCents,
       currency: "ZAR",
       reference: reference || `flash_${metadata.type || "charge"}_${Date.now()}`,
-      callback_url: `${callbackUrl}/payment/callback`,
+      callback_url: paymentReturnUrl(), // Step 1 (#102), FI-119
       metadata,
     });
 

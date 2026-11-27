@@ -104,6 +104,7 @@ const sosRoutes = require("./routes/sosRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
 const statusRoutes = require("./routes/statusRoutes");
 const { createHealthRouter } = require("./routes/healthRoutes");
+const { createPaymentReturnRouter } = require("./routes/paymentReturnRoutes");
 const { realClientIp } = require("./middleware/clientIp");
 const { createCronRunner, dailySast } = require("./jobs/cronRunner");
 
@@ -199,6 +200,10 @@ function createApp({ withCronJobs = false } = {}) {
 // keep-awake pings add no log noise and the X-Health-Token header can never
 // be logged. See src/routes/healthRoutes.js.
   app.use(createHealthRouter({ pool }));
+
+// Step 1 (#102), FI-119: the static page Paystack returns the customer's
+// browser to after paying. See src/routes/paymentReturnRoutes.js.
+  app.use(createPaymentReturnRouter());
 
 // Logging — structured JSON, with a request ID (req.id) attached to every
 // log line for a given request, including anything logged via req.log
