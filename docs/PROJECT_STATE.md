@@ -12,6 +12,18 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-27 (Step 1 for Sunday's test, #102).**
+> - **Done in #102:** driver plans free (FI-127); every charge recorded or refunded (FI-122); refund retries capped at 3 with an alert and a manual retry (FI-123); stale unpaid orders cancelled only on a definite Paystack answer, restocked once (FI-124); the delivery code never reaches the driver (FI-125); Google/Apple link only verified emails (FI-013); the webhook fails closed on a missing or test key (FI-121); the Paystack return page (FI-119); and refunds can be finalized at all (FI-126).
+> - **App side:** driver app only (plans hidden). Ships as an EAS update for Expo Go (TESTING.md).
+> - **Later steps, not in #102** (from `AUDIT_REPORT.md` §9, in order):
+>   1. **iOS build config** (PR E plan): `eas.json` channels, URL and submit values, icons, Google iOS scheme, privacy manifests, permission strings. Waiting until Apple reactivates the founder's developer account.
+>   2. **App Store review items:** hide Premium and the Feed on iOS, no demo products, the reviewer accounts and path, account deletion in both apps, pending-driver login.
+>   3. **Store portal live orders** (FI-040): store socket auth, a `store:<id>` room, a sound, an order-detail view.
+>   4. **The `migrate.js` production guard** (FI-005/FI-060).
+>   5. **Driver payouts:** the payout schedule (founder decision), then FI-010/011/012 before `driver_payouts` is switched on.
+>   6. **Partner stores:** Paystack split payments (design A) and a Flash Closet-only guard until then.
+>   7. **Email sign-up verification** (FI-015): only if the founder's test shows it's broken.
+
 > **Status update, 2026-11-26, later (PR D, user app, #100).**
 > - **PR #99 (kill switches) is merged.** PR D shows card, hides cash, and confirms payment when the customer returns from Paystack. It's JS-only.
 > - **The user app has no iOS build; iPhone testers use Expo Go.** PR D ships as an EAS update (TESTING.md). Check first that the store's Expo Go still opens SDK 54 (FI-117), and set `EXPO_PUBLIC_API_BASE_URL` when publishing (FI-118).

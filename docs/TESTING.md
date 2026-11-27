@@ -33,23 +33,27 @@ New schema changes are standalone files in `backend/src/db/migrations/` (from v4
 
 `bash scripts/schema-baseline/schema_check.sh` builds a fresh database from `migrate.js` in its own throwaway local container and compares it with the committed production baseline (`docs/SCHEMA_BASELINE.md` §10).
 
-## Publishing the user app to iPhone testers (Expo Go, EAS Update)
-The user app has **no iOS build**. iPhone testers open it in **Expo Go**, from a published update (FI-117). A JS-only change such as PR D (#100) ships by publishing an update; no build is needed. A change that adds a native module needs a new build instead.
+## Publishing to iPhone testers (Expo Go, EAS Update)
+Neither app has an iOS build yet. iPhone testers open each app in **Expo Go**, from a published update (FI-117). A JS-only change ships by publishing an update; a change that adds a native module needs a build instead.
+
+**What to publish for #102 (Step 1):** the **driver app** only (plans hidden, FI-127). The user app has no #102 change, so PR D's update is still current.
 
 **Before publishing:**
+- the backend change it needs must be **merged and deployed** first;
 - check on your iPhone that the **current** tester link still opens in Expo Go (FI-117: SDK 54 support in the store's Expo Go);
-- the backend must be deployed with the change it needs.
+- publish from an up-to-date `main`, never from a branch.
 
-From `flash-user-app/`, in PowerShell, on an up-to-date `main`:
+From the app's folder (`flash-driver-app/` or `flash-user-app/`), in PowerShell:
 
 ```powershell
 $env:EXPO_PUBLIC_API_BASE_URL = "https://api.flashdelivery.co.za"   # REQUIRED (FI-118), or the update points at localhost
-npx eas-cli update --branch preview --platform ios --message "Card payments, cash hidden, Paystack return handled (#100)"
+npx eas-cli update --branch preview --platform ios --message "Driver plans are free; Buy Plan hidden (#102)"
 Remove-Item Env:EXPO_PUBLIC_API_BASE_URL
 ```
 
 - **The link:** use the **https** link it prints (`https://u.expo.dev/update/<id>`), **never `exp://`**. A new update means a new link to send testers.
-- **The branch:** any EAS branch name works, because testers open a per-update link. I couldn't see which branch past tester links used; `preview` is a suggestion, not a convention found in the repo.
+- **The branch:** any EAS branch name works, because testers open a per-update link. `preview` is a suggestion, not a convention found in the repo.
 - **Who can open it:** testers must be invited to the `vuyomakasana` Expo organization (Viewer), or Expo Go answers 403.
-- **Check on the device:** log in; the products load (so it's not the localhost/demo fallback); the payment screen shows **Card only**.
-
+- **Check on the device:**
+  - **driver app:** log in; no "Buy Plan", plan banner or "My Plan" anywhere; **Go online** works inside Gqeberha;
+  - **user app:** log in; the products load (so it's not the localhost/demo fallback); the payment screen shows **Card only**.
