@@ -18,9 +18,15 @@ import api from '../services/api';
 // below already used this exact defensive pattern; Google Sign-In never
 // did, despite an identical native-module dependency.
 let GoogleSignin = null, GoogleSigninButton = null, statusCodes = null;
-try {
-  ({ GoogleSignin, GoogleSigninButton, statusCodes } = require('@react-native-google-signin/google-signin'));
-} catch (_) {}
+// PR E (#104): Google sign-in is hidden on iOS for launch (Apple and email
+// stay). iOS needs Google's own URL scheme (iosUrlScheme) configured, and
+// without it signIn() crashes the app, so on iOS the module isn't loaded at
+// all: no configure(), no button, no handler. Android is unchanged.
+if (Platform.OS !== 'ios') {
+  try {
+    ({ GoogleSignin, GoogleSigninButton, statusCodes } = require('@react-native-google-signin/google-signin'));
+  } catch (_) {}
+}
 
 // expo-apple-authentication: only available on iOS 13+
 let AppleAuth = null;

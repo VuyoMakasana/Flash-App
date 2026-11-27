@@ -12,35 +12,35 @@
         "gradleCommand": ":app:assembleDebug"
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://flash-app-hplc.onrender.com"
+        "EXPO_PUBLIC_API_BASE_URL": "https://api.flashdelivery.co.za"
       }
     },
     "preview": {
+      "channel": "preview",
       "distribution": "internal",
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://flash-app-hplc.onrender.com"
+        "EXPO_PUBLIC_API_BASE_URL": "https://api.flashdelivery.co.za"
       }
     },
     "production": {
+      "channel": "production",
       "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"
       },
       "env": {
-        "EXPO_PUBLIC_API_BASE_URL": "https://flash-app-hplc.onrender.com",
-        "PAYSTACK_PUBLIC_KEY": "pk_test_9db77a6ebc076fa07d4b3b434bb403ad0851aea9"
+        "EXPO_PUBLIC_API_BASE_URL": "https://api.flashdelivery.co.za"
       }
     }
   },
   "submit": {
     "production": {
       "ios": {
-        "appleId": "YOUR_APPLE_ID_EMAIL",
-        "ascAppId": "YOUR_DRIVER_APP_STORE_CONNECT_APP_ID",
-        "appleTeamId": "YOUR_APPLE_TEAM_ID"
+        "appleId": "TODO_FOUNDER_APPLE_ID_EMAIL",
+        "appleTeamId": "TODO_FOUNDER_APPLE_TEAM_ID"
       },
       "android": {
         "serviceAccountKeyPath": "./google-play-key.json",

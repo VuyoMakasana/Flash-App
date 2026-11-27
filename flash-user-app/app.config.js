@@ -34,6 +34,39 @@ module.exports = () => ({
     ios: {
       supportsTablet: false,
       bundleIdentifier: 'co.za.flash.userapp',
+      // PR E (#104): the founder's 1024x1024 App Store icon (opaque RGB, no
+      // alpha). iOS only; Android keeps ./assets/icon.png.
+      icon: './assets/icon-ios-1024.png',
+      // PR E (#104): Apple's required-reason APIs, copied from the libraries'
+      // own PrivacyInfo.xcprivacy files in node_modules (scanned 2026-11-27,
+      // expo 54.0.37, react-native 0.81.5). Re-scan when dependencies change.
+      privacyManifests: {
+        NSPrivacyAccessedAPITypes: [
+          {
+            // react-native, async-storage, expo-application, react-native-maps (C617.1);
+            // expo-file-system (0A2A.1, 3B52.1)
+            NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryFileTimestamp',
+            NSPrivacyAccessedAPITypeReasons: ['C617.1', '0A2A.1', '3B52.1'],
+          },
+          {
+            // react-native, expo-constants, expo-localization, expo-notifications,
+            // expo-system-ui (CA92.1); Google Maps SDK in react-native-maps (1C8F.1)
+            NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults',
+            NSPrivacyAccessedAPITypeReasons: ['CA92.1', '1C8F.1'],
+          },
+          {
+            // react-native (boost), expo-device, react-native-maps
+            NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategorySystemBootTime',
+            NSPrivacyAccessedAPITypeReasons: ['35F9.1'],
+          },
+          {
+            // expo-file-system (E174.1, 85F4.1), react-native-maps (85F4.1)
+            NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryDiskSpace',
+            NSPrivacyAccessedAPITypeReasons: ['E174.1', '85F4.1'],
+          },
+        ],
+      },
+
       usesAppleSignIn: true,
       config: {
         googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY,
@@ -41,8 +74,10 @@ module.exports = () => ({
       infoPlist: {
         NSCameraUsageDescription: 'Flash needs camera access to take photos of your documents.',
         NSPhotoLibraryUsageDescription: 'Flash needs access to your photo library so you can upload a profile photo.',
-        NSLocationWhenInUseUsageDescription: 'Flash uses your location to find nearby stores and track your delivery.',
-        NSLocationAlwaysUsageDescription: 'Flash uses your location to track your delivery in real-time.',
+        // PR E (#104): while-using only. The user app never asks for
+        // background ("Always") location; the expo-location plugin below
+        // is told to leave those keys out.
+        NSLocationWhenInUseUsageDescription: 'Flash uses your location to check your delivery address is in our area and to show nearby stores.',
         ITSAppUsesNonExemptEncryption: false,
       },
     },
@@ -65,7 +100,16 @@ module.exports = () => ({
       },
     },
     plugins: [
-      'expo-location',
+      [
+        'expo-location',
+        {
+          // false removes the key (the plugin otherwise adds all three with
+          // a generic default text, whatever infoPlist above says).
+          locationAlwaysAndWhenInUsePermission: false,
+          locationAlwaysPermission: false,
+          locationWhenInUsePermission: 'Flash uses your location to check your delivery address is in our area and to show nearby stores.',
+        },
+      ],
       'expo-notifications',
       'expo-apple-authentication',
       'expo-secure-store',

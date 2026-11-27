@@ -75,7 +75,7 @@ export default function BankAccountScreen() {
       setPassword('');
       setStep('done');
       setExistingAccount({ account_name: verifiedName, bank_name: selectedBank.name, account_number: accountNumber });
-      Alert.alert('Bank Account Saved', 'You can now request payouts to this account.');
+      Alert.alert('Bank Account Saved', 'Your earnings will be paid to this account automatically.');
     } catch (e) {
       Alert.alert('Save Failed', e.message || 'Could not save bank account.');
     } finally {
