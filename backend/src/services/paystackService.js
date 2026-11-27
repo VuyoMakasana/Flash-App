@@ -2,6 +2,7 @@ const https = require("https");
 const crypto = require("crypto");
 const pool = require("../config/database");
 const { getOptional, isProd } = require("../config/env");
+const { paymentReturnUrl } = require("../routes/paymentReturnRoutes");
 
 class PaystackService {
   constructor() {
@@ -192,7 +193,7 @@ class PaystackService {
         amount: amountInCents,
         currency: "ZAR",
         reference,
-        callback_url: `${callbackUrl}/payment/callback`,
+        callback_url: paymentReturnUrl(), // Step 1 (#102), FI-119
         metadata: {
           orderId,
           userId,
@@ -242,7 +243,7 @@ class PaystackService {
       amount: amountInCents,
       currency: "ZAR",
       reference: reference || `flash_${metadata.type || "charge"}_${Date.now()}`,
-      callback_url: `${callbackUrl}/payment/callback`,
+      callback_url: paymentReturnUrl(), // Step 1 (#102), FI-119
       metadata,
     });
 
@@ -333,6 +334,30 @@ class PaystackService {
       providerAmount: paystackRes?.data?.amount ?? null,
       providerCurrency: paystackRes?.data?.currency ?? null,
       awaitingWebhook: order.payment_status !== "paid",
+    };
+  }
+
+  // Step 1 (#102): a strict read of a transaction's status for the
+  // reconciliation job. Unlike verifyPayment, it never falls back to the
+  // database: `definite` is true only when Paystack itself answered with a
+  // final status. A network error, a timeout, an unexpected reply or an
+  // in-flight status ('ongoing', 'pending', 'processing', 'queued') is NOT
+  // definite, and callers must never cancel an order on it.
+  async fetchTransactionStatus(reference) {
+    let res;
+    try {
+      res = await this.request("GET", `/transaction/verify/${encodeURIComponent(reference)}`);
+    } catch (err) {
+      return { definite: false, status: null, error: err.message };
+    }
+    const status = res?.status === true ? res?.data?.status || null : null;
+    return {
+      definite: ["success", "failed", "abandoned", "reversed"].includes(status),
+      status,
+      transactionId: res?.data?.id ?? null,
+      amount: res?.data?.amount ?? null,
+      currency: res?.data?.currency ?? null,
+      orderId: res?.data?.metadata?.orderId ?? null,
     };
   }
 

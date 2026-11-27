@@ -43,7 +43,8 @@ async function verifyGoogleToken(idToken, expectedAudiences) {
             email: payload.email,
             name: payload.name,
             picture: payload.picture,
-            emailVerified: payload.email_verified === 'true',
+            // tokeninfo sends the string "true"; accept a boolean too (#102).
+            emailVerified: payload.email_verified === 'true' || payload.email_verified === true,
           });
         } catch (e) {
           reject(new Error('Failed to parse Google token response'));

@@ -47,7 +47,7 @@ describe('reconcileMissingRefunds — split-aware retry amount (§2.9)', () => {
 
     await reconcileMissingRefunds();
 
-    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-1', 'user-1', 'reconciliation_retry', null);
+    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-1', 'user-1', 'reconciliation_retry', null, { manual: false });
   });
 
   test('pre_pickup_split mode: retries with the stored customer share, not the full amount', async () => {
@@ -62,7 +62,7 @@ describe('reconcileMissingRefunds — split-aware retry amount (§2.9)', () => {
     await reconcileMissingRefunds();
 
     // 85 + 30 = 115, NOT the full original payment.
-    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-2', 'user-2', 'reconciliation_retry', 115);
+    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-2', 'user-2', 'reconciliation_retry', 115, { manual: false });
   });
 
   test('store_arrival_split mode: also retries with the stored partial amount', async () => {
@@ -76,7 +76,7 @@ describe('reconcileMissingRefunds — split-aware retry amount (§2.9)', () => {
 
     await reconcileMissingRefunds();
 
-    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-3', 'user-3', 'reconciliation_retry', 122);
+    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-3', 'user-3', 'reconciliation_retry', 122, { manual: false });
   });
 
   test('skips a split order whose customer share is genuinely zero (nothing was ever meant to be refunded)', async () => {
@@ -100,7 +100,7 @@ describe('reconcileMissingRefunds — split-aware retry amount (§2.9)', () => {
 
     await reconcileMissingRefunds();
 
-    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-5', 'user-5', 'reconciliation_retry', null);
+    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-5', 'user-5', 'reconciliation_retry', null, { manual: false });
   });
 
   test('one order failing does not stop the others from being retried', async () => {

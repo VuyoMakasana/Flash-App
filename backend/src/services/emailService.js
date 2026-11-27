@@ -358,6 +358,39 @@ async function sendOrderEscalationEmail({ id, order_number, total }, stage) {
   });
 }
 
+// Step 1 (#102): money that needs a human. Sent when a charge was refunded
+// automatically (a late or duplicate payment) or when a refund has failed
+// MAX_AUTOMATIC_REFUND_ATTEMPTS times and automatic retries have stopped.
+// Content is internal only: ids, amounts and the reason, never card data.
+async function sendPaymentAlertEmail({ title, orderId, amount, details = [] }) {
+  const adminEmails = await getAdminEmails();
+  if (!adminEmails.length) {
+    console.warn('[Email] No admin accounts found — skipping payment alert');
+    return null;
+  }
+  const amountText = amount != null ? `R${parseFloat(amount).toFixed(2)}` : 'unknown amount';
+  const lines = [`Order: ${orderId || 'unknown'}`, `Amount: ${amountText}`, ...details];
+  return sendEmail({
+    to:      adminEmails,
+    subject: `Payment alert — ${title}`,
+    text:    `${title}\n\n${lines.join('\n')}\n\nCheck it in the admin panel and in the Paystack dashboard.`,
+    html: `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="font-family:sans-serif;background:#f5f5f5;padding:20px;margin:0">
+  <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:16px;padding:32px;border:2px solid #f59e0b">
+    <h2 style="color:#111827;margin-top:0">${title}</h2>
+    ${lines.map((l) => `<p style="color:#374151;margin:4px 0">${l}</p>`).join('\n    ')}
+    <p style="color:#9ca3af;font-size:12px;border-top:1px solid #f3f4f6;padding-top:16px;margin-bottom:0">
+      Check it in the admin panel and in the Paystack dashboard.
+    </p>
+  </div>
+</body>
+</html>`,
+  });
+}
+
 async function sendOrderMissedEmail({ id, order_number, total }, stage) {
   const adminEmails = await getAdminEmails();
   if (!adminEmails.length) {
@@ -669,6 +702,7 @@ module.exports = {
   TRACKED_EMAIL_KINDS,
   sendPasswordResetEmail, sendEmailVerificationEmail, sendReturnAwaitingReviewEmail,
   sendSosAlertEmail, sendOrderEscalationEmail, sendOrderMissedEmail, sendMarketingLeadEmail,
+  sendPaymentAlertEmail,
   sendStorePasswordResetEmail, sendStoreWelcomeEmail,
   sendStorePayoutDestinationChangedEmail,
 };

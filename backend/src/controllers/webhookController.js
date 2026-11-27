@@ -13,13 +13,13 @@ const crypto  = require('crypto');
 const pool    = require('../config/database');
 const { getOptional, isProd } = require('../config/env');
 const Payment = require('../models/Payment');
-const Order = require('../models/Order');
 const Subscription = require('../models/Subscription');
 const Boost = require('../models/Boost');
 const RefundService = require('../services/refundService');
 const paystackService = require('../services/paystackService');
 const { updateOrderStatus, notifyAdminNewOrderPendingAcceptance } = require('../services/orderStateMachineService');
 const PayoutService               = require('../services/payoutService');
+const { applyOrderCharge } = require('../services/orderChargeService');
 const { isClosedNow, getNextOpenTime } = require('../services/operatingHoursService');
 
 class WebhookController {
@@ -28,9 +28,15 @@ class WebhookController {
     try {
       const secretKey = getOptional('PAYSTACK_SECRET_KEY', 'webhook');
 
-      if (!secretKey && isProd) {
-        console.error('[Webhook] CRITICAL: Cannot verify Paystack webhooks without PAYSTACK_SECRET_KEY');
-        return res.status(500).send('Webhook secret not configured');
+      // Step 1 (#102): fail closed in production. With no key the signature
+      // can't be checked; with a TEST key, test-mode events (which anyone
+      // with Flash's test dashboard can trigger) would verify as genuine.
+      // 503 tells Paystack to retry, so nothing is lost once the key is fixed.
+      if (isProd && (!secretKey || secretKey.startsWith('sk_test_'))) {
+        console.error(
+          `[Webhook] CRITICAL: refusing Paystack webhook: PAYSTACK_SECRET_KEY is ${secretKey ? 'a TEST key' : 'missing'} in production`,
+        );
+        return res.status(503).send('Webhook verification unavailable');
       }
 
       if (!Buffer.isBuffer(req.body)) {
@@ -130,87 +136,20 @@ class WebhookController {
       await Payment.saveCard(data.metadata.userId, auth).catch(() => {});
     }
 
-    const client = await pool.connect();
+    // Step 1 (#102): recorded against the order, or refunded in full with an
+    // admin alert. Never a charge with nothing recorded (orderChargeService).
+    const applied = await applyOrderCharge({
+      orderId,
+      reference:     data.reference,
+      transactionId: data.id,
+      amount:        data.amount,
+      currency:      data.currency,
+    }, { eventId: event.id, eventType: event.event || 'charge.success', source: 'webhook' });
+
+    if (applied.outcome !== 'paid') return;
+    const userId = applied.userId;
+
     try {
-      await client.query('BEGIN');
-
-      // Idempotency: insert event ID within the transaction so a rollback also
-      // removes the marker, allowing safe retries on processing failures.
-      if (event.id) {
-        try {
-          await client.query(
-            `INSERT INTO webhook_events (paystack_event_id, event_type) VALUES ($1, $2)`,
-            [String(event.id), event.event || 'unknown'],
-          );
-        } catch (dupErr) {
-          if (dupErr.code === '23505') {
-            await client.query('ROLLBACK');
-            console.log(`[Webhook] Duplicate event ${event.id} — already processed, skipping`);
-            return;
-          }
-          throw dupErr;
-        }
-      }
-
-      const orderCheck = await client.query(
-        `SELECT id, payment_status, total FROM orders WHERE id = $1 FOR UPDATE`,
-        [orderId],
-      );
-
-      if (!orderCheck.rows.length) {
-        await client.query('ROLLBACK');
-        return;
-      }
-
-      if (orderCheck.rows[0].payment_status === 'paid') {
-        await client.query('ROLLBACK');
-        return;
-      }
-
-      // M8 (#94): only mark the order paid if Paystack collected exactly the
-      // order total, in rand. A mismatch is never accepted: the order stays
-      // unpaid (the idempotency marker rolls back with it) and is logged as
-      // CRITICAL for a human. reconcilePendingPayments applies the same check.
-      if (!paystackService.amountMatchesOrder(data, orderCheck.rows[0].total)) {
-        await client.query('ROLLBACK');
-        console.error(
-          `[Webhook] CRITICAL: charge.success amount or currency does not match order ${orderId}: `
-          + `paystack=${data?.amount} ${data?.currency || 'no-currency'}, order total=${orderCheck.rows[0].total} ZAR, `
-          + `reference=${data?.reference}. The order was NOT marked paid.`,
-        );
-        return;
-      }
-
-      const result = await client.query(
-        `UPDATE orders
-         SET payment_status = 'paid', payment_method = 'card',
-             delivery_payment_status = 'pending_driver', store_paid = true, updated_at = NOW()
-         WHERE id = $1 AND paystack_reference = $2
-         RETURNING user_id`,
-        [orderId, data.reference],
-      );
-
-      if (!result.rows.length) {
-        await client.query('ROLLBACK');
-        return;
-      }
-
-      const userId = result.rows[0].user_id;
-
-      console.log(
-        `[Webhook] Payment transition pending->paid orderId=${orderId} reference=${data.reference}`,
-      );
-
-      await client.query(
-        `INSERT INTO payments
-           (order_id, user_id, amount, method, provider, provider_transaction_id, status, type)
-         VALUES ($1, $2, $3, 'card', 'paystack', $4, 'paid', 'store')
-         ON CONFLICT (provider_transaction_id) DO NOTHING`,
-        [orderId, userId, data.amount / 100, String(data.id)],
-      );
-
-      await client.query('COMMIT');
-
       try {
         await updateOrderStatus(orderId, 'paid', {
           actorId:   String(event.id || 'paystack'),
@@ -275,11 +214,9 @@ class WebhookController {
       }
 
     } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('[Webhook] handleChargeSuccess error:', err.message);
+      // The payment is already committed; these are the follow-on steps.
+      console.error('[Webhook] handleChargeSuccess follow-up error:', err.message);
       throw err;
-    } finally {
-      client.release();
     }
   }
 
@@ -454,7 +391,7 @@ class WebhookController {
         // signal: a duplicate/stale event affects zero rows and restocks
         // nothing, exactly the same idempotency shape already proven
         // correct for handleChargeSuccess's payment_status='paid' guard.
-        const failResult = await client.query(
+        await client.query(
           `UPDATE orders
            SET payment_status = 'failed', updated_at = NOW()
            WHERE id = $1 AND payment_status <> 'paid' AND payment_status <> 'failed' AND paystack_reference = $2
@@ -462,15 +399,13 @@ class WebhookController {
           [orderId, eventRef],
         );
 
-        // This order never became 'paid' and its status never transitions
-        // to 'cancelled' here (nobody cancelled it — the charge simply
-        // didn't go through), so orderStateMachineService.updateOrderStatus's
-        // own restock hook (F-04) never fires for this path. The stock
-        // this order reserved at create() time must still be released here,
-        // directly, inside this same transaction.
-        if (failResult.rows.length) {
-          await Order.restockItems(orderId, client);
-        }
+        // Step 1 (#102): no restock here any more. A failed card attempt
+        // doesn't end the order: the customer can try again on the same
+        // order, so its items stay reserved (restocking here let the same
+        // item sell twice, audit B-5). Stock comes back exactly once, when
+        // the order is cancelled (updateOrderStatus's 'cancelled' branch),
+        // which for an unpaid order is paymentReconciliationJob's
+        // cancelStalePendingPayments after a definite Paystack answer.
       }
 
       await client.query('COMMIT');

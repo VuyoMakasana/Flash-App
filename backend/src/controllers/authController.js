@@ -21,6 +21,23 @@ const REFRESH_EXPIRY_DAYS = 7;
 
 // ─── SHARED HELPERS ────────────────────────────────────────────────────────
 
+// Step 1 (#102), FI-013: account takeover through Google/Apple sign-in.
+// An existing account is linked to a new Google/Apple identity ONLY when the
+// provider verified the email (in its signed token) AND the Flash account
+// verified it too. An email typed into the request is never used. Drivers
+// have no email verification, so a driver account is never linked by email:
+// the driver signs in with their password.
+function bothEmailsVerified(providerUser, account) {
+  return providerUser.emailVerified === true && account.email_verified === true;
+}
+
+function accountExists(res) {
+  return res.status(409).json({
+    error: 'An account with this email already exists. Please sign in with your email and password.',
+    code: 'ACCOUNT_EXISTS',
+  });
+}
+
 async function issueTokenPair(id, role) {
   const accessToken  = generateToken(id, role);
   const refreshToken = generateRefreshToken();
@@ -319,11 +336,12 @@ class AuthController {
         return res.json({ token: accessToken, refreshToken, user: safe, isNewUser: false });
       }
 
-      // 2. Link to existing email account
+      // 2. Link to existing email account (only if both emails are verified)
       if (googleUser.email) {
         const byEmail = await pool.query('SELECT * FROM users WHERE email = $1', [googleUser.email]);
         if (byEmail.rows.length) {
           const user = byEmail.rows[0];
+          if (!bothEmailsVerified(googleUser, user)) return accountExists(res);
           await pool.query(`UPDATE users SET google_id = $1, updated_at = NOW() WHERE id = $2`, [googleId, user.id]);
           const { accessToken, refreshToken } = await issueTokenPair(user.id, 'user');
           const { password_hash, ...safe } = user;
@@ -385,16 +403,10 @@ class AuthController {
         return res.json({ token: accessToken, refreshToken, driver: safe, isNewDriver: false });
       }
 
+      // Never linked by email: driver emails are not verified (FI-013).
       if (googleUser.email) {
-        const byEmail = await pool.query('SELECT * FROM drivers WHERE email = $1', [googleUser.email]);
-        if (byEmail.rows.length) {
-          const driver = byEmail.rows[0];
-          await pool.query(`UPDATE drivers SET google_id = $1, updated_at = NOW() WHERE id = $2`, [googleId, driver.id]);
-          if (driver.status !== 'approved') return res.status(403).json({ error: 'Still under review.', status: driver.status });
-          const { accessToken, refreshToken } = await issueTokenPair(driver.id, 'driver');
-          const { password_hash, ...safe } = driver;
-          return res.json({ token: accessToken, refreshToken, driver: { ...safe, google_id: googleId }, isNewDriver: false });
-        }
+        const byEmail = await pool.query('SELECT id FROM drivers WHERE email = $1', [googleUser.email]);
+        if (byEmail.rows.length) return accountExists(res);
       }
 
       // Kill switch (L0.5b): a NEW account is a sign-up. Existing accounts
@@ -602,7 +614,9 @@ class AuthController {
 
   // ── Apple Sign In — User ───────────────────────────────────────────────────
   static async appleSignInUser(req, res) {
-    const { identityToken, fullName, email: providedEmail } = req.body;
+    // The request body's `email` is ignored on purpose (FI-013): only the
+    // email inside Apple's signed token is trusted.
+    const { identityToken, fullName } = req.body;
     if (!identityToken) return res.status(400).json({ error: 'Apple identity token required' });
 
     try {
@@ -618,11 +632,12 @@ class AuthController {
         return res.json({ token: accessToken, refreshToken, user: safe, isNewUser: false });
       }
 
-      const email = appleUser.email || providedEmail || null;
+      const email = appleUser.email || null;
       if (email) {
         const byEmail = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         if (byEmail.rows.length) {
           const user = byEmail.rows[0];
+          if (!bothEmailsVerified(appleUser, user)) return accountExists(res);
           await pool.query('UPDATE users SET apple_id = $1, updated_at = NOW() WHERE id = $2', [appleId, user.id]);
           const { accessToken, refreshToken } = await issueTokenPair(user.id, 'user');
           const { password_hash, ...safe } = user;
@@ -659,7 +674,8 @@ class AuthController {
 
   // ── Apple Sign In — Driver ─────────────────────────────────────────────────
   static async appleSignInDriver(req, res) {
-    const { identityToken, fullName, email: providedEmail } = req.body;
+    // The request body's `email` is ignored on purpose (FI-013).
+    const { identityToken, fullName } = req.body;
     if (!identityToken) return res.status(400).json({ error: 'Apple identity token required' });
 
     try {
@@ -679,17 +695,11 @@ class AuthController {
         return res.json({ token: accessToken, refreshToken, driver: safe, isNewDriver: false });
       }
 
-      const email = appleUser.email || providedEmail || null;
+      const email = appleUser.email || null;
+      // Never linked by email: driver emails are not verified (FI-013).
       if (email) {
-        const byEmail = await pool.query('SELECT * FROM drivers WHERE email = $1', [email]);
-        if (byEmail.rows.length) {
-          const driver = byEmail.rows[0];
-          await pool.query('UPDATE drivers SET apple_id = $1, updated_at = NOW() WHERE id = $2', [appleId, driver.id]);
-          if (driver.status !== 'approved') return res.status(403).json({ error: 'Still under review.', status: driver.status });
-          const { accessToken, refreshToken } = await issueTokenPair(driver.id, 'driver');
-          const { password_hash, ...safe } = driver;
-          return res.json({ token: accessToken, refreshToken, driver: { ...safe, apple_id: appleId }, isNewDriver: false });
-        }
+        const byEmail = await pool.query('SELECT id FROM drivers WHERE email = $1', [email]);
+        if (byEmail.rows.length) return accountExists(res);
       }
 
       // Kill switch (L0.5b): a NEW account is a sign-up. Existing accounts

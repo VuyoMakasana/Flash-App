@@ -64,8 +64,10 @@ const { corsMiddleware } = require("./middleware/cors");
 const setupSocket = require("./socket/socketServer");
 const {
   reconcilePendingPayments,
+  cancelStalePendingPayments,
   reconcileStuckRefunds,
   reconcileMissingRefunds,
+  reconcileStrayRefunds,
 } = require("./services/paymentReconciliationJob");
 
 // Import routes
@@ -102,6 +104,8 @@ const sosRoutes = require("./routes/sosRoutes");
 const marketingRoutes = require("./routes/marketingRoutes");
 const statusRoutes = require("./routes/statusRoutes");
 const { createHealthRouter } = require("./routes/healthRoutes");
+const { createPaymentReturnRouter } = require("./routes/paymentReturnRoutes");
+const { stripOrderSecretsMiddleware } = require("./middleware/stripOrderSecrets");
 const { realClientIp } = require("./middleware/clientIp");
 const { createCronRunner, dailySast } = require("./jobs/cronRunner");
 
@@ -192,11 +196,19 @@ function createApp({ withCronJobs = false } = {}) {
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true }));
 
+// Step 1 (#102), audit P0-5: no JSON response ever carries the customer's
+// delivery code inside an order (middleware/stripOrderSecrets.js).
+  app.use(stripOrderSecretsMiddleware);
+
 // Health checks (L0.4, #82): GET /health (liveness, no database) and the
 // token-protected GET /health/db. Mounted BEFORE the request logger, so the
 // keep-awake pings add no log noise and the X-Health-Token header can never
 // be logged. See src/routes/healthRoutes.js.
   app.use(createHealthRouter({ pool }));
+
+// Step 1 (#102), FI-119: the static page Paystack returns the customer's
+// browser to after paying. See src/routes/paymentReturnRoutes.js.
+  app.use(createPaymentReturnRouter());
 
 // Logging — structured JSON, with a request ID (req.id) attached to every
 // log line for a given request, including anything logged via req.log
@@ -338,6 +350,19 @@ let _io = io;
       await reconcileMissingRefunds(io);
     } catch (e) {
       console.warn("[Cron] missing refund reconciliation error:", e.message);
+    }
+    // Step 1 (#102): unpaid card orders with a definite "not paid" answer
+    // from Paystack are cancelled (restocked once); stray charges whose
+    // automatic refund didn't go through are retried (capped).
+    try {
+      await cancelStalePendingPayments(io);
+    } catch (e) {
+      console.warn("[Cron] stale payment cancellation error:", e.message);
+    }
+    try {
+      await reconcileStrayRefunds();
+    } catch (e) {
+      console.warn("[Cron] stray refund reconciliation error:", e.message);
     }
   });
 

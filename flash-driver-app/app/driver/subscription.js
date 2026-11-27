@@ -4,7 +4,7 @@ import {
   Alert, ActivityIndicator, Linking, AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, Redirect } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import driverApi from '../../services/api';
 import analytics from '../../services/analytics';
@@ -58,7 +58,18 @@ const PLANS = [
   },
 ];
 
-export default function SubscriptionScreen() {
+// Step 1 (#102), founder decision 6: driver plans are free, and paid plans
+// must not be sold in the iOS app (App Store rule 3.1.1). Nothing links here
+// any more; if the route is opened anyway it goes straight back to the
+// dashboard. The plan screen below is kept, unused, for a later decision.
+const PLANS_ENABLED = false;
+
+export default function SubscriptionRoute() {
+  if (!PLANS_ENABLED) return <Redirect href="/driver/dashboard" />;
+  return <SubscriptionScreen />;
+}
+
+function SubscriptionScreen() {
   const router = useRouter();
 
   useFocusEffect(useCallback(() => { analytics.screenViewed('Subscription'); }, []));

@@ -4,6 +4,21 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-27 — Step 1: Sunday's real-money fixes (#102, `launch/step1-sunday-fixes`)
+- **Audit first:** `AUDIT_REPORT.md` + `audit/` (verdict NOT READY; kept uncommitted until the founder confirms the repo is private).
+- **Driver plans free** (FI-127): the plan check is gone from go-online and available orders; the driver app shows no plans.
+- **Plan purchase switched off** (founder, 27 Nov): `POST /api/subscriptions/driver/purchase` answers 410 to every request and takes no payment.
+- **Founder's production check (27 Nov, read-only):** the only rule on `payments`/`payment_refunds` is UNIQUE (`provider_transaction_id`); 0 saved cards, 0 pending orders with a reference, 0 cancelled-but-paid orders, 0 refunds. So no test-mode leftovers, and the new `stray` statuses meet no constraint.
+- **Every charge recorded or refunded** (FI-122): new `services/orderChargeService.js`, shared by the webhook and the reconciliation job. Paying an older Paystack page now pays the order; a late, duplicate, wrong-amount or wrong-reference charge is recorded as `stray`, refunded in full, and emailed to admins.
+- **Retry caps** (FI-123, FI-124): unpaid card orders are cancelled after 60 min only on a definite Paystack answer, and restocked once (charge.failed no longer restocks). Refunds: 3 automatic attempts, then an admin email and a manual **Retry refund** in the admin panel.
+- **Delivery code** (FI-125): stripped from every JSON response.
+- **Account takeover** (FI-013): link only when both emails are verified; drivers never linked by email; Apple's body email ignored.
+- **Cash** (L-16): a test proves a cash order is refused server-side with `cash_orders` off, with no database write.
+- **Webhook fail-closed** (FI-121) and the **return page** `/payment/return` (FI-119).
+- **Found while testing on real Postgres** (FI-126): `finalizeRefund` had never worked (two SQL errors), so no order was ever marked refunded. Fixed.
+- **Tests:** new unit tests for each item, plus `tests/integration/paymentRecording.test.js` on the local test database. Paystack was never called.
+- **Not done:** email verification (FI-015), waiting for the founder's test; everything in PROJECT_STATE's "Later steps".
+
 ## 2026-11-26 — PR D: the user app shows card, hides cash, handles the return from Paystack (#100, `launch/user-app-card-payments`)
 - **`screens/PaymentScreen.js`:**
   - **card only**. Cash is hidden, because today it collects the whole total, items included (FI-092); the `cash_orders` switch refuses it server-side too.

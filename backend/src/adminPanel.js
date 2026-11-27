@@ -35,6 +35,9 @@ const {
   rejectPendingAcceptance,
   markReadyForPickup,
 } = require('./services/orderStateMachineService');
+// Step 1 (#102): manual refund retries past the automatic cap.
+const RefundService = require('./services/refundService');
+const { manualRetryOrderRefund } = require('./services/paymentReconciliationJob');
 const SosAlert = require('./models/SosAlert');
 const ChatReport = require('./models/ChatReport');
 const Inventory = require('./models/Inventory');
@@ -544,6 +547,9 @@ const PAYMENT_STATUS_VALUES = [
   { value: 'pending_cash', label: 'Pending Cash' },
   { value: 'paid', label: 'Paid' },
   { value: 'failed', label: 'Failed' },
+  // Step 1 (#102): an extra or late payment that is refunded automatically.
+  { value: 'stray', label: 'Extra payment, refund due' },
+  { value: 'stray_refunded', label: 'Extra payment, refunded' },
 ];
 
 const PAYMENT_REFUND_STATUS_VALUES = [
@@ -1329,6 +1335,30 @@ function buildResources(db, components = {}) {
                 return { record: record.toJSON(currentAdmin), notice: { message: 'Order marked ready — driver matching started.', type: 'success' } };
               },
             },
+            // Step 1 (#102), founder rule: refunds stop retrying automatically
+            // after 3 failures (an admin is alerted). This is the manual
+            // retry, for a cancelled card order whose money hasn't gone back.
+            // It uses the same amount rules as the automatic retry (a split
+            // cancellation refunds only the customer's share).
+            retryRefund: {
+              actionType: 'record',
+              component: false,
+              guard: 'Retry this refund now? Paystack will be asked to refund the customer again.',
+              isAccessible: ({ record }) => record.param('status') === 'cancelled'
+                && record.param('payment_method') === 'card'
+                && ['paid', 'refund_failed'].includes(record.param('payment_status')),
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                try {
+                  await manualRetryOrderRefund(record.id());
+                } catch (err) {
+                  AdminAction.log(currentAdmin.id, 'order_refund_retry_failed', 'orders', record.id(), { error: err.message });
+                  return { record: record.toJSON(currentAdmin), notice: { message: `Refund retry failed: ${err.message}`, type: 'error' } };
+                }
+                AdminAction.log(currentAdmin.id, 'order_refund_retry', 'orders', record.id());
+                return { record: record.toJSON(currentAdmin), notice: { message: 'Refund submitted to Paystack. It shows as refunded once Paystack confirms.', type: 'success' } };
+              },
+            },
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.orders),
       },
@@ -1796,6 +1826,24 @@ function buildResources(db, components = {}) {
             edit: { isAccessible: false },
             delete: { isAccessible: false },
             bulkDelete: { isAccessible: false },
+            // Step 1 (#102): manual retry of an extra payment's refund.
+            retryStrayRefund: {
+              actionType: 'record',
+              component: false,
+              guard: 'Retry the refund of this extra payment now?',
+              isAccessible: ({ record }) => record.param('status') === RefundService.STRAY,
+              handler: async (request, response, context) => {
+                const { record, currentAdmin } = context;
+                try {
+                  await RefundService.refundStrayPayment(record.id(), { manual: true });
+                } catch (err) {
+                  AdminAction.log(currentAdmin.id, 'stray_refund_retry_failed', 'payments', record.id(), { error: err.message });
+                  return { record: record.toJSON(currentAdmin), notice: { message: `Refund retry failed: ${err.message}`, type: 'error' } };
+                }
+                AdminAction.log(currentAdmin.id, 'stray_refund_retry', 'payments', record.id());
+                return { record: record.toJSON(currentAdmin), notice: { message: 'Refund submitted to Paystack.', type: 'success' } };
+              },
+            },
           },
         }, RESOURCE_TIMESTAMP_COLUMNS.payments),
       },
