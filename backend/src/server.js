@@ -64,8 +64,10 @@ const { corsMiddleware } = require("./middleware/cors");
 const setupSocket = require("./socket/socketServer");
 const {
   reconcilePendingPayments,
+  cancelStalePendingPayments,
   reconcileStuckRefunds,
   reconcileMissingRefunds,
+  reconcileStrayRefunds,
 } = require("./services/paymentReconciliationJob");
 
 // Import routes
@@ -338,6 +340,19 @@ let _io = io;
       await reconcileMissingRefunds(io);
     } catch (e) {
       console.warn("[Cron] missing refund reconciliation error:", e.message);
+    }
+    // Step 1 (#102): unpaid card orders with a definite "not paid" answer
+    // from Paystack are cancelled (restocked once); stray charges whose
+    // automatic refund didn't go through are retried (capped).
+    try {
+      await cancelStalePendingPayments(io);
+    } catch (e) {
+      console.warn("[Cron] stale payment cancellation error:", e.message);
+    }
+    try {
+      await reconcileStrayRefunds();
+    } catch (e) {
+      console.warn("[Cron] stray refund reconciliation error:", e.message);
     }
   });
 

@@ -1,14 +1,92 @@
 const db = require("../config/database");
 const paystackService = require("./paystackService");
+const { sendPaymentAlertEmail } = require("./emailService");
+
+// Step 1 (#102), founder rule: a refund is tried automatically at most this
+// many times. After the last failure an admin is alerted, and only a manual
+// retry (admin panel) tries again.
+const MAX_AUTOMATIC_REFUND_ATTEMPTS = 3;
+
+// payments.status for a charge that must go back to the customer (Step 1,
+// #102): a late payment on a cancelled order, a second payment for an order
+// that was already paid, or a payment whose amount didn't match. Such a row
+// is never 'paid', so refundOrderPayment and every total ignore it.
+const STRAY = "stray";
+const STRAY_REFUNDED = "stray_refunded";
+
+function capError() {
+  const err = new Error(
+    `Refund not retried automatically: it already failed ${MAX_AUTOMATIC_REFUND_ATTEMPTS} times. Use a manual retry.`,
+  );
+  err.code = "REFUND_RETRY_CAP_REACHED";
+  return err;
+}
 
 class RefundService {
+  // Failed refund attempts for an order's own payment (stray charges are
+  // counted separately, per payment).
+  static async countFailedOrderRefunds(client, orderId) {
+    const r = await client.query(
+      `SELECT COUNT(*)::int AS n
+       FROM payment_refunds pr
+       LEFT JOIN payments p ON p.id = pr.payment_id
+       WHERE pr.order_id = $1 AND pr.status = 'failed'
+         AND COALESCE(p.status, '') NOT IN ('${STRAY}', '${STRAY_REFUNDED}')`,
+      [orderId],
+    );
+    return r.rows[0]?.n || 0;
+  }
+
+  static async countFailedStrayRefunds(client, paymentId) {
+    const r = await client.query(
+      `SELECT COUNT(*)::int AS n FROM payment_refunds WHERE payment_id = $1 AND status = 'failed'`,
+      [paymentId],
+    );
+    return r.rows[0]?.n || 0;
+  }
+
+  // Called after every recorded refund failure. Alerts admins once the
+  // automatic attempts are used up (the 3rd automatic failure, and any
+  // failed manual retry after that). Never throws: an alert problem must not
+  // hide the refund failure itself.
+  static async alertIfRefundRetriesExhausted({ orderId, paymentId = null, amount = null, stray = false }) {
+    try {
+      const failures = stray
+        ? await RefundService.countFailedStrayRefunds(db, paymentId)
+        : await RefundService.countFailedOrderRefunds(db, orderId);
+      if (failures < MAX_AUTOMATIC_REFUND_ATTEMPTS) return false;
+      console.error(
+        `[Refund] CRITICAL: refund for order ${orderId}${stray ? ` (stray payment ${paymentId})` : ""} has failed `
+        + `${failures} times. Automatic retries have stopped; it needs a manual retry in the admin panel.`,
+      );
+      await sendPaymentAlertEmail({
+        title: "A refund keeps failing",
+        orderId,
+        amount,
+        details: [
+          `Failed attempts: ${failures}`,
+          stray ? `This is a refund of an extra payment (payment ${paymentId}).` : "This is the order's refund.",
+          "Automatic retries have stopped. Use Retry refund in the admin panel once the cause is fixed.",
+        ],
+      });
+      return true;
+    } catch (err) {
+      console.error("[Refund] Could not send the refund alert:", err.message);
+      return false;
+    }
+  }
+
+
   // overrideAmount (optional): refund less than the full payment amount —
   // used by the returns feature to net the return fee out of the refund
   // (refund_amount = subtotal - fee) instead of refunding the full original
   // payment. Every existing caller (order-cancellation refunds) omits this
   // argument entirely, so `overrideAmount == null` preserves the exact
   // original full-amount behavior unchanged.
-  static async refundOrderPayment(orderId, userId, reason = "customer_cancellation", overrideAmount = null) {
+  //
+  // options.manual (Step 1, #102): an admin's manual retry. Automatic callers
+  // stop after MAX_AUTOMATIC_REFUND_ATTEMPTS failures; a manual retry doesn't.
+  static async refundOrderPayment(orderId, userId, reason = "customer_cancellation", overrideAmount = null, options = {}) {
     const client = await db.connect();
     let refundRow;
     let order;
@@ -60,8 +138,15 @@ class RefundService {
         throw new Error("Order payment method does not support automated refund");
       }
 
-      if (order.payment_status !== "paid") {
+      // 'refund_failed': Paystack declined an earlier refund (refund.failed
+      // webhook). It can be tried again, within the same attempt cap.
+      if (!["paid", "refund_failed"].includes(order.payment_status)) {
         throw new Error("Order is not in a refundable paid state");
+      }
+
+      if (!options.manual
+        && await RefundService.countFailedOrderRefunds(client, orderId) >= MAX_AUTOMATIC_REFUND_ATTEMPTS) {
+        throw capError();
       }
 
       const paymentResult = await client.query(
@@ -165,6 +250,94 @@ class RefundService {
         [refundRow.id, JSON.stringify({ error: err.message })],
       ).catch(() => null);
 
+      await RefundService.alertIfRefundRetriesExhausted({ orderId, amount: refundRow.amount });
+      throw err;
+    }
+  }
+
+  // Step 1 (#102): refunds a stray charge (payments.status = 'stray') in
+  // full. Unlike refundOrderPayment it never changes the order's own
+  // payment_status: the order may be cancelled, or genuinely paid by another
+  // transaction that must stay paid. Same attempt cap and alert.
+  static async refundStrayPayment(paymentId, options = {}) {
+    const client = await db.connect();
+    let refundRow;
+    let payment;
+    try {
+      await client.query("BEGIN");
+      const p = await client.query(
+        `SELECT id, order_id, user_id, amount, provider, provider_transaction_id, status, metadata
+         FROM payments WHERE id = $1 FOR UPDATE`,
+        [paymentId],
+      );
+      if (!p.rows.length) throw new Error("Payment not found");
+      payment = p.rows[0];
+      if (payment.status !== STRAY) throw new Error("Payment is not awaiting a refund");
+      if (!payment.order_id || !payment.user_id || !payment.provider_transaction_id) {
+        throw new Error("Payment cannot be refunded automatically (missing order, user or transaction)");
+      }
+
+      const existing = await client.query(
+        `SELECT * FROM payment_refunds
+         WHERE payment_id = $1 AND status IN ('processing', 'completed')
+         ORDER BY created_at DESC LIMIT 1`,
+        [paymentId],
+      );
+      if (existing.rows.length) {
+        await client.query("COMMIT");
+        return existing.rows[0];
+      }
+
+      if (!options.manual
+        && await RefundService.countFailedStrayRefunds(client, paymentId) >= MAX_AUTOMATIC_REFUND_ATTEMPTS) {
+        throw capError();
+      }
+
+      const reason = `stray_charge:${payment.metadata?.strayReason || "unknown"}`;
+      const created = await client.query(
+        `INSERT INTO payment_refunds (order_id, user_id, payment_id, amount, provider, status, reason)
+         VALUES ($1, $2, $3, $4, $5, 'processing', $6)
+         RETURNING *`,
+        [payment.order_id, payment.user_id, payment.id, payment.amount, payment.provider, reason],
+      );
+      refundRow = created.rows[0];
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    try {
+      // No amount: Paystack refunds the whole transaction.
+      const providerResult = await paystackService.refundTransaction(
+        payment.provider_transaction_id,
+        null,
+        refundRow.reason,
+      );
+      if (!providerResult?.status) {
+        throw new Error(providerResult?.message || "Refund provider request failed");
+      }
+      const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
+      await db.query(
+        `UPDATE payment_refunds
+         SET refund_reference = $2, provider_response = $3::jsonb, updated_at = NOW()
+         WHERE id = $1`,
+        [refundRow.id, refundReference, JSON.stringify(providerResult)],
+      );
+      const updated = await db.query(`SELECT * FROM payment_refunds WHERE id = $1`, [refundRow.id]);
+      return updated.rows[0];
+    } catch (err) {
+      await db.query(
+        `UPDATE payment_refunds
+         SET status = 'failed', provider_response = $2::jsonb, updated_at = NOW()
+         WHERE id = $1`,
+        [refundRow.id, JSON.stringify({ error: err.message })],
+      ).catch(() => null);
+      await RefundService.alertIfRefundRetriesExhausted({
+        orderId: payment.order_id, paymentId: payment.id, amount: payment.amount, stray: true,
+      });
       throw err;
     }
   }
@@ -215,14 +388,14 @@ class RefundService {
       }
 
       const row = await client.query(
-        `SELECT pr.id, pr.order_id, pr.status
+        `SELECT pr.id, pr.order_id, pr.status, pr.amount, pr.payment_id, p.status AS payment_status
          FROM payment_refunds pr
          LEFT JOIN payments p ON p.id = pr.payment_id
          WHERE (pr.refund_reference = $1 AND $1::text IS NOT NULL)
             OR (p.provider_transaction_id = $2 AND $2::text IS NOT NULL)
          ORDER BY pr.created_at DESC
          LIMIT 1
-         FOR UPDATE`,
+         FOR UPDATE OF pr`,
         [refundReference, transactionProviderId],
       );
 
@@ -231,7 +404,11 @@ class RefundService {
         return null;
       }
 
-      const { id: refundId, order_id: orderId, status: currentStatus } = row.rows[0];
+      const {
+        id: refundId, order_id: orderId, status: currentStatus, amount, payment_id: paymentId,
+        payment_status: paymentStatus,
+      } = row.rows[0];
+      const stray = paymentStatus === STRAY || paymentStatus === STRAY_REFUNDED;
 
       if (currentStatus === "completed" || currentStatus === "failed") {
         await client.query("ROLLBACK");
@@ -248,13 +425,26 @@ class RefundService {
         [refundId, outcome, JSON.stringify(providerResponsePayload)],
       );
 
-      await client.query(
-        `UPDATE orders SET payment_status = $2, updated_at = NOW() WHERE id = $1`,
-        [orderId, outcome === "completed" ? "refunded" : "refund_failed"],
-      );
+      if (stray) {
+        // A stray charge's refund never changes the order (Step 1, #102).
+        if (outcome === "completed") {
+          await client.query(
+            `UPDATE payments SET status = '${STRAY_REFUNDED}' WHERE id = $1`,
+            [paymentId],
+          );
+        }
+      } else {
+        await client.query(
+          `UPDATE orders SET payment_status = $2, updated_at = NOW() WHERE id = $1`,
+          [orderId, outcome === "completed" ? "refunded" : "refund_failed"],
+        );
+      }
 
       await client.query("COMMIT");
-      return { orderId, alreadyFinalized: false };
+      if (outcome === "failed") {
+        await RefundService.alertIfRefundRetriesExhausted({ orderId, paymentId, amount, stray });
+      }
+      return { orderId, alreadyFinalized: false, stray };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
@@ -263,5 +453,9 @@ class RefundService {
     }
   }
 }
+
+RefundService.MAX_AUTOMATIC_REFUND_ATTEMPTS = MAX_AUTOMATIC_REFUND_ATTEMPTS;
+RefundService.STRAY = STRAY;
+RefundService.STRAY_REFUNDED = STRAY_REFUNDED;
 
 module.exports = RefundService;
