@@ -105,6 +105,7 @@ const marketingRoutes = require("./routes/marketingRoutes");
 const statusRoutes = require("./routes/statusRoutes");
 const { createHealthRouter } = require("./routes/healthRoutes");
 const { createPaymentReturnRouter } = require("./routes/paymentReturnRoutes");
+const { stripOrderSecretsMiddleware } = require("./middleware/stripOrderSecrets");
 const { realClientIp } = require("./middleware/clientIp");
 const { createCronRunner, dailySast } = require("./jobs/cronRunner");
 
@@ -194,6 +195,10 @@ function createApp({ withCronJobs = false } = {}) {
 // Body parsing
   app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true }));
+
+// Step 1 (#102), audit P0-5: no JSON response ever carries the customer's
+// delivery code inside an order (middleware/stripOrderSecrets.js).
+  app.use(stripOrderSecretsMiddleware);
 
 // Health checks (L0.4, #82): GET /health (liveness, no database) and the
 // token-protected GET /health/db. Mounted BEFORE the request logger, so the
