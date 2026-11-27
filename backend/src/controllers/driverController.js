@@ -3,7 +3,6 @@
 const jwt = require('jsonwebtoken');
 const Driver = require('../models/Driver');
 const Order = require('../models/Order');
-const { checkDriverSubscriptionAllowed } = require('../services/subscriptionService');
 const { isWithinNelsonMandelaBay, OUTSIDE_SERVICE_AREA_MESSAGE } = require('../utils/geoBoundary');
 const { detectRealMimeType } = require('../utils/fileSignature');
 const DriverWallet = require('../models/DriverWallet');
@@ -194,13 +193,9 @@ class DriverController {
           });
         }
 
-        // Previously only enforced in getAvailableOrders, which let a
-        // driver with an expired subscription go online and stay online
-        // indefinitely without ever being told why no orders were showing.
-        const subCheck = await checkDriverSubscriptionAllowed(req.userId);
-        if (!subCheck.allowed) {
-          return res.status(403).json({ error: subCheck.reason, requiresSubscription: true });
-        }
+        // Step 1 (#102), founder decision 6: driver plans are free, so no
+        // paid-plan check here (or in getAvailableOrders). The plan tables
+        // and subscriptionService are kept, unused, for a later decision.
 
         // Flash only operates within Nelson Mandela Bay — checked here
         // (rather than only at registration) so a driver can't go online
@@ -245,11 +240,6 @@ class DriverController {
           closed: true,
           message: 'Flash is currently closed. Orders are available 07:00 – 19:00 SAST.',
         });
-      }
-
-      const subCheck = await checkDriverSubscriptionAllowed(req.userId);
-      if (!subCheck.allowed) {
-        return res.status(403).json({ error: subCheck.reason, requiresSubscription: true });
       }
 
       // NOTE: Driver.getAvailableOrders(req.userId) already excludes orders

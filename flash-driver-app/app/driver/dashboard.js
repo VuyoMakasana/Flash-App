@@ -120,7 +120,6 @@ export default function DriverDashboard() {
     orders: [],
     wallet: { wallet_balance: '0.00', pending_balance: '0.00' },
   });
-  const [subscription, setSubscription]   = useState(null);
   const [trustRequests, setTrustRequests] = useState([]);
   const [loading, setLoading]             = useState(true);
   const [refreshing, setRefreshing]       = useState(false);
@@ -184,9 +183,10 @@ export default function DriverDashboard() {
   // ── Data loading ────────────────────────────────────────────────────────
   const loadAll = useCallback(async () => {
     try {
-      const [earningsRes, subRes, activeOrderRes, trustRequestsRes] = await Promise.allSettled([
+      // Step 1 (#102), founder decision 6: driver plans are free, so the
+      // dashboard no longer loads or shows a plan.
+      const [earningsRes, activeOrderRes, trustRequestsRes] = await Promise.allSettled([
         driverApi.earnings.getSummary(),
-        driverApi.subscription.getCurrent(),
         driverApi.orders.getActive(),
         driverApi.trustedDrivers.getRequests(),
       ]);
@@ -197,10 +197,6 @@ export default function DriverDashboard() {
           orders: earningsRes.value.orders        || [],
           wallet: earningsRes.value.wallet        || { wallet_balance: '0.00', pending_balance: '0.00' },
         });
-      }
-
-      if (subRes.status === 'fulfilled') {
-        setSubscription(subRes.value.subscription || null);
       }
 
       if (activeOrderRes.status === 'fulfilled') {
@@ -265,17 +261,6 @@ export default function DriverDashboard() {
 
   // ── Online toggle ────────────────────────────────────────────────────────
   const handleToggleOnline = async (val) => {
-    if (!subscription && val) {
-      Alert.alert(
-        'Subscription Required',
-        'You need an active plan to go online and accept deliveries.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Buy Plan', onPress: () => router.push('/driver/subscription') },
-        ],
-      );
-      return;
-    }
     setTogglingOnline(true);
     try {
       await setOnline(val);
@@ -293,13 +278,6 @@ export default function DriverDashboard() {
 
   // ── Accept order ─────────────────────────────────────────────────────────
   const handleAcceptOrder = async (orderId) => {
-    if (!subscription) {
-      Alert.alert('No Active Plan', 'Purchase a delivery plan to accept orders.', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Buy Plan', onPress: () => router.push('/driver/subscription') },
-      ]);
-      return;
-    }
     try {
       const data = await driverApi.orders.accept(orderId);
       analytics.orderAccepted(orderId);
@@ -493,7 +471,6 @@ export default function DriverDashboard() {
     );
   }
 
-  const subscriptionExpired = !subscription;
   const todayEarnings = earnings.orders
     .filter(o => new Date(o.created_at).toDateString() === new Date().toDateString())
     .reduce((sum, o) => sum + toNumber(o.driver_payout, 0), 0);
@@ -549,9 +526,7 @@ export default function DriverDashboard() {
           <View style={{ flex: 1 }}>
             <Text style={styles.cardTitle}>{isOnline ? 'Online — Taking Orders' : 'Offline'}</Text>
             <Text style={styles.cardSub}>
-              {subscriptionExpired
-                ? 'Buy a plan to go online'
-                : isOnline ? 'Tap to go offline' : 'Tap to start earning'}
+              {isOnline ? 'Tap to go offline' : 'Tap to start earning'}
             </Text>
           </View>
           {togglingOnline
@@ -565,33 +540,6 @@ export default function DriverDashboard() {
           }
         </View>
       </View>
-
-      {/* ── SUBSCRIPTION BANNER ── */}
-      {subscriptionExpired && (
-        <TouchableOpacity style={styles.subBanner} onPress={() => router.push('/driver/subscription')}>
-          <Ionicons name="warning-outline" size={18} color="#0a0a0a" />
-          <Text style={styles.subBannerText}>No active plan — tap to subscribe and start earning</Text>
-          <Ionicons name="chevron-forward" size={16} color="#0a0a0a" />
-        </TouchableOpacity>
-      )}
-      {subscription && (
-        <View style={styles.subCard}>
-          <View style={styles.row}>
-            <Ionicons name="checkmark-circle" size={20} color="#10b981" />
-            <Text style={styles.subCardText}>
-              {subscription.plan_type.charAt(0).toUpperCase() + subscription.plan_type.slice(1)} Plan Active
-            </Text>
-            {subscription.deliveries_limit && (
-              <Text style={styles.subDeliveries}>
-                {subscription.deliveries_used}/{subscription.deliveries_limit} deliveries
-              </Text>
-            )}
-          </View>
-          <Text style={styles.subExpiry}>
-            Expires {new Date(subscription.expires_at).toLocaleDateString('en-ZA')}
-          </Text>
-        </View>
-      )}
 
       {/* ── EARNINGS ── */}
       <View style={styles.statsRow}>
@@ -941,10 +889,6 @@ export default function DriverDashboard() {
           <Ionicons name="bar-chart-outline" size={22} color="#f59e0b" />
           <Text style={styles.quickBtnText}>Earnings</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.quickBtn} onPress={() => router.push('/driver/subscription')}>
-          <Ionicons name="card-outline" size={22} color="#f59e0b" />
-          <Text style={styles.quickBtnText}>My Plan</Text>
-        </TouchableOpacity>
         <TouchableOpacity style={styles.quickBtn} onPress={() => router.push('/driver/bank')}>
           <Ionicons name="wallet-outline" size={22} color="#f59e0b" />
           <Text style={styles.quickBtnText}>Bank</Text>
@@ -973,12 +917,6 @@ const styles = StyleSheet.create({
   cardTitle:          { color: '#fff', fontSize: 16, fontWeight: '700' },
   cardSub:            { color: '#9ca3af', fontSize: 12, marginTop: 4 },
   row:                { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  subBanner:          { marginHorizontal: 16, marginBottom: 12, backgroundColor: '#f59e0b', borderRadius: 12, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  subBannerText:      { flex: 1, color: '#0a0a0a', fontWeight: '600', fontSize: 13 },
-  subCard:            { marginHorizontal: 16, marginBottom: 12, backgroundColor: '#0d2818', borderRadius: 12, padding: 14, borderColor: '#10b981', borderWidth: 1 },
-  subCardText:        { color: '#10b981', fontWeight: '600', fontSize: 14, marginLeft: 6, flex: 1 },
-  subDeliveries:      { color: '#9ca3af', fontSize: 12 },
-  subExpiry:          { color: '#6b7280', fontSize: 12, marginTop: 6, marginLeft: 26 },
   statsRow:           { flexDirection: 'row', marginHorizontal: 16, gap: 10, marginBottom: 16 },
   statCard:           { flex: 1, backgroundColor: '#1a1a1a', borderRadius: 14, padding: 14, alignItems: 'center' },
   statAmount:         { color: '#f59e0b', fontSize: 18, fontWeight: '800' },
