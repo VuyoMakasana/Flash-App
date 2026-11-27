@@ -395,7 +395,7 @@ class RefundService {
             OR (p.provider_transaction_id = $2 AND $2::text IS NOT NULL)
          ORDER BY pr.created_at DESC
          LIMIT 1
-         FOR UPDATE OF pr`,
+         FOR UPDATE OF pr`, // OF pr (#102): Postgres refuses FOR UPDATE on the nullable side of a LEFT JOIN
         [refundReference, transactionProviderId],
       );
 
@@ -416,11 +416,14 @@ class RefundService {
       }
 
       await client.query(
+        // $2 is cast explicitly (#102): used both as the varchar column and
+        // in a text comparison, Postgres refused it ("inconsistent types
+        // deduced for parameter $2"), so no refund was ever finalized.
         `UPDATE payment_refunds
-         SET status = $2,
+         SET status = $2::text,
              provider_response = $3::jsonb,
              updated_at = NOW(),
-             completed_at = CASE WHEN $2 = 'completed' THEN NOW() ELSE completed_at END
+             completed_at = CASE WHEN $2::text = 'completed' THEN NOW() ELSE completed_at END
          WHERE id = $1`,
         [refundId, outcome, JSON.stringify(providerResponsePayload)],
       );
