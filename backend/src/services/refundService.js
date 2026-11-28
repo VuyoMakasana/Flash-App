@@ -14,6 +14,16 @@ const MAX_AUTOMATIC_REFUND_ATTEMPTS = 3;
 const STRAY = "stray";
 const STRAY_REFUNDED = "stray_refunded";
 
+// Reasons that only the server writes, and that change how a refund is
+// finalized. Free text from a customer or a store can never start with one
+// (found in review of #107: a customer could type "admin_partial:" as their
+// cancellation reason and stop the order's refund status from updating).
+const SERVER_REASON_PREFIX = /^\s*(admin_|stray_charge:)/i;
+function userReason(reason) {
+  const text = String(reason ?? "");
+  return SERVER_REASON_PREFIX.test(text) ? `note:${text}` : text;
+}
+
 function capError() {
   const err = new Error(
     `Refund not retried automatically: it already failed ${MAX_AUTOMATIC_REFUND_ATTEMPTS} times. Use a manual retry.`,
@@ -106,13 +116,28 @@ class RefundService {
     // reference field); the refund.processed/failed webhooks carry it too.
     const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
     try {
+      // The provider response is only replaced while the attempt is still
+      // processing: if refund.processed/failed already finalized it, its
+      // final answer is kept (review of #107).
       await db.query(
         `UPDATE payment_refunds
-         SET refund_reference = $2, provider_response = $3::jsonb, updated_at = NOW()
+         SET refund_reference = $2,
+             provider_response = CASE WHEN status = 'processing' THEN $3::jsonb ELSE provider_response END,
+             updated_at = NOW()
          WHERE id = $1`,
         [refundRow.id, refundReference, JSON.stringify(providerResult)],
       );
     } catch (saveErr) {
+      // Best effort, a second, smaller write: a durable "Paystack accepted
+      // refund X" marker. reconcileOrphanedProcessingRefunds adopts the id
+      // from it instead of failing the attempt, so the money already on its
+      // way back is never refunded twice (review of #107).
+      await db.query(
+        `UPDATE payment_refunds
+         SET provider_response = jsonb_build_object('acceptedByPaystack', true, 'refundId', $2::text)
+         WHERE id = $1 AND status = 'processing'`,
+        [refundRow.id, refundReference],
+      ).catch(() => null);
       console.error(
         `[Refund] CRITICAL: Paystack ACCEPTED refund ${refundReference} for order ${alert.orderId} `
         + `(attempt ${refundRow.id}), but saving it failed: ${saveErr.message}. Do not refund this order again.`,
@@ -141,11 +166,16 @@ class RefundService {
   // until Paystack confirms. Never overwrites 'refunded' (the
   // refund.processed webhook can land before this line runs). Not fatal:
   // the refund itself is already accepted and recorded.
-  static async markOrderRefundPending(orderId) {
+  //
+  // Written only while THIS attempt is still processing: if Paystack's
+  // refund.failed already finalized it (order 'refund_failed'), this must
+  // not put the order back to pending (review of #107).
+  static async markOrderRefundPending(orderId, refundId) {
     await db.query(
       `UPDATE orders SET payment_status = 'refund_pending', updated_at = NOW()
-       WHERE id = $1 AND payment_status <> 'refunded'`,
-      [orderId],
+       WHERE id = $1 AND payment_status <> 'refunded'
+         AND EXISTS (SELECT 1 FROM payment_refunds WHERE id = $2 AND status = 'processing')`,
+      [orderId, refundId],
     ).catch((e) => console.error(`[Refund] could not mark order ${orderId} refund_pending:`, e.message));
   }
 
@@ -265,7 +295,7 @@ class RefundService {
         `INSERT INTO payment_refunds (order_id, user_id, payment_id, amount, provider, status, reason)
          VALUES ($1, $2, $3, $4, $5, 'processing', $6)
          RETURNING *`,
-        [orderId, userId, payment.id, refundAmount, payment.provider, reason],
+        [orderId, userId, payment.id, refundAmount, payment.provider, userReason(reason)],
       );
 
       refundRow = createRefund.rows[0];
@@ -285,10 +315,10 @@ class RefundService {
     const { refundReference } = await RefundService.submitToPaystack(refundRow, {
       transactionId: payment.provider_transaction_id,
       amountInCents,
-      note: reason,
+      note: refundRow.reason,
       alert: { orderId, amount: refundRow.amount },
     });
-    await RefundService.markOrderRefundPending(orderId);
+    await RefundService.markOrderRefundPending(orderId, refundRow.id);
     return RefundService.readAttempt(refundRow, refundReference);
   }
 
@@ -395,7 +425,9 @@ class RefundService {
     try {
       await client.query("BEGIN");
       const o = await client.query(
-        `SELECT id, user_id, status, payment_method, payment_status FROM orders WHERE id = $1 FOR UPDATE`,
+        `SELECT id, user_id, status, payment_method, payment_status,
+                (updated_at > NOW() - INTERVAL '5 minutes') AS changed_recently
+         FROM orders WHERE id = $1 FOR UPDATE`,
         [orderId],
       );
       if (!o.rows.length) throw new Error("Order not found");
@@ -405,6 +437,18 @@ class RefundService {
       }
       if (orderRow.payment_method !== "card") {
         throw new Error("Only card payments can be refunded here");
+      }
+      // A just-cancelled order's own refund is sent right after the
+      // cancellation commits. An admin refund in that moment would take its
+      // place (review of #107), so wait until it has been attempted.
+      if (orderRow.status === "cancelled" && orderRow.changed_recently) {
+        const attempted = await client.query(
+          `SELECT 1 FROM payment_refunds WHERE order_id = $1 LIMIT 1`,
+          [orderId],
+        );
+        if (!attempted.rows.length) {
+          throw new Error("This order's cancellation refund is still being sent automatically. Try again in a few minutes.");
+        }
       }
 
       const p = await client.query(
@@ -469,7 +513,7 @@ class RefundService {
       note: refundRow.reason,
       alert: { orderId, amount: refundRow.amount },
     });
-    if (isFull) await RefundService.markOrderRefundPending(orderId);
+    if (isFull) await RefundService.markOrderRefundPending(orderId, refundRow.id);
     console.log(
       `[Refund] Admin ${adminId} refund of R${parseFloat(refundRow.amount).toFixed(2)} `
       + `(${isFull ? "full" : "partial"}) submitted for order ${orderId}`,
@@ -596,6 +640,7 @@ class RefundService {
 }
 
 RefundService.MAX_AUTOMATIC_REFUND_ATTEMPTS = MAX_AUTOMATIC_REFUND_ATTEMPTS;
+RefundService.userReason = userReason;
 RefundService.STRAY = STRAY;
 RefundService.STRAY_REFUNDED = STRAY_REFUNDED;
 

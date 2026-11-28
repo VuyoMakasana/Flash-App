@@ -116,6 +116,38 @@ d('PR G1: admin full and partial refunds (real database)', () => {
     expect(parseFloat(total.rows[0].s)).toBe(130);
   });
 
+  // Review of #107: real SQL for the sweep (jsonb operators) and the
+  // just-cancelled refusal (interval arithmetic).
+  test('the orphan sweep adopts an accepted refund id and fails only a plain orphan', async () => {
+    const { reconcileOrphanedProcessingRefunds } = require('../../src/services/paymentReconciliationJob');
+    const id = await deliveredOrderPaid('50.00');
+    const payId = (await pool.query('SELECT id FROM payments WHERE order_id = $1', [id])).rows[0].id;
+    const insert = (response) => pool.query(
+      `INSERT INTO payment_refunds (order_id, user_id, payment_id, amount, provider, status, reason, provider_response, updated_at)
+       VALUES ($1, $2, $3, 10.00, 'paystack', 'processing', 'test', $4::jsonb, NOW() - INTERVAL '10 minutes') RETURNING id`,
+      [id, userId, payId, response],
+    );
+    const accepted = (await insert(JSON.stringify({ acceptedByPaystack: true, refundId: `rf_${tag}_adopt` }))).rows[0].id;
+    const orphan = (await insert(null)).rows[0].id;
+
+    await reconcileOrphanedProcessingRefunds();
+
+    const rows = (await pool.query('SELECT id, status, refund_reference FROM payment_refunds WHERE id = ANY($1::uuid[])', [[accepted, orphan]])).rows;
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    expect(byId[accepted]).toEqual(expect.objectContaining({ status: 'processing', refund_reference: `rf_${tag}_adopt` }));
+    expect(byId[orphan]).toEqual(expect.objectContaining({ status: 'failed', refund_reference: null }));
+  });
+
+  test('a just-cancelled order with no refund attempt yet is refused; an older one is allowed', async () => {
+    const id = await deliveredOrderPaid('60.00');
+    await pool.query("UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1", [id]);
+    await expect(RefundService.adminRefund(id, { reason: 'x', adminId: 'admin-1' })).rejects.toThrow(/still being sent automatically/);
+    await pool.query("UPDATE orders SET updated_at = NOW() - INTERVAL '10 minutes' WHERE id = $1", [id]);
+    const refund = await RefundService.adminRefund(id, { reason: 'Fraud', adminId: 'admin-1' });
+    expect(parseFloat(refund.amount)).toBe(60);
+    expect((await order(id)).payment_status).toBe('refund_pending');
+  });
+
   test('a refused Paystack call is recorded as failed, and the order is unchanged', async () => {
     const id = await deliveredOrderPaid('80.00');
     paystackService.refundTransaction.mockRejectedValueOnce(new Error('Paystack down'));

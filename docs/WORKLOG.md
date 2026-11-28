@@ -27,6 +27,12 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
   - an amount that rounds to 0 cents is refused;
   - the plan's G2 timing is corrected.
   - **Not fixed:** a replay after completion (FI-145, needs an idempotency key).
+- **Second review pass on #107:**
+  - an accepted-but-unsaved refund is marked and adopted by the orphan sweep, never failed;
+  - `refund_pending` only while the attempt is processing;
+  - the final provider answer is kept;
+  - just-cancelled orders wait for their own refund before an admin refund;
+  - server-owned reason prefixes can't be typed by a customer (FI-146).
 
 ## 2026-11-27 — PR E: iOS release config for TestFlight (#104, `launch/ios-release-config`)
 - **Why:** the App Store's Expo Go is SDK 58; the SDK 54 apps go to TestFlight instead.

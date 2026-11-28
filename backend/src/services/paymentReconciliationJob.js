@@ -192,6 +192,24 @@ async function cancelStalePendingPayments(io, { staleMinutes = STALE_PAYMENT_MIN
 // lets reconcileMissingRefunds pick the underlying order back up fresh on
 // its next pass.
 async function reconcileOrphanedProcessingRefunds() {
+  // PR G1 (#106), review of #107: an attempt Paystack ACCEPTED but whose
+  // refund id couldn't be saved carries a marker (RefundService.
+  // submitToPaystack). Adopt that id, so the normal polling finalizes it,
+  // instead of failing it: failing it would allow a second refund of money
+  // already on its way back.
+  const adopted = await db.query(
+    `UPDATE payment_refunds
+     SET refund_reference = provider_response->>'refundId', updated_at = NOW()
+     WHERE status = 'processing'
+       AND refund_reference IS NULL
+       AND provider_response->>'acceptedByPaystack' = 'true'
+       AND provider_response->>'refundId' IS NOT NULL
+     RETURNING id, order_id`,
+  );
+  for (const row of adopted.rows) {
+    console.warn(`[Reconciliation] Adopted Paystack's refund id for accepted attempt ${row.id} (order ${row.order_id})`);
+  }
+
   const result = await db.query(
     `UPDATE payment_refunds
      SET status = 'failed',
@@ -199,6 +217,7 @@ async function reconcileOrphanedProcessingRefunds() {
          updated_at = NOW()
      WHERE status = 'processing'
        AND refund_reference IS NULL
+       AND COALESCE(provider_response->>'acceptedByPaystack', '') <> 'true'
        AND updated_at < NOW() - INTERVAL '5 minutes'
      RETURNING id, order_id`,
   );

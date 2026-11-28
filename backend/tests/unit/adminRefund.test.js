@@ -268,3 +268,88 @@ describe('review fixes', () => {
     expect(update[0]).toMatch(/payment_status <> 'refunded'/);
   });
 });
+
+// Second review pass on #107.
+describe('review fixes, second pass', () => {
+  test('saving the refund id never replaces a final answer Paystack already gave', async () => {
+    setup();
+    await RefundService.adminRefund('order-1', { reason: 'Fraud', adminId: 'a' });
+    const save = db.query.mock.calls.find(([s]) => /SET refund_reference = \$2/.test(String(s)));
+    expect(save[0]).toMatch(/CASE WHEN status = 'processing' THEN \$3::jsonb ELSE provider_response END/);
+  });
+
+  test('accepted but not saved: a durable "accepted, refund id X" marker is written for the sweep', async () => {
+    setup();
+    db.query = jest.fn(async (sql) => {
+      if (/SET refund_reference/.test(String(sql))) throw new Error('connection reset');
+      return { rows: [] };
+    });
+    await expect(RefundService.adminRefund('order-1', { reason: 'Fraud', adminId: 'a' })).rejects.toMatchObject({ code: 'REFUND_ACCEPTED_NOT_SAVED' });
+    const marker = db.query.mock.calls.find(([s]) => /acceptedByPaystack/.test(String(s)));
+    expect(marker[0]).toMatch(/jsonb_build_object\('acceptedByPaystack', true, 'refundId', \$2::text\)/);
+    expect(marker[1]).toEqual(['ref-1', '9001']);
+  });
+
+  test('refund_pending is written only while that attempt is still processing', async () => {
+    setup();
+    await RefundService.adminRefund('order-1', { reason: 'Fraud', adminId: 'a' });
+    const update = db.query.mock.calls.find(([s]) => /SET payment_status = 'refund_pending'/.test(String(s)));
+    expect(update[0]).toMatch(/EXISTS \(SELECT 1 FROM payment_refunds WHERE id = \$2 AND status = 'processing'\)/);
+    expect(update[1]).toEqual(['order-1', 'ref-1']);
+  });
+
+  test('a just-cancelled order whose own refund has not been attempted yet: refused, try again shortly', async () => {
+    const calls = setup({ order: { ...delivered, status: 'cancelled', changed_recently: true } });
+    await expect(RefundService.adminRefund('order-1', { reason: 'x', adminId: 'a' }))
+      .rejects.toThrow(/still being sent automatically/);
+    expect(calls.some(([s]) => /INSERT INTO payment_refunds/.test(s))).toBe(false);
+  });
+
+  test('a cancelled order whose refund was already attempted can be refunded', async () => {
+    const calls = setup({ order: { ...delivered, status: 'cancelled', changed_recently: true } });
+    const client = await db.connect();
+    const original = client.query.getMockImplementation();
+    client.query.mockImplementation(async (sql, params) => (
+      /SELECT 1 FROM payment_refunds WHERE order_id/.test(String(sql)) ? { rows: [{ 1: 1 }] } : original(sql, params)));
+    await RefundService.adminRefund('order-1', { reason: 'x', adminId: 'a' });
+    expect(calls.some(([s]) => /INSERT INTO payment_refunds/.test(s))).toBe(true);
+  });
+
+  test('a customer cannot type a server-owned reason prefix', async () => {
+    expect(RefundService.userReason('admin_partial: please')).toBe('note:admin_partial: please');
+    expect(RefundService.userReason('  ADMIN_full:x')).toBe('note:  ADMIN_full:x');
+    expect(RefundService.userReason('stray_charge:x')).toBe('note:stray_charge:x');
+    expect(RefundService.userReason('Wrong size')).toBe('Wrong size');
+
+    const client = {
+      query: jest.fn(async (sql, params) => {
+        const s = String(sql);
+        if (/FROM orders\s+WHERE id = \$1\s+FOR UPDATE/.test(s)) return { rows: [{ id: 'order-1', user_id: 'user-1', payment_method: 'card', payment_status: 'paid', total: '130.00' }] };
+        if (/COUNT\(\*\)::int AS n/.test(s)) return { rows: [{ n: 0 }] };
+        if (/FROM payments\s+WHERE order_id/.test(s)) return { rows: [{ ...payment }] };
+        if (/INSERT INTO payment_refunds/.test(s)) return { rows: [{ id: 'ref-9', amount: '130.00', reason: params[5] }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    db.connect = jest.fn().mockResolvedValue(client);
+    db.query = jest.fn().mockResolvedValue({ rows: [] });
+    await RefundService.refundOrderPayment('order-1', 'user-1', 'admin_partial:sneaky');
+    const insert = client.query.mock.calls.find(([s]) => /INSERT INTO payment_refunds/.test(String(s)));
+    expect(insert[1][5]).toBe('note:admin_partial:sneaky');
+    expect(refundSpy).toHaveBeenCalledWith('555', 13000, 'note:admin_partial:sneaky');
+  });
+});
+
+describe('the orphan sweep keeps accepted refunds reserved', () => {
+  test('it adopts the marked refund id first, and never fails an accepted attempt', async () => {
+    const { reconcileOrphanedProcessingRefunds } = require('../../src/services/paymentReconciliationJob');
+    db.query = jest.fn().mockResolvedValue({ rows: [] });
+    await reconcileOrphanedProcessingRefunds();
+    const [adopt, fail] = db.query.mock.calls.map(([s]) => String(s));
+    expect(adopt).toMatch(/SET refund_reference = provider_response->>'refundId'/);
+    expect(adopt).toMatch(/provider_response->>'acceptedByPaystack' = 'true'/);
+    expect(fail).toMatch(/SET status = 'failed'/);
+    expect(fail).toMatch(/COALESCE\(provider_response->>'acceptedByPaystack', ''\) <> 'true'/);
+  });
+});
