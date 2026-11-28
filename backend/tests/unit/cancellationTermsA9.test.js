@@ -170,3 +170,50 @@ describe('after the driver collects: no cancellation', () => {
     expect(preview.status).toHaveBeenCalledWith(409);
   });
 });
+
+// PR G1 (#106), found in review: the customer is shown the preview, then the
+// order moves on (the store marks it ready, or a driver is assigned) before
+// they confirm. The app sends the charge it showed; if it no longer matches,
+// nothing is written and the new preview comes back for a fresh confirm.
+describe('the charge the customer saw must still be the charge', () => {
+  const reqWith = (body) => ({ ...mockReq(), body });
+
+  test('shown "full refund" (0%), but the order is now ready: refused (409), nothing written', async () => {
+    const calls = useOrder({ ...base, status: 'waiting_for_driver', driver_id: null });
+    const res = mockRes();
+    await OrderController.cancelOrder(reqWith({ expectedChargePct: 0 }), res);
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'CANCELLATION_TERMS_CHANGED',
+      preview: expect.objectContaining({ fullRefund: false, chargePct: 0.10, totalCustomerRefund: 120 }),
+    }));
+    expect(updateOrderStatus).not.toHaveBeenCalled();
+    expect(RefundService.refundOrderPayment).not.toHaveBeenCalled();
+    expect(DriverWallet.reversePending).not.toHaveBeenCalled();
+    expect(calls.some(([s]) => /INSERT INTO order_cancellations/.test(s))).toBe(false);
+    expect(calls.some(([s]) => /^ROLLBACK/.test(s))).toBe(true);
+  });
+
+  test('shown 10%, but a driver has since been assigned (15%): refused', async () => {
+    useOrder({ ...base, ...withDriver, status: 'driver_assigned' });
+    const res = mockRes();
+    await OrderController.cancelOrder(reqWith({ expectedChargePct: 0.10 }), res);
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(DriverWallet.creditAvailable).not.toHaveBeenCalled();
+  });
+
+  test('the charge shown still applies: cancelled as usual', async () => {
+    useOrder({ ...base, ...withDriver, status: 'driver_assigned' });
+    const res = mockRes();
+    await OrderController.cancelOrder(reqWith({ expectedChargePct: 0.15 }), res);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, refundMode: 'pre_pickup_split' }));
+    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-1', 'user-1', 'customer_cancellation', 115);
+  });
+
+  test('an older app that sends no expected charge is unaffected', async () => {
+    useOrder({ ...base, status: 'waiting_for_driver', driver_id: null });
+    const res = mockRes();
+    await OrderController.cancelOrder(reqWith({ reason: 'changed my mind' }), res);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+});

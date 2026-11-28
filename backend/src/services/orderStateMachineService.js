@@ -815,6 +815,14 @@ async function cancelStalePreparingOrders(context = {}) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        // PR G1 (#106): re-check under the row lock. If the customer (or the
+        // store) acted between the scan and now, leave the order alone, so
+        // only one cancellation is ever recorded.
+        const fresh = await client.query(`SELECT * FROM orders WHERE id = $1 FOR UPDATE`, [order.id]);
+        if (!fresh.rows.length || fresh.rows[0].status !== 'preparing') {
+          await client.query('ROLLBACK');
+          continue;
+        }
         await client.query(
           `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
            VALUES ($1, 'system', 'store_preparation_timeout', 'full_refund')`,
@@ -899,6 +907,15 @@ async function cancelNoDriverOrders(context = {}) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
+        // PR G1 (#106): re-check under the row lock. Since G1 a customer
+        // cancelling a ready order pays a 10% charge, so if the customer
+        // cancelled (or a driver accepted) between the scan and now, this
+        // must not record a second, full_refund cancellation over it.
+        const fresh = await client.query(`SELECT * FROM orders WHERE id = $1 FOR UPDATE`, [order.id]);
+        if (!fresh.rows.length || fresh.rows[0].status !== 'waiting_for_driver' || fresh.rows[0].driver_id) {
+          await client.query('ROLLBACK');
+          continue;
+        }
         await client.query(
           `INSERT INTO order_cancellations (order_id, cancelled_by_role, reason, refund_mode)
            VALUES ($1, 'system', 'no_driver_available_timeout', 'full_refund')`,

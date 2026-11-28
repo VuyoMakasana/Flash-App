@@ -84,3 +84,32 @@ test('the store (or an admin) rejects it, e.g. out of stock or a wrong price: fu
   // customer_item_refund = the whole item value, delivery_fee_refunded = the whole fee
   expect(cancellation[1]).toEqual(expect.arrayContaining([100, 30]));
 });
+
+// PR G1 (#106), race found in review: the timer scans, then the customer
+// cancels a ready order (10% charge) or a driver accepts, before the timer's
+// own transaction. Under the row lock the timer re-checks and backs off, so
+// it never records a second, full_refund cancellation over the customer's.
+describe('the timers re-check the order under the lock', () => {
+  test.each([
+    ['the customer already cancelled it', { status: 'cancelled', driver_id: null }],
+    ['a driver accepted it meanwhile', { status: 'driver_assigned', driver_id: 'driver-1' }],
+  ])('no driver timer: %s, so nothing is recorded or refunded', async (_label, now) => {
+    pool.query = jest.fn().mockResolvedValue({ rows: [{ id: 'o-4', ...paidCard }] });
+    const client = makeClient({ id: 'o-4', ...paidCard, ...now });
+    pool.connect = jest.fn().mockResolvedValue(client);
+    const result = await cancelNoDriverOrders({});
+    expect(result).toEqual(expect.objectContaining({ cancelled: 0 }));
+    expect(client.calls.some(([s]) => /INSERT INTO order_cancellations/i.test(s))).toBe(false);
+    expect(RefundService.refundOrderPayment).not.toHaveBeenCalled();
+    expect(client.calls.some(([s]) => /^ROLLBACK/.test(s.trim()))).toBe(true);
+  });
+
+  test('preparation timer: the store marked it ready meanwhile, so nothing is recorded or refunded', async () => {
+    pool.query = jest.fn().mockResolvedValue({ rows: [{ id: 'o-5', order_number: 'FL-5', ...paidCard }] });
+    const client = makeClient({ id: 'o-5', ...paidCard, status: 'waiting_for_driver' });
+    pool.connect = jest.fn().mockResolvedValue(client);
+    await cancelStalePreparingOrders({});
+    expect(client.calls.some(([s]) => /INSERT INTO order_cancellations/i.test(s))).toBe(false);
+    expect(RefundService.refundOrderPayment).not.toHaveBeenCalled();
+  });
+});

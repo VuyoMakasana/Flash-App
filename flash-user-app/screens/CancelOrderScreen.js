@@ -51,7 +51,13 @@ export default function CancelOrderScreen() {
   const submitCancellation = async () => {
     setSubmitting(true);
     try {
-      await api.orders.cancel(order.id, { reason: reason.trim() || null });
+      // PR G1 (#106): send the charge the customer was shown. If the order
+      // moved on meanwhile (e.g. the store marked it ready), the server
+      // refuses, and the new amounts are loaded below for a fresh confirm.
+      await api.orders.cancel(order.id, {
+        reason: reason.trim() || null,
+        expectedChargePct: preview?.chargePct ?? 0,
+      });
       analytics.orderCancelled(order.id, order.status);
       Alert.alert('Order Cancelled', 'Your cancellation has been processed.', [
         { text: 'OK', onPress: () => navigation.goBack() },
@@ -59,6 +65,11 @@ export default function CancelOrderScreen() {
     } catch (e) {
       if (e.message === 'SESSION_EXPIRED') return;
       Alert.alert('Could Not Cancel Order', e.message || 'Please try again.');
+      // Show the current terms (they may have changed) before any retry.
+      try {
+        const fresh = await api.orders.getCancellationPreview(order.id);
+        setPreview(fresh);
+      } catch (_) {}
     } finally {
       setSubmitting(false);
     }

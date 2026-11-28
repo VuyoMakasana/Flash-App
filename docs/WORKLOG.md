@@ -20,6 +20,13 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
   - never more than what's left, no second refund while one is in flight;
   - audited in `admin_actions`; a partial refund leaves the order `paid`.
 - **Tests:** new unit tests for every cancellation stage and the admin refund, and `tests/integration/adminRefund.test.js` on real Postgres. Two old tests updated to the new rules.
+- **Review fixes (CodeRabbit on #107, each checked against the code):**
+  - the timers lock and re-check the order (FI-142);
+  - a charge that changed since the preview is refused (FI-143);
+  - an accepted refund is never marked failed, and `refund_pending` never overwrites `refunded` (FI-144);
+  - an amount that rounds to 0 cents is refused;
+  - the plan's G2 timing is corrected.
+  - **Not fixed:** a replay after completion (FI-145, needs an idempotency key).
 
 ## 2026-11-27 — PR E: iOS release config for TestFlight (#104, `launch/ios-release-config`)
 - **Why:** the App Store's Expo Go is SDK 58; the SDK 54 apps go to TestFlight instead.

@@ -216,3 +216,55 @@ describe('the admin panel action (audited in admin_actions)', () => {
     expect(out.notice.type).toBe('error');
   });
 });
+
+// Found in review (PR G1, #106).
+describe('review fixes', () => {
+  test('an amount that rounds to 0 cents is refused', async () => {
+    const calls = setup();
+    await expect(RefundService.adminRefund('order-1', { amount: '0.000000001', reason: 'x', adminId: 'a' }))
+      .rejects.toThrow(/more than R0/);
+    expect(calls.some(([s]) => /INSERT INTO payment_refunds/.test(s))).toBe(false);
+  });
+
+  test('Paystack ACCEPTED the refund but saving it failed: never marked failed; admins alerted; "do not refund again"', async () => {
+    setup();
+    const { sendPaymentAlertEmail } = require('../../src/services/emailService');
+    db.query = jest.fn(async (sql) => {
+      if (/SET refund_reference/.test(String(sql))) throw new Error('connection reset');
+      return { rows: [] };
+    });
+    await expect(RefundService.adminRefund('order-1', { reason: 'Fraud', adminId: 'a' }))
+      .rejects.toMatchObject({ code: 'REFUND_ACCEPTED_NOT_SAVED', message: expect.stringMatching(/Don't refund again/) });
+    expect(db.query.mock.calls.some(([s]) => /SET status = 'failed'/.test(String(s)))).toBe(false);
+    expect(sendPaymentAlertEmail).toHaveBeenCalledWith(expect.objectContaining({
+      title: "A refund was sent but couldn't be saved",
+      details: expect.arrayContaining(['Paystack refund id: 9001']),
+    }));
+  });
+
+  test('marking a full refund pending never overwrites an order already marked refunded', async () => {
+    setup();
+    await RefundService.adminRefund('order-1', { reason: 'Fraud', adminId: 'a' });
+    const update = db.query.mock.calls.find(([s]) => /SET payment_status = 'refund_pending'/.test(String(s)));
+    expect(update[0]).toMatch(/payment_status <> 'refunded'/);
+  });
+
+  test('the customer-cancellation refund uses the same guard', async () => {
+    const client = {
+      query: jest.fn(async (sql) => {
+        const s = String(sql);
+        if (/FROM orders\s+WHERE id = \$1\s+FOR UPDATE/.test(s)) return { rows: [{ id: 'order-1', user_id: 'user-1', payment_method: 'card', payment_status: 'paid', total: '130.00' }] };
+        if (/COUNT\(\*\)::int AS n/.test(s)) return { rows: [{ n: 0 }] };
+        if (/FROM payments\s+WHERE order_id/.test(s)) return { rows: [{ ...payment }] };
+        if (/INSERT INTO payment_refunds/.test(s)) return { rows: [{ id: 'ref-9', amount: '130.00' }] };
+        return { rows: [] };
+      }),
+      release: jest.fn(),
+    };
+    db.connect = jest.fn().mockResolvedValue(client);
+    db.query = jest.fn().mockResolvedValue({ rows: [] });
+    await RefundService.refundOrderPayment('order-1', 'user-1', 'customer_cancellation');
+    const update = db.query.mock.calls.find(([s]) => /refund_pending/.test(String(s)));
+    expect(update[0]).toMatch(/payment_status <> 'refunded'/);
+  });
+});

@@ -77,6 +77,88 @@ class RefundService {
   }
 
 
+  // PR G1 (#106), found in review: sends a recorded refund attempt to
+  // Paystack. If Paystack refuses (or doesn't answer), the attempt is marked
+  // failed and the 3-failure alert is checked. Once Paystack has ACCEPTED it,
+  // the attempt is never marked failed: if saving the result locally fails,
+  // the money is already on its way back, and a "failed" row would invite a
+  // second refund. Instead admins are alerted with Paystack's refund id and
+  // the error says not to refund again.
+  static async submitToPaystack(refundRow, { transactionId, amountInCents, note, alert }) {
+    let providerResult;
+    try {
+      providerResult = await paystackService.refundTransaction(transactionId, amountInCents, note);
+      if (!providerResult?.status) {
+        throw new Error(providerResult?.message || "Refund provider request failed");
+      }
+    } catch (err) {
+      await db.query(
+        `UPDATE payment_refunds
+         SET status = 'failed', provider_response = $2::jsonb, updated_at = NOW()
+         WHERE id = $1`,
+        [refundRow.id, JSON.stringify({ error: err.message })],
+      ).catch(() => null);
+      await RefundService.alertIfRefundRetriesExhausted(alert);
+      throw err;
+    }
+
+    // Paystack's refund id is data.id (its /refund response has no
+    // reference field); the refund.processed/failed webhooks carry it too.
+    const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
+    try {
+      await db.query(
+        `UPDATE payment_refunds
+         SET refund_reference = $2, provider_response = $3::jsonb, updated_at = NOW()
+         WHERE id = $1`,
+        [refundRow.id, refundReference, JSON.stringify(providerResult)],
+      );
+    } catch (saveErr) {
+      console.error(
+        `[Refund] CRITICAL: Paystack ACCEPTED refund ${refundReference} for order ${alert.orderId} `
+        + `(attempt ${refundRow.id}), but saving it failed: ${saveErr.message}. Do not refund this order again.`,
+      );
+      await sendPaymentAlertEmail({
+        title: "A refund was sent but couldn't be saved",
+        orderId: alert.orderId,
+        amount: refundRow.amount,
+        details: [
+          `Paystack refund id: ${refundReference}`,
+          `Error: ${saveErr.message}`,
+          "Paystack accepted this refund. Do not refund the order again; check it in the Paystack dashboard.",
+        ],
+      }).catch(() => null);
+      const err = new Error(
+        `Paystack accepted the refund (id ${refundReference}), but saving it failed. `
+        + "Don't refund again; check it in the Paystack dashboard.",
+      );
+      err.code = "REFUND_ACCEPTED_NOT_SAVED";
+      throw err;
+    }
+    return { providerResult, refundReference };
+  }
+
+  // After Paystack accepted a FULL refund: the order shows refund_pending
+  // until Paystack confirms. Never overwrites 'refunded' (the
+  // refund.processed webhook can land before this line runs). Not fatal:
+  // the refund itself is already accepted and recorded.
+  static async markOrderRefundPending(orderId) {
+    await db.query(
+      `UPDATE orders SET payment_status = 'refund_pending', updated_at = NOW()
+       WHERE id = $1 AND payment_status <> 'refunded'`,
+      [orderId],
+    ).catch((e) => console.error(`[Refund] could not mark order ${orderId} refund_pending:`, e.message));
+  }
+
+  // The saved attempt, re-read; falls back to what we know if the read fails.
+  static async readAttempt(refundRow, refundReference) {
+    try {
+      const r = await db.query(`SELECT * FROM payment_refunds WHERE id = $1`, [refundRow.id]);
+      return r.rows[0] || { ...refundRow, refund_reference: refundReference };
+    } catch (_) {
+      return { ...refundRow, refund_reference: refundReference };
+    }
+  }
+
   // overrideAmount (optional): refund less than the full payment amount —
   // used by the returns feature to net the return fee out of the refund
   // (refund_amount = subtotal - fee) instead of refunding the full original
@@ -195,64 +277,19 @@ class RefundService {
       client.release();
     }
 
-    try {
-      const amountInCents = Math.round(parseFloat(refundRow.amount || payment.amount || order.total || 0) * 100);
-      const providerResult = await paystackService.refundTransaction(
-        payment.provider_transaction_id,
-        amountInCents,
-        reason,
-      );
-
-      if (!providerResult?.status) {
-        throw new Error(providerResult?.message || "Refund provider request failed");
-      }
-
-      // Paystack's real /refund response has no `reference`/`refund_reference`
-      // field at all (confirmed against a live test-mode call) — the refund's
-      // own identifier is `data.id`. This is also the value that later
-      // refund.processed/refund.failed webhooks carry, so it's what
-      // webhookController matches against to close the loop.
-      const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
-
-      // Paystack's refund is asynchronous — accepting the request (this HTTP
-      // response) is not the same as the refund actually completing. A live
-      // test call came back with status: "pending" and an expected_at days
-      // out, not "done". Marking the order 'refunded' here would tell the
-      // customer/store their money is back before Paystack has confirmed
-      // that's true. 'refund_pending' is the accurate interim state;
-      // webhookController's refund.processed/refund.failed handlers move it
-      // to its final 'refunded' or flag it for manual attention.
-      await db.query(
-        `UPDATE payment_refunds
-         SET refund_reference = $2, provider_response = $3::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, refundReference, JSON.stringify(providerResult)],
-      );
-
-      await db.query(
-        `UPDATE orders
-         SET payment_status = 'refund_pending', updated_at = NOW()
-         WHERE id = $1`,
-        [orderId],
-      );
-
-      const updatedRefund = await db.query(
-        `SELECT * FROM payment_refunds WHERE id = $1`,
-        [refundRow.id],
-      );
-
-      return updatedRefund.rows[0];
-    } catch (err) {
-      await db.query(
-        `UPDATE payment_refunds
-         SET status = 'failed', provider_response = $2::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, JSON.stringify({ error: err.message })],
-      ).catch(() => null);
-
-      await RefundService.alertIfRefundRetriesExhausted({ orderId, amount: refundRow.amount });
-      throw err;
-    }
+    // Paystack's refund is asynchronous: accepting the request isn't the
+    // refund completing (a live test call came back "pending", days out). So
+    // the order shows 'refund_pending' until refund.processed/failed (or the
+    // polling fallback) finalizes it.
+    const amountInCents = Math.round(parseFloat(refundRow.amount || payment.amount || order.total || 0) * 100);
+    const { refundReference } = await RefundService.submitToPaystack(refundRow, {
+      transactionId: payment.provider_transaction_id,
+      amountInCents,
+      note: reason,
+      alert: { orderId, amount: refundRow.amount },
+    });
+    await RefundService.markOrderRefundPending(orderId);
+    return RefundService.readAttempt(refundRow, refundReference);
   }
 
   // Step 1 (#102): refunds a stray charge (payments.status = 'stray') in
@@ -309,37 +346,14 @@ class RefundService {
       client.release();
     }
 
-    try {
-      // No amount: Paystack refunds the whole transaction.
-      const providerResult = await paystackService.refundTransaction(
-        payment.provider_transaction_id,
-        null,
-        refundRow.reason,
-      );
-      if (!providerResult?.status) {
-        throw new Error(providerResult?.message || "Refund provider request failed");
-      }
-      const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
-      await db.query(
-        `UPDATE payment_refunds
-         SET refund_reference = $2, provider_response = $3::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, refundReference, JSON.stringify(providerResult)],
-      );
-      const updated = await db.query(`SELECT * FROM payment_refunds WHERE id = $1`, [refundRow.id]);
-      return updated.rows[0];
-    } catch (err) {
-      await db.query(
-        `UPDATE payment_refunds
-         SET status = 'failed', provider_response = $2::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, JSON.stringify({ error: err.message })],
-      ).catch(() => null);
-      await RefundService.alertIfRefundRetriesExhausted({
-        orderId: payment.order_id, paymentId: payment.id, amount: payment.amount, stray: true,
-      });
-      throw err;
-    }
+    // No amount: Paystack refunds the whole transaction.
+    const { refundReference } = await RefundService.submitToPaystack(refundRow, {
+      transactionId: payment.provider_transaction_id,
+      amountInCents: null,
+      note: refundRow.reason,
+      alert: { orderId: payment.order_id, paymentId: payment.id, amount: payment.amount, stray: true },
+    });
+    return RefundService.readAttempt(refundRow, refundReference);
   }
 
   // PR G1 (#106), audit H7: an admin refunds a delivered or cancelled card
@@ -368,6 +382,9 @@ class RefundService {
         throw new Error("The refund amount can only have rands and cents");
       }
       requestedCents = Math.round(value * 100);
+      // Found in review: a tiny positive amount (e.g. 0.000000001) passed the
+      // checks above but rounds to 0 cents.
+      if (requestedCents < 1) throw new Error("The refund must be more than R0");
     }
 
     const client = await db.connect();
@@ -446,44 +463,18 @@ class RefundService {
       client.release();
     }
 
-    try {
-      const providerResult = await paystackService.refundTransaction(
-        payment.provider_transaction_id,
-        Math.round(parseFloat(refundRow.amount) * 100),
-        refundRow.reason,
-      );
-      if (!providerResult?.status) {
-        throw new Error(providerResult?.message || "Refund provider request failed");
-      }
-      const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
-      await db.query(
-        `UPDATE payment_refunds
-         SET refund_reference = $2, provider_response = $3::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, refundReference, JSON.stringify(providerResult)],
-      );
-      if (isFull) {
-        await db.query(
-          `UPDATE orders SET payment_status = 'refund_pending', updated_at = NOW() WHERE id = $1`,
-          [orderId],
-        );
-      }
-      const updated = await db.query(`SELECT * FROM payment_refunds WHERE id = $1`, [refundRow.id]);
-      console.log(
-        `[Refund] Admin ${adminId} refund of R${parseFloat(refundRow.amount).toFixed(2)} `
-        + `(${isFull ? "full" : "partial"}) submitted for order ${orderId}`,
-      );
-      return updated.rows[0];
-    } catch (err) {
-      await db.query(
-        `UPDATE payment_refunds
-         SET status = 'failed', provider_response = $2::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, JSON.stringify({ error: err.message })],
-      ).catch(() => null);
-      await RefundService.alertIfRefundRetriesExhausted({ orderId, amount: refundRow.amount });
-      throw err;
-    }
+    const { refundReference } = await RefundService.submitToPaystack(refundRow, {
+      transactionId: payment.provider_transaction_id,
+      amountInCents: Math.round(parseFloat(refundRow.amount) * 100),
+      note: refundRow.reason,
+      alert: { orderId, amount: refundRow.amount },
+    });
+    if (isFull) await RefundService.markOrderRefundPending(orderId);
+    console.log(
+      `[Refund] Admin ${adminId} refund of R${parseFloat(refundRow.amount).toFixed(2)} `
+      + `(${isFull ? "full" : "partial"}) submitted for order ${orderId}`,
+    );
+    return RefundService.readAttempt(refundRow, refundReference);
   }
 
   // Shared by webhookController's refund.processed/refund.failed handlers and

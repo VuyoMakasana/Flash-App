@@ -59,6 +59,24 @@ function isClientError(message) {
 // services/cancellationPolicy.js, shared by cancelOrder and its preview.
 const { cancellationTermsFor } = require('../services/cancellationPolicy');
 
+// What the customer is shown before cancelling (and what the app sends back
+// as expectedChargePct). One builder for the preview and the 409 below.
+function cancellationPreviewFor(terms, state) {
+  if (terms.refundMode === 'full_refund') {
+    return { hasDriverAssigned: terms.hasDriverAssigned, fullRefund: true, stage: state, chargePct: 0 };
+  }
+  return { hasDriverAssigned: terms.hasDriverAssigned, fullRefund: false, stage: state, ...terms.split };
+}
+
+// PR G1 (#106): the charge changed between the preview and the confirm
+// (e.g. the store marked the order ready meanwhile). Nothing is written.
+class CancellationTermsChangedError extends Error {
+  constructor(preview) {
+    super('The cancellation charge has changed because your order moved on. Please check the new amounts and confirm again.');
+    this.preview = preview;
+  }
+}
+
 class OrderController {
   static async createOrder(req, res) {
     const {
@@ -222,10 +240,7 @@ class OrderController {
         return res.status(409).json({ error: 'Order cannot be cancelled at this stage' });
       }
 
-      if (terms.refundMode === 'full_refund') {
-        return res.json({ hasDriverAssigned: terms.hasDriverAssigned, fullRefund: true, stage: state, chargePct: 0 });
-      }
-      return res.json({ hasDriverAssigned: terms.hasDriverAssigned, fullRefund: false, stage: state, ...terms.split });
+      return res.json(cancellationPreviewFor(terms, state));
     } catch (err) {
       console.error('[Order] getCancellationPreview error:', err.message);
       res.status(500).json({ error: 'Failed to compute cancellation preview' });
@@ -372,6 +387,19 @@ class OrderController {
         refundMode = terms.refundMode;
         split = terms.split;
 
+        // The app sends the charge it showed (expectedChargePct). If the
+        // order moved on since (preparing -> ready, or a driver was
+        // assigned), refuse before anything is written, so nobody is
+        // charged terms they didn't see. Older apps that don't send it are
+        // unaffected.
+        const expected = req.body?.expectedChargePct;
+        if (expected !== undefined && expected !== null) {
+          const preview = cancellationPreviewFor(terms, state);
+          if (!Number.isFinite(Number(expected)) || Math.abs(Number(expected) - preview.chargePct) > 0.0001) {
+            throw new CancellationTermsChangedError(preview);
+          }
+        }
+
         if (order.driver_id && ['assigned', 'held'].includes(order.delivery_payment_status || '') && !order.driver_paid) {
           const payout = parseFloat(order.driver_payout || order.delivery_fee || 0);
           if (payout > 0) {
@@ -476,6 +504,9 @@ class OrderController {
         split,
       });
     } catch (err) {
+      if (err instanceof CancellationTermsChangedError) {
+        return res.status(409).json({ error: err.message, code: 'CANCELLATION_TERMS_CHANGED', preview: err.preview });
+      }
       if (err.message === 'Order not found') {
         return res.status(404).json({ error: err.message });
       }

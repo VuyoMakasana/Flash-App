@@ -31,4 +31,4 @@
 - **On account deletion:** call Apple's revoke endpoint.
 - **Needs from the founder (approval):** an Apple Sign in with Apple **private key (.p8)**, its Key ID and the Team ID as **new Render secrets**, to sign the client secret. This is an environment-variable change, so the founder makes it.
 
-**Order:** G1 (money) → G3 (consent, before public launch) → G2 (returns, before the first return is possible, 7 days after the first delivery) → F (before App Store submission) → G4 (before more admins are added).
+**Order:** G1 (money) → G3 (consent, before public launch) → G2 (returns, **before real customer deliveries start**: the Terms open returns at delivery, while today's flow opens them 48 hours later with a flat R100 fee, so it contradicts the Terms from the first delivery) → F (before App Store submission) → G4 (before more admins are added).
