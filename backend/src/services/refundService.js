@@ -342,6 +342,150 @@ class RefundService {
     }
   }
 
+  // PR G1 (#106), audit H7: an admin refunds a delivered or cancelled card
+  // order, in full (amount null: everything still left) or in part, with a
+  // typed reason. Every attempt is a payment_refunds row; a failure counts
+  // for the 3-failure alert. Safety:
+  //   - never more than what's left of what was paid (completed refunds on
+  //     the payment are subtracted, in cents);
+  //   - never a second refund while one is still in flight on the payment
+  //     (a double click can't refund twice);
+  //   - the order is locked for the whole decision.
+  // A refund that leaves money unrefunded is recorded as 'admin_partial:' and
+  // never changes the order's payment_status; one that clears the balance is
+  // 'admin_full:' and behaves like every other full refund.
+  static async adminRefund(orderId, { amount = null, reason, adminId } = {}) {
+    const typedReason = String(reason ?? "").trim();
+    if (!typedReason) throw new Error("Type a reason for the refund");
+    if (typedReason.length > 500) throw new Error("Keep the reason under 500 characters");
+
+    let requestedCents = null;
+    if (amount !== null && amount !== undefined && String(amount).trim() !== "") {
+      const text = String(amount).trim();
+      const value = Number(text);
+      if (!Number.isFinite(value) || value <= 0) throw new Error("The refund must be more than R0");
+      if (Math.abs(value * 100 - Math.round(value * 100)) > 1e-6) {
+        throw new Error("The refund amount can only have rands and cents");
+      }
+      requestedCents = Math.round(value * 100);
+    }
+
+    const client = await db.connect();
+    let refundRow;
+    let payment;
+    let isFull;
+    let orderRow;
+    try {
+      await client.query("BEGIN");
+      const o = await client.query(
+        `SELECT id, user_id, status, payment_method, payment_status FROM orders WHERE id = $1 FOR UPDATE`,
+        [orderId],
+      );
+      if (!o.rows.length) throw new Error("Order not found");
+      orderRow = o.rows[0];
+      if (!["delivered", "completed", "cancelled"].includes(orderRow.status)) {
+        throw new Error("Only delivered or cancelled orders can be refunded here");
+      }
+      if (orderRow.payment_method !== "card") {
+        throw new Error("Only card payments can be refunded here");
+      }
+
+      const p = await client.query(
+        `SELECT id, provider, provider_transaction_id, amount
+         FROM payments
+         WHERE order_id = $1
+           AND status = 'paid'
+           AND provider_transaction_id IS NOT NULL
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [orderId],
+      );
+      if (!p.rows.length) throw new Error("No card payment found for this order");
+      payment = p.rows[0];
+
+      const busy = await client.query(
+        `SELECT id FROM payment_refunds WHERE payment_id = $1 AND status = 'processing' LIMIT 1`,
+        [payment.id],
+      );
+      if (busy.rows.length) {
+        throw new Error("A refund for this order is still being processed. Wait for Paystack to confirm it, then try again.");
+      }
+
+      const done = await client.query(
+        `SELECT COALESCE(SUM(amount), 0) AS refunded
+         FROM payment_refunds WHERE payment_id = $1 AND status = 'completed'`,
+        [payment.id],
+      );
+      const paidCents = Math.round(parseFloat(payment.amount) * 100);
+      const refundedCents = Math.round(parseFloat(done.rows[0].refunded) * 100);
+      const leftCents = paidCents - refundedCents;
+      if (leftCents <= 0) throw new Error("This order has already been refunded in full");
+
+      const cents = requestedCents === null ? leftCents : requestedCents;
+      if (cents > leftCents) {
+        throw new Error(
+          `The refund can't be more than R${(leftCents / 100).toFixed(2)} `
+          + `(what's left of the R${(paidCents / 100).toFixed(2)} paid)`,
+        );
+      }
+      isFull = cents === leftCents;
+
+      const created = await client.query(
+        `INSERT INTO payment_refunds (order_id, user_id, payment_id, amount, provider, status, reason)
+         VALUES ($1, $2, $3, $4, $5, 'processing', $6)
+         RETURNING *`,
+        [orderId, orderRow.user_id, payment.id, cents / 100, payment.provider,
+          `${isFull ? "admin_full" : "admin_partial"}:${typedReason}`],
+      );
+      refundRow = created.rows[0];
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    try {
+      const providerResult = await paystackService.refundTransaction(
+        payment.provider_transaction_id,
+        Math.round(parseFloat(refundRow.amount) * 100),
+        refundRow.reason,
+      );
+      if (!providerResult?.status) {
+        throw new Error(providerResult?.message || "Refund provider request failed");
+      }
+      const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
+      await db.query(
+        `UPDATE payment_refunds
+         SET refund_reference = $2, provider_response = $3::jsonb, updated_at = NOW()
+         WHERE id = $1`,
+        [refundRow.id, refundReference, JSON.stringify(providerResult)],
+      );
+      if (isFull) {
+        await db.query(
+          `UPDATE orders SET payment_status = 'refund_pending', updated_at = NOW() WHERE id = $1`,
+          [orderId],
+        );
+      }
+      const updated = await db.query(`SELECT * FROM payment_refunds WHERE id = $1`, [refundRow.id]);
+      console.log(
+        `[Refund] Admin ${adminId} refund of R${parseFloat(refundRow.amount).toFixed(2)} `
+        + `(${isFull ? "full" : "partial"}) submitted for order ${orderId}`,
+      );
+      return updated.rows[0];
+    } catch (err) {
+      await db.query(
+        `UPDATE payment_refunds
+         SET status = 'failed', provider_response = $2::jsonb, updated_at = NOW()
+         WHERE id = $1`,
+        [refundRow.id, JSON.stringify({ error: err.message })],
+      ).catch(() => null);
+      await RefundService.alertIfRefundRetriesExhausted({ orderId, amount: refundRow.amount });
+      throw err;
+    }
+  }
+
   // Shared by webhookController's refund.processed/refund.failed handlers and
   // paymentReconciliationJob's polling fallback — one place that actually
   // moves a refund to its final state, so both paths can't disagree on how
@@ -388,7 +532,7 @@ class RefundService {
       }
 
       const row = await client.query(
-        `SELECT pr.id, pr.order_id, pr.status, pr.amount, pr.payment_id, p.status AS payment_status
+        `SELECT pr.id, pr.order_id, pr.status, pr.amount, pr.payment_id, pr.reason, p.status AS payment_status
          FROM payment_refunds pr
          LEFT JOIN payments p ON p.id = pr.payment_id
          WHERE (pr.refund_reference = $1 AND $1::text IS NOT NULL)
@@ -409,6 +553,9 @@ class RefundService {
         payment_status: paymentStatus,
       } = row.rows[0];
       const stray = paymentStatus === STRAY || paymentStatus === STRAY_REFUNDED;
+      // PR G1 (#106): a partial admin refund leaves money with the order, so
+      // the order stays paid; only its payment_refunds row is finalized.
+      const partialAdminRefund = String(row.rows[0].reason || "").startsWith("admin_partial:");
 
       if (currentStatus === "completed" || currentStatus === "failed") {
         await client.query("ROLLBACK");
@@ -436,7 +583,7 @@ class RefundService {
             [paymentId],
           );
         }
-      } else {
+      } else if (!partialAdminRefund) {
         await client.query(
           `UPDATE orders SET payment_status = $2, updated_at = NOW() WHERE id = $1`,
           [orderId, outcome === "completed" ? "refunded" : "refund_failed"],

@@ -115,10 +115,12 @@ describe('OrderController.cancelOrder — locked-read guard (§2.9)', () => {
     expect(DriverWallet.creditAvailable).not.toHaveBeenCalled();
   });
 
+  // PR G1 (#106): 'waiting_for_driver' now carries the Terms A9 10% store
+  // charge (cancellationTermsA9.test.js); 'preparing' is still a full refund.
   test('full_refund mode: no driver credit, refunds the full payment', async () => {
     const state = {
       lockedRows: [{
-        id: 'order-1', status: 'waiting_for_driver', payment_method: 'card', payment_status: 'paid',
+        id: 'order-1', status: 'preparing', payment_method: 'card', payment_status: 'paid',
         subtotal: '100.00', delivery_fee: '30.00', driver_id: null,
       }],
     };
@@ -158,7 +160,9 @@ describe('OrderController.cancelOrder — locked-read guard (§2.9)', () => {
     expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-1', 'user-1', 'customer_cancellation', 115);
   });
 
-  test('store_arrival_split mode: 0% to store, 8% to driver', async () => {
+  // PR G1 (#106), Terms A9: the old 0%/8% "driver at the store" tier is
+  // gone; the driver at the store is the same 10% store / 5% driver charge.
+  test('driver at the store: the same 10% store / 5% driver charge as driver_assigned', async () => {
     const state = {
       lockedRows: [{
         id: 'order-1', status: 'driver_arrived_store', payment_method: 'card', payment_status: 'paid',
@@ -174,10 +178,10 @@ describe('OrderController.cancelOrder — locked-read guard (§2.9)', () => {
     await OrderController.cancelOrder(mockReq(), res);
 
     expect(DriverWallet.creditAvailable).toHaveBeenCalledWith(
-      expect.anything(), 'driver-1', 8, 'order-1', 'store_arrival_cancellation_compensation',
+      expect.anything(), 'driver-1', 5, 'order-1', 'pre_pickup_cancellation_compensation',
     );
-    // 92% of 100 = 92 to customer + full 30 delivery fee = 122
-    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-1', 'user-1', 'customer_cancellation', 122);
+    // 85% of 100 = 85 to customer + full 30 delivery fee = 115
+    expect(RefundService.refundOrderPayment).toHaveBeenCalledWith('order-1', 'user-1', 'customer_cancellation', 115);
   });
 
   // ── Concurrency guard (the actual §2.9 fix) ────────────────────────────────
