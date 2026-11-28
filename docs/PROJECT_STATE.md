@@ -12,6 +12,15 @@
 > verified from the source (runtime env values, device behaviour, production
 > data), it says so explicitly.
 
+> **Status update, 2026-11-28 (PR G1, money correctness, #106).**
+> - **PR #105 (PR E) is merged.** The founder decided the app must match the live Terms, Returns and Privacy pages; the plan for G1–G4 and F is `docs/TERMS_ALIGNMENT_PLAN.md`.
+> - **G1:**
+>   - customer cancellation follows Terms A9 (FI-138, FI-139, FI-140);
+>   - Flash-side cancellations are tested as full refunds (FI-141);
+>   - admins can refund delivered or cancelled orders in full or in part (FI-100).
+>   No migration.
+> - **Next, by the plan:** G3 (consent), G2 (returns), F (Apple token revocation), G4 (admin MFA).
+
 > **Status update, 2026-11-27, later (PR E, iOS release config, #104).**
 > - **#103 (Step 1) is merged.** The App Store's Expo Go is now SDK 58 and can't run the SDK 54 apps, so both apps go to **TestFlight** once Apple reactivates the founder's developer account.
 > - **PR E (#104) built the release config:**

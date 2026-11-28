@@ -14,6 +14,16 @@ const MAX_AUTOMATIC_REFUND_ATTEMPTS = 3;
 const STRAY = "stray";
 const STRAY_REFUNDED = "stray_refunded";
 
+// Reasons that only the server writes, and that change how a refund is
+// finalized. Free text from a customer or a store can never start with one
+// (found in review of #107: a customer could type "admin_partial:" as their
+// cancellation reason and stop the order's refund status from updating).
+const SERVER_REASON_PREFIX = /^\s*(admin_|stray_charge:)/i;
+function userReason(reason) {
+  const text = String(reason ?? "");
+  return SERVER_REASON_PREFIX.test(text) ? `note:${text}` : text;
+}
+
 function capError() {
   const err = new Error(
     `Refund not retried automatically: it already failed ${MAX_AUTOMATIC_REFUND_ATTEMPTS} times. Use a manual retry.`,
@@ -76,6 +86,108 @@ class RefundService {
     }
   }
 
+
+  // PR G1 (#106), found in review: sends a recorded refund attempt to
+  // Paystack. If Paystack refuses (or doesn't answer), the attempt is marked
+  // failed and the 3-failure alert is checked. Once Paystack has ACCEPTED it,
+  // the attempt is never marked failed: if saving the result locally fails,
+  // the money is already on its way back, and a "failed" row would invite a
+  // second refund. Instead admins are alerted with Paystack's refund id and
+  // the error says not to refund again.
+  static async submitToPaystack(refundRow, { transactionId, amountInCents, note, alert }) {
+    let providerResult;
+    try {
+      providerResult = await paystackService.refundTransaction(transactionId, amountInCents, note);
+      if (!providerResult?.status) {
+        throw new Error(providerResult?.message || "Refund provider request failed");
+      }
+    } catch (err) {
+      await db.query(
+        `UPDATE payment_refunds
+         SET status = 'failed', provider_response = $2::jsonb, updated_at = NOW()
+         WHERE id = $1`,
+        [refundRow.id, JSON.stringify({ error: err.message })],
+      ).catch(() => null);
+      await RefundService.alertIfRefundRetriesExhausted(alert);
+      throw err;
+    }
+
+    // Paystack's refund id is data.id (its /refund response has no
+    // reference field); the refund.processed/failed webhooks carry it too.
+    const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
+    try {
+      // The provider response is only replaced while the attempt is still
+      // processing: if refund.processed/failed already finalized it, its
+      // final answer is kept (review of #107).
+      await db.query(
+        `UPDATE payment_refunds
+         SET refund_reference = $2,
+             provider_response = CASE WHEN status = 'processing' THEN $3::jsonb ELSE provider_response END,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [refundRow.id, refundReference, JSON.stringify(providerResult)],
+      );
+    } catch (saveErr) {
+      // Best effort, a second, smaller write: a durable "Paystack accepted
+      // refund X" marker. reconcileOrphanedProcessingRefunds adopts the id
+      // from it instead of failing the attempt, so the money already on its
+      // way back is never refunded twice (review of #107).
+      await db.query(
+        `UPDATE payment_refunds
+         SET provider_response = jsonb_build_object('acceptedByPaystack', true, 'refundId', $2::text)
+         WHERE id = $1 AND status = 'processing'`,
+        [refundRow.id, refundReference],
+      ).catch(() => null);
+      console.error(
+        `[Refund] CRITICAL: Paystack ACCEPTED refund ${refundReference} for order ${alert.orderId} `
+        + `(attempt ${refundRow.id}), but saving it failed: ${saveErr.message}. Do not refund this order again.`,
+      );
+      await sendPaymentAlertEmail({
+        title: "A refund was sent but couldn't be saved",
+        orderId: alert.orderId,
+        amount: refundRow.amount,
+        details: [
+          `Paystack refund id: ${refundReference}`,
+          `Error: ${saveErr.message}`,
+          "Paystack accepted this refund. Do not refund the order again; check it in the Paystack dashboard.",
+        ],
+      }).catch(() => null);
+      const err = new Error(
+        `Paystack accepted the refund (id ${refundReference}), but saving it failed. `
+        + "Don't refund again; check it in the Paystack dashboard.",
+      );
+      err.code = "REFUND_ACCEPTED_NOT_SAVED";
+      throw err;
+    }
+    return { providerResult, refundReference };
+  }
+
+  // After Paystack accepted a FULL refund: the order shows refund_pending
+  // until Paystack confirms. Never overwrites 'refunded' (the
+  // refund.processed webhook can land before this line runs). Not fatal:
+  // the refund itself is already accepted and recorded.
+  //
+  // Written only while THIS attempt is still processing: if Paystack's
+  // refund.failed already finalized it (order 'refund_failed'), this must
+  // not put the order back to pending (review of #107).
+  static async markOrderRefundPending(orderId, refundId) {
+    await db.query(
+      `UPDATE orders SET payment_status = 'refund_pending', updated_at = NOW()
+       WHERE id = $1 AND payment_status <> 'refunded'
+         AND EXISTS (SELECT 1 FROM payment_refunds WHERE id = $2 AND status = 'processing')`,
+      [orderId, refundId],
+    ).catch((e) => console.error(`[Refund] could not mark order ${orderId} refund_pending:`, e.message));
+  }
+
+  // The saved attempt, re-read; falls back to what we know if the read fails.
+  static async readAttempt(refundRow, refundReference) {
+    try {
+      const r = await db.query(`SELECT * FROM payment_refunds WHERE id = $1`, [refundRow.id]);
+      return r.rows[0] || { ...refundRow, refund_reference: refundReference };
+    } catch (_) {
+      return { ...refundRow, refund_reference: refundReference };
+    }
+  }
 
   // overrideAmount (optional): refund less than the full payment amount —
   // used by the returns feature to net the return fee out of the refund
@@ -183,7 +295,7 @@ class RefundService {
         `INSERT INTO payment_refunds (order_id, user_id, payment_id, amount, provider, status, reason)
          VALUES ($1, $2, $3, $4, $5, 'processing', $6)
          RETURNING *`,
-        [orderId, userId, payment.id, refundAmount, payment.provider, reason],
+        [orderId, userId, payment.id, refundAmount, payment.provider, userReason(reason)],
       );
 
       refundRow = createRefund.rows[0];
@@ -195,64 +307,19 @@ class RefundService {
       client.release();
     }
 
-    try {
-      const amountInCents = Math.round(parseFloat(refundRow.amount || payment.amount || order.total || 0) * 100);
-      const providerResult = await paystackService.refundTransaction(
-        payment.provider_transaction_id,
-        amountInCents,
-        reason,
-      );
-
-      if (!providerResult?.status) {
-        throw new Error(providerResult?.message || "Refund provider request failed");
-      }
-
-      // Paystack's real /refund response has no `reference`/`refund_reference`
-      // field at all (confirmed against a live test-mode call) — the refund's
-      // own identifier is `data.id`. This is also the value that later
-      // refund.processed/refund.failed webhooks carry, so it's what
-      // webhookController matches against to close the loop.
-      const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
-
-      // Paystack's refund is asynchronous — accepting the request (this HTTP
-      // response) is not the same as the refund actually completing. A live
-      // test call came back with status: "pending" and an expected_at days
-      // out, not "done". Marking the order 'refunded' here would tell the
-      // customer/store their money is back before Paystack has confirmed
-      // that's true. 'refund_pending' is the accurate interim state;
-      // webhookController's refund.processed/refund.failed handlers move it
-      // to its final 'refunded' or flag it for manual attention.
-      await db.query(
-        `UPDATE payment_refunds
-         SET refund_reference = $2, provider_response = $3::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, refundReference, JSON.stringify(providerResult)],
-      );
-
-      await db.query(
-        `UPDATE orders
-         SET payment_status = 'refund_pending', updated_at = NOW()
-         WHERE id = $1`,
-        [orderId],
-      );
-
-      const updatedRefund = await db.query(
-        `SELECT * FROM payment_refunds WHERE id = $1`,
-        [refundRow.id],
-      );
-
-      return updatedRefund.rows[0];
-    } catch (err) {
-      await db.query(
-        `UPDATE payment_refunds
-         SET status = 'failed', provider_response = $2::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, JSON.stringify({ error: err.message })],
-      ).catch(() => null);
-
-      await RefundService.alertIfRefundRetriesExhausted({ orderId, amount: refundRow.amount });
-      throw err;
-    }
+    // Paystack's refund is asynchronous: accepting the request isn't the
+    // refund completing (a live test call came back "pending", days out). So
+    // the order shows 'refund_pending' until refund.processed/failed (or the
+    // polling fallback) finalizes it.
+    const amountInCents = Math.round(parseFloat(refundRow.amount || payment.amount || order.total || 0) * 100);
+    const { refundReference } = await RefundService.submitToPaystack(refundRow, {
+      transactionId: payment.provider_transaction_id,
+      amountInCents,
+      note: refundRow.reason,
+      alert: { orderId, amount: refundRow.amount },
+    });
+    await RefundService.markOrderRefundPending(orderId, refundRow.id);
+    return RefundService.readAttempt(refundRow, refundReference);
   }
 
   // Step 1 (#102): refunds a stray charge (payments.status = 'stray') in
@@ -309,37 +376,149 @@ class RefundService {
       client.release();
     }
 
-    try {
-      // No amount: Paystack refunds the whole transaction.
-      const providerResult = await paystackService.refundTransaction(
-        payment.provider_transaction_id,
-        null,
-        refundRow.reason,
-      );
-      if (!providerResult?.status) {
-        throw new Error(providerResult?.message || "Refund provider request failed");
+    // No amount: Paystack refunds the whole transaction.
+    const { refundReference } = await RefundService.submitToPaystack(refundRow, {
+      transactionId: payment.provider_transaction_id,
+      amountInCents: null,
+      note: refundRow.reason,
+      alert: { orderId: payment.order_id, paymentId: payment.id, amount: payment.amount, stray: true },
+    });
+    return RefundService.readAttempt(refundRow, refundReference);
+  }
+
+  // PR G1 (#106), audit H7: an admin refunds a delivered or cancelled card
+  // order, in full (amount null: everything still left) or in part, with a
+  // typed reason. Every attempt is a payment_refunds row; a failure counts
+  // for the 3-failure alert. Safety:
+  //   - never more than what's left of what was paid (completed refunds on
+  //     the payment are subtracted, in cents);
+  //   - never a second refund while one is still in flight on the payment
+  //     (a double click can't refund twice);
+  //   - the order is locked for the whole decision.
+  // A refund that leaves money unrefunded is recorded as 'admin_partial:' and
+  // never changes the order's payment_status; one that clears the balance is
+  // 'admin_full:' and behaves like every other full refund.
+  static async adminRefund(orderId, { amount = null, reason, adminId } = {}) {
+    const typedReason = String(reason ?? "").trim();
+    if (!typedReason) throw new Error("Type a reason for the refund");
+    if (typedReason.length > 500) throw new Error("Keep the reason under 500 characters");
+
+    let requestedCents = null;
+    if (amount !== null && amount !== undefined && String(amount).trim() !== "") {
+      const text = String(amount).trim();
+      const value = Number(text);
+      if (!Number.isFinite(value) || value <= 0) throw new Error("The refund must be more than R0");
+      if (Math.abs(value * 100 - Math.round(value * 100)) > 1e-6) {
+        throw new Error("The refund amount can only have rands and cents");
       }
-      const refundReference = providerResult.data?.id != null ? String(providerResult.data.id) : null;
-      await db.query(
-        `UPDATE payment_refunds
-         SET refund_reference = $2, provider_response = $3::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, refundReference, JSON.stringify(providerResult)],
-      );
-      const updated = await db.query(`SELECT * FROM payment_refunds WHERE id = $1`, [refundRow.id]);
-      return updated.rows[0];
-    } catch (err) {
-      await db.query(
-        `UPDATE payment_refunds
-         SET status = 'failed', provider_response = $2::jsonb, updated_at = NOW()
-         WHERE id = $1`,
-        [refundRow.id, JSON.stringify({ error: err.message })],
-      ).catch(() => null);
-      await RefundService.alertIfRefundRetriesExhausted({
-        orderId: payment.order_id, paymentId: payment.id, amount: payment.amount, stray: true,
-      });
-      throw err;
+      requestedCents = Math.round(value * 100);
+      // Found in review: a tiny positive amount (e.g. 0.000000001) passed the
+      // checks above but rounds to 0 cents.
+      if (requestedCents < 1) throw new Error("The refund must be more than R0");
     }
+
+    const client = await db.connect();
+    let refundRow;
+    let payment;
+    let isFull;
+    let orderRow;
+    try {
+      await client.query("BEGIN");
+      const o = await client.query(
+        `SELECT id, user_id, status, payment_method, payment_status,
+                (updated_at > NOW() - INTERVAL '5 minutes') AS changed_recently
+         FROM orders WHERE id = $1 FOR UPDATE`,
+        [orderId],
+      );
+      if (!o.rows.length) throw new Error("Order not found");
+      orderRow = o.rows[0];
+      if (!["delivered", "completed", "cancelled"].includes(orderRow.status)) {
+        throw new Error("Only delivered or cancelled orders can be refunded here");
+      }
+      if (orderRow.payment_method !== "card") {
+        throw new Error("Only card payments can be refunded here");
+      }
+      // A just-cancelled order's own refund is sent right after the
+      // cancellation commits. An admin refund in that moment would take its
+      // place (review of #107), so wait until it has been attempted.
+      if (orderRow.status === "cancelled" && orderRow.changed_recently) {
+        const attempted = await client.query(
+          `SELECT 1 FROM payment_refunds WHERE order_id = $1 LIMIT 1`,
+          [orderId],
+        );
+        if (!attempted.rows.length) {
+          throw new Error("This order's cancellation refund is still being sent automatically. Try again in a few minutes.");
+        }
+      }
+
+      const p = await client.query(
+        `SELECT id, provider, provider_transaction_id, amount
+         FROM payments
+         WHERE order_id = $1
+           AND status = 'paid'
+           AND provider_transaction_id IS NOT NULL
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [orderId],
+      );
+      if (!p.rows.length) throw new Error("No card payment found for this order");
+      payment = p.rows[0];
+
+      const busy = await client.query(
+        `SELECT id FROM payment_refunds WHERE payment_id = $1 AND status = 'processing' LIMIT 1`,
+        [payment.id],
+      );
+      if (busy.rows.length) {
+        throw new Error("A refund for this order is still being processed. Wait for Paystack to confirm it, then try again.");
+      }
+
+      const done = await client.query(
+        `SELECT COALESCE(SUM(amount), 0) AS refunded
+         FROM payment_refunds WHERE payment_id = $1 AND status = 'completed'`,
+        [payment.id],
+      );
+      const paidCents = Math.round(parseFloat(payment.amount) * 100);
+      const refundedCents = Math.round(parseFloat(done.rows[0].refunded) * 100);
+      const leftCents = paidCents - refundedCents;
+      if (leftCents <= 0) throw new Error("This order has already been refunded in full");
+
+      const cents = requestedCents === null ? leftCents : requestedCents;
+      if (cents > leftCents) {
+        throw new Error(
+          `The refund can't be more than R${(leftCents / 100).toFixed(2)} `
+          + `(what's left of the R${(paidCents / 100).toFixed(2)} paid)`,
+        );
+      }
+      isFull = cents === leftCents;
+
+      const created = await client.query(
+        `INSERT INTO payment_refunds (order_id, user_id, payment_id, amount, provider, status, reason)
+         VALUES ($1, $2, $3, $4, $5, 'processing', $6)
+         RETURNING *`,
+        [orderId, orderRow.user_id, payment.id, cents / 100, payment.provider,
+          `${isFull ? "admin_full" : "admin_partial"}:${typedReason}`],
+      );
+      refundRow = created.rows[0];
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    const { refundReference } = await RefundService.submitToPaystack(refundRow, {
+      transactionId: payment.provider_transaction_id,
+      amountInCents: Math.round(parseFloat(refundRow.amount) * 100),
+      note: refundRow.reason,
+      alert: { orderId, amount: refundRow.amount },
+    });
+    if (isFull) await RefundService.markOrderRefundPending(orderId, refundRow.id);
+    console.log(
+      `[Refund] Admin ${adminId} refund of R${parseFloat(refundRow.amount).toFixed(2)} `
+      + `(${isFull ? "full" : "partial"}) submitted for order ${orderId}`,
+    );
+    return RefundService.readAttempt(refundRow, refundReference);
   }
 
   // Shared by webhookController's refund.processed/refund.failed handlers and
@@ -388,7 +567,7 @@ class RefundService {
       }
 
       const row = await client.query(
-        `SELECT pr.id, pr.order_id, pr.status, pr.amount, pr.payment_id, p.status AS payment_status
+        `SELECT pr.id, pr.order_id, pr.status, pr.amount, pr.payment_id, pr.reason, p.status AS payment_status
          FROM payment_refunds pr
          LEFT JOIN payments p ON p.id = pr.payment_id
          WHERE (pr.refund_reference = $1 AND $1::text IS NOT NULL)
@@ -409,6 +588,9 @@ class RefundService {
         payment_status: paymentStatus,
       } = row.rows[0];
       const stray = paymentStatus === STRAY || paymentStatus === STRAY_REFUNDED;
+      // PR G1 (#106): a partial admin refund leaves money with the order, so
+      // the order stays paid; only its payment_refunds row is finalized.
+      const partialAdminRefund = String(row.rows[0].reason || "").startsWith("admin_partial:");
 
       if (currentStatus === "completed" || currentStatus === "failed") {
         await client.query("ROLLBACK");
@@ -436,7 +618,7 @@ class RefundService {
             [paymentId],
           );
         }
-      } else {
+      } else if (!partialAdminRefund) {
         await client.query(
           `UPDATE orders SET payment_status = $2, updated_at = NOW() WHERE id = $1`,
           [orderId, outcome === "completed" ? "refunded" : "refund_failed"],
@@ -458,6 +640,7 @@ class RefundService {
 }
 
 RefundService.MAX_AUTOMATIC_REFUND_ATTEMPTS = MAX_AUTOMATIC_REFUND_ATTEMPTS;
+RefundService.userReason = userReason;
 RefundService.STRAY = STRAY;
 RefundService.STRAY_REFUNDED = STRAY_REFUNDED;
 

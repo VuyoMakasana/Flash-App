@@ -55,46 +55,26 @@ function isClientError(message) {
   return CLIENT_ERROR_FRAGMENTS.some((fragment) => message.includes(fragment));
 }
 
-// Pre-pickup, post-assignment cancellation split — confirmed with the
-// founder (not guessed): 10% of item value to the store, 5% to the assigned
-// driver as compensation for the trip already started, the remainder (85%)
-// plus the FULL delivery fee back to the customer. The remainder is computed
-// as itemValue minus the two shares rather than an independent multiplication
-// so the three shares always add up to exactly itemValue, with no rounding
-// gap.
-//
-// A second, harsher-for-the-store tier applies once the driver has actually
-// arrived at the store (driver_arrived_store) — also confirmed with the
-// founder: 0% to the store (nothing left the premises), 8% to the driver
-// (higher than the pre-arrival 5%, since they've made the actual trip), 92%
-// of item value plus the full delivery fee back to the customer. Same
-// remainder-based math, different percentages passed in by the caller.
-//
-// Cash orders haven't collected any payment yet (that happens at delivery),
-// so there is nothing to withhold from the store or refund to the customer —
-// only the driver's share is real there, paid directly by Flash as
-// compensation for the wasted trip. Shared by cancelOrder and its own
-// read-only preview endpoint so the two can never drift apart on the math.
-function computeCancellationSplit(order, { storePct = 0.10, driverPct = 0.05 } = {}) {
-  const itemValue    = parseFloat(order.subtotal) || 0;
-  const deliveryFee  = parseFloat(order.delivery_fee) || 0;
-  const isCash       = order.payment_method === 'cash';
+// PR G1 (#106): the cancellation charge (Terms A9) lives in
+// services/cancellationPolicy.js, shared by cancelOrder and its preview.
+const { cancellationTermsFor } = require('../services/cancellationPolicy');
 
-  const storeAmount        = isCash ? 0 : Math.round(itemValue * storePct * 100) / 100;
-  const driverAmount       = Math.round(itemValue * driverPct * 100) / 100;
-  const customerItemRefund = isCash ? 0 : Math.round((itemValue - storeAmount - driverAmount) * 100) / 100;
-  const deliveryFeeRefund  = isCash ? 0 : deliveryFee;
+// What the customer is shown before cancelling (and what the app sends back
+// as expectedChargePct). One builder for the preview and the 409 below.
+function cancellationPreviewFor(terms, state) {
+  if (terms.refundMode === 'full_refund') {
+    return { hasDriverAssigned: terms.hasDriverAssigned, fullRefund: true, stage: state, chargePct: 0 };
+  }
+  return { hasDriverAssigned: terms.hasDriverAssigned, fullRefund: false, stage: state, ...terms.split };
+}
 
-  return {
-    itemValue,
-    deliveryFee,
-    isCash,
-    storeAmount,
-    driverAmount,
-    customerItemRefund,
-    deliveryFeeRefund,
-    totalCustomerRefund: customerItemRefund + deliveryFeeRefund,
-  };
+// PR G1 (#106): the charge changed between the preview and the confirm
+// (e.g. the store marked the order ready meanwhile). Nothing is written.
+class CancellationTermsChangedError extends Error {
+  constructor(preview) {
+    super('The cancellation charge has changed because your order moved on. Please check the new amounts and confirm again.');
+    this.preview = preview;
+  }
 }
 
 class OrderController {
@@ -254,21 +234,13 @@ class OrderController {
 
       const order = result.rows[0];
       const state = normalizeState(order.status);
+      const terms = cancellationTermsFor({ ...order, status: state });
 
-      if (['picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'].includes(state)) {
+      if (!terms.cancellable) {
         return res.status(409).json({ error: 'Order cannot be cancelled at this stage' });
       }
 
-      if (!order.driver_id) {
-        return res.json({ hasDriverAssigned: false, fullRefund: true });
-      }
-
-      const arrivedAtStore = state === 'driver_arrived_store';
-      const split = computeCancellationSplit(
-        order,
-        arrivedAtStore ? { storePct: 0, driverPct: 0.08 } : undefined,
-      );
-      return res.json({ hasDriverAssigned: true, fullRefund: false, stage: state, ...split });
+      return res.json(cancellationPreviewFor(terms, state));
     } catch (err) {
       console.error('[Order] getCancellationPreview error:', err.message);
       res.status(500).json({ error: 'Failed to compute cancellation preview' });
@@ -397,8 +369,9 @@ class OrderController {
         }
         order = lockedResult.rows[0];
         const state = normalizeState(order.status);
+        const terms = cancellationTermsFor({ ...order, status: state });
 
-        if (['picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'].includes(state)) {
+        if (!terms.cancellable) {
           throw new Error(
             state === 'cancelled'
               ? 'Order has already been cancelled'
@@ -406,38 +379,25 @@ class OrderController {
           );
         }
 
-        // Pre-pickup cancellation split — confirmed formula (see
-        // computeCancellationSplit above): 10% of item value to the store,
-        // 5% to the assigned driver, the remainder + full delivery fee back
-        // to the customer. Replaces the old 25%-of-delivery-fee penalty,
-        // which never actually issued a real refund for card orders — it
-        // only recorded a penalty amount nothing ever deducted from.
-        //
-        // driver_arrived_store gets its own, harsher-for-the-store tier
-        // (0%/8%/92%, see computeCancellationSplit) rather than reusing
-        // driver_assigned's numbers. This mode was previously named
-        // 'store_refund_no_delivery_refund' (32 chars) which exceeded
-        // order_cancellations.refund_mode's VARCHAR(30) and made every
-        // cancellation attempt at this stage throw and roll back with a bare
-        // 400 -- the customer could not cancel at all once the driver had
-        // arrived at the store. Renamed to fit, and given a real split and
-        // refund branch (see below) instead of silently refunding nothing.
-        // pending_store_acceptance/preparing added alongside the existing
-        // three: a customer cancelling before or during store preparation
-        // has no driver assigned yet either, same as waiting_for_driver --
-        // full refund is correct here for the same reason, not something
-        // these two new states get by accident. Found and fixed before ever
-        // shipping the new states: without this, a cancellation attempt
-        // during either would have fallen through every branch below
-        // (refundMode staying 'none'), silently refunding nothing.
-        if (['payment_pending', 'paid', 'pending_store_acceptance', 'preparing', 'waiting_for_driver'].includes(state)) {
-          refundMode = 'full_refund';
-        } else if (state === 'driver_assigned') {
-          refundMode = 'pre_pickup_split';
-          split = computeCancellationSplit(order);
-        } else if (state === 'driver_arrived_store') {
-          refundMode = 'store_arrival_split';
-          split = computeCancellationSplit(order, { storePct: 0, driverPct: 0.08 });
+        // PR G1 (#106), Terms A9 (services/cancellationPolicy.js): full
+        // refund before the store accepts and while it prepares; once the
+        // order is ready, the items less 10% (store) and 5% (driver, once
+        // one is assigned), plus the full delivery fee. The old 0%/8%
+        // "driver at the store" tier is gone: the Terms have one charge.
+        refundMode = terms.refundMode;
+        split = terms.split;
+
+        // The app sends the charge it showed (expectedChargePct). If the
+        // order moved on since (preparing -> ready, or a driver was
+        // assigned), refuse before anything is written, so nobody is
+        // charged terms they didn't see. Older apps that don't send it are
+        // unaffected.
+        const expected = req.body?.expectedChargePct;
+        if (expected !== undefined && expected !== null) {
+          const preview = cancellationPreviewFor(terms, state);
+          if (!Number.isFinite(Number(expected)) || Math.abs(Number(expected) - preview.chargePct) > 0.0001) {
+            throw new CancellationTermsChangedError(preview);
+          }
         }
 
         if (order.driver_id && ['assigned', 'held'].includes(order.delivery_payment_status || '') && !order.driver_paid) {
@@ -449,10 +409,7 @@ class OrderController {
 
         if (split && order.driver_id && split.driverAmount > 0) {
           await DriverWallet.creditAvailable(
-            client, order.driver_id, split.driverAmount, order.id,
-            refundMode === 'store_arrival_split'
-              ? 'store_arrival_cancellation_compensation'
-              : 'pre_pickup_cancellation_compensation',
+            client, order.driver_id, split.driverAmount, order.id, 'pre_pickup_cancellation_compensation',
           );
         }
 
@@ -524,10 +481,7 @@ class OrderController {
             req.userId,
             req.body?.reason || 'customer_cancellation',
           );
-        } else if (
-          (refundMode === 'pre_pickup_split' || refundMode === 'store_arrival_split')
-          && isCardPaid && split.totalCustomerRefund > 0
-        ) {
+        } else if (refundMode === 'pre_pickup_split' && isCardPaid && split.totalCustomerRefund > 0) {
           refund = await RefundService.refundOrderPayment(
             orderId,
             req.userId,
@@ -550,6 +504,9 @@ class OrderController {
         split,
       });
     } catch (err) {
+      if (err instanceof CancellationTermsChangedError) {
+        return res.status(409).json({ error: err.message, code: 'CANCELLATION_TERMS_CHANGED', preview: err.preview });
+      }
       if (err.message === 'Order not found') {
         return res.status(404).json({ error: err.message });
       }

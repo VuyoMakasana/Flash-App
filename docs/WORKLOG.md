@@ -4,6 +4,36 @@ Newest first. One entry per merged or open piece of work: date, branch/PR, what 
 
 ---
 
+## 2026-11-28 — PR G1: money correctness, matching the Terms (#106, `launch/g1-money-correctness`)
+- **Plan:** `docs/TERMS_ALIGNMENT_PLAN.md` (G1–G4, F; which need a migration, always through PROD_MIGRATIONS).
+- **Cancellation (Terms A9):** new `services/cancellationPolicy.js`.
+  - **Full refund** before the store accepts and while it prepares.
+  - **Once ready:** the delivery fee plus the items less 10% (store), and 5% (driver) once a driver is assigned.
+  - **After collection:** none.
+  - The 0%/8% "driver at the store" tier is removed. `created` and `scheduled_for_morning` now refund in full; they refunded nothing before (FI-139).
+  - The founder chose (27 Nov) that the charge starts at "ready" and the driver share only applies with a driver.
+- **App:** the cancel screen draws every label from the server's preview (FI-140).
+- **Flash-side cancellations:** tests confirm each refunds in full (FI-141).
+- **Admin refund (H7, FI-100):**
+  - `RefundService.adminRefund` and `adminRefundAction.js`, with the form `adminComponents/RefundOrder.jsx`;
+  - full or partial, with a typed reason;
+  - never more than what's left, no second refund while one is in flight;
+  - audited in `admin_actions`; a partial refund leaves the order `paid`.
+- **Tests:** new unit tests for every cancellation stage and the admin refund, and `tests/integration/adminRefund.test.js` on real Postgres. Two old tests updated to the new rules.
+- **Review fixes (CodeRabbit on #107, each checked against the code):**
+  - the timers lock and re-check the order (FI-142);
+  - a charge that changed since the preview is refused (FI-143);
+  - an accepted refund is never marked failed, and `refund_pending` never overwrites `refunded` (FI-144);
+  - an amount that rounds to 0 cents is refused;
+  - the plan's G2 timing is corrected.
+  - **Not fixed:** a replay after completion (FI-145, needs an idempotency key).
+- **Second review pass on #107:**
+  - an accepted-but-unsaved refund is marked and adopted by the orphan sweep, never failed;
+  - `refund_pending` only while the attempt is processing;
+  - the final provider answer is kept;
+  - just-cancelled orders wait for their own refund before an admin refund;
+  - server-owned reason prefixes can't be typed by a customer (FI-146).
+
 ## 2026-11-27 — PR E: iOS release config for TestFlight (#104, `launch/ios-release-config`)
 - **Why:** the App Store's Expo Go is SDK 58; the SDK 54 apps go to TestFlight instead.
 - **`eas.json` (both apps):** channels `production` and `preview`; `https://api.flashdelivery.co.za` in every profile; `pk_test` removed (FI-120); `submit.production.ios` values are `TODO_FOUNDER_…`, with no `ascAppId` (FI-137).

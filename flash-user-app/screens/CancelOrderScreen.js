@@ -51,7 +51,13 @@ export default function CancelOrderScreen() {
   const submitCancellation = async () => {
     setSubmitting(true);
     try {
-      await api.orders.cancel(order.id, { reason: reason.trim() || null });
+      // PR G1 (#106): send the charge the customer was shown. If the order
+      // moved on meanwhile (e.g. the store marked it ready), the server
+      // refuses, and the new amounts are loaded below for a fresh confirm.
+      await api.orders.cancel(order.id, {
+        reason: reason.trim() || null,
+        expectedChargePct: preview?.chargePct ?? 0,
+      });
       analytics.orderCancelled(order.id, order.status);
       Alert.alert('Order Cancelled', 'Your cancellation has been processed.', [
         { text: 'OK', onPress: () => navigation.goBack() },
@@ -59,6 +65,11 @@ export default function CancelOrderScreen() {
     } catch (e) {
       if (e.message === 'SESSION_EXPIRED') return;
       Alert.alert('Could Not Cancel Order', e.message || 'Please try again.');
+      // Show the current terms (they may have changed) before any retry.
+      try {
+        const fresh = await api.orders.getCancellationPreview(order.id);
+        setPreview(fresh);
+      } catch (_) {}
     } finally {
       setSubmitting(false);
     }
@@ -91,6 +102,7 @@ export default function CancelOrderScreen() {
   }
 
   const rand = (n) => `R${parseFloat(n || 0).toFixed(2)}`;
+  const pct = (fraction) => `${Math.round(parseFloat(fraction || 0) * 100)}%`;
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -98,65 +110,44 @@ export default function CancelOrderScreen() {
         <ScrollView contentContainerStyle={styles.scroll}>
           <Text style={styles.orderNumber}>Order {order.order_number}</Text>
 
+          {/* PR G1 (#106), Terms A9: every number and percentage below comes
+              from the server's cancellation preview (cancellationPolicy.js),
+              so this screen can't disagree with what cancelling does. */}
           {preview.fullRefund ? (
             <View style={styles.card}>
               <Ionicons name="checkmark-circle-outline" size={22} color="#10b981" />
               <Text style={styles.fullRefundTitle}>Full refund</Text>
               <Text style={styles.fullRefundBody}>
-                No driver has been assigned to this order yet, so you'll receive a full refund to your original payment method (or nothing is charged at all for cash orders).
+                The store hasn't finished preparing your order yet, so you'll get everything back, items and delivery fee, to your original payment method (or nothing is charged at all for cash orders).
               </Text>
-            </View>
-          ) : preview.stage === 'driver_arrived_store' ? (
-            <View style={styles.card}>
-              <Ionicons name="information-circle-outline" size={22} color="#f59e0b" />
-              <Text style={styles.splitTitle}>Your driver has already arrived at the store</Text>
-              <Text style={styles.splitBody}>
-                Cancelling now: nothing is kept by the store since nothing has left the premises, your driver is compensated 8% for making the trip, and you get the rest back — plus your full delivery fee, since delivery never happened.
-              </Text>
-
-              <View style={styles.breakdown}>
-                <Row label="Item value" value={rand(preview.itemValue)} />
-                <Row label="To your driver (8%)" value={`− ${rand(preview.driverAmount)}`} />
-                <View style={styles.divider} />
-                {preview.isCash ? (
-                  <>
-                    <Row label="You haven't been charged yet" value={rand(0)} bold />
-                    <Text style={styles.cashNote}>
-                      This is a cash order — nothing has been collected from you. Your driver is still compensated {rand(preview.driverAmount)} for making the trip.
-                    </Text>
-                  </>
-                ) : (
-                  <>
-                    <Row label="Refund of item value (92%)" value={rand(preview.customerItemRefund)} />
-                    <Row label="Delivery fee refunded (100%)" value={rand(preview.deliveryFeeRefund)} />
-                    <Row label="Total you'll be refunded" value={rand(preview.totalCustomerRefund)} bold />
-                  </>
-                )}
-              </View>
             </View>
           ) : (
             <View style={styles.card}>
               <Ionicons name="information-circle-outline" size={22} color="#f59e0b" />
-              <Text style={styles.splitTitle}>A driver is already assigned to this order</Text>
+              <Text style={styles.splitTitle}>Your order is ready{preview.hasDriverAssigned ? ' and a driver is assigned' : ''}</Text>
               <Text style={styles.splitBody}>
-                Cancelling now splits the item value: the store keeps 10%, your driver is compensated 5% for the trip already started, and you get the rest back — plus your full delivery fee, in full, since delivery never happened.
+                {`Cancelling now has a charge of ${pct(preview.chargePct)} of the item value (Flash Terms, A9): ${pct(preview.storePct)} to the store for preparing it${preview.driverPct > 0 ? `, and ${pct(preview.driverPct)} to your driver for the trip` : ''}. You get the rest of the item value back, plus your full delivery fee.`}
               </Text>
 
               <View style={styles.breakdown}>
                 <Row label="Item value" value={rand(preview.itemValue)} />
-                <Row label="To the store (10%)" value={`− ${rand(preview.storeAmount)}`} />
-                <Row label="To your driver (5%)" value={`− ${rand(preview.driverAmount)}`} />
+                <Row label={`To the store (${pct(preview.storePct)})`} value={`− ${rand(preview.storeAmount)}`} />
+                {preview.driverPct > 0 && (
+                  <Row label={`To your driver (${pct(preview.driverPct)})`} value={`− ${rand(preview.driverAmount)}`} />
+                )}
                 <View style={styles.divider} />
                 {preview.isCash ? (
                   <>
                     <Row label="You haven't been charged yet" value={rand(0)} bold />
-                    <Text style={styles.cashNote}>
-                      This is a cash order — nothing has been collected from you. Your driver is still compensated {rand(preview.driverAmount)} for the trip already started.
-                    </Text>
+                    {preview.driverAmount > 0 && (
+                      <Text style={styles.cashNote}>
+                        This is a cash order — nothing has been collected from you. Your driver is still compensated {rand(preview.driverAmount)} for the trip.
+                      </Text>
+                    )}
                   </>
                 ) : (
                   <>
-                    <Row label="Refund of item value (85%)" value={rand(preview.customerItemRefund)} />
+                    <Row label="Refund of item value" value={rand(preview.customerItemRefund)} />
                     <Row label="Delivery fee refunded (100%)" value={rand(preview.deliveryFeeRefund)} />
                     <Row label="Total you'll be refunded" value={rand(preview.totalCustomerRefund)} bold />
                   </>

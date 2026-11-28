@@ -38,6 +38,8 @@ const {
 // Step 1 (#102): manual refund retries past the automatic cap.
 const RefundService = require('./services/refundService');
 const { manualRetryOrderRefund } = require('./services/paymentReconciliationJob');
+// PR G1 (#106), audit H7: full or partial admin refund with a typed reason.
+const { refundOrderAction } = require('./adminRefundAction');
 const SosAlert = require('./models/SosAlert');
 const ChatReport = require('./models/ChatReport');
 const Inventory = require('./models/Inventory');
@@ -1335,6 +1337,10 @@ function buildResources(db, components = {}) {
                 return { record: record.toJSON(currentAdmin), notice: { message: 'Order marked ready — driver matching started.', type: 'success' } };
               },
             },
+            // PR G1 (#106), audit H7: refund a delivered, completed or
+            // cancelled card order, in full or in part, with a typed reason
+            // (adminRefundAction.js; audited in admin_actions).
+            refundOrder: refundOrderAction(components.RefundOrder),
             // Step 1 (#102), founder rule: refunds stop retrying automatically
             // after 3 failures (an admin is alerted). This is the manual
             // retry, for a cancelled card order whose money hasn't gone back.
@@ -2469,6 +2475,11 @@ async function mountAdminPanel(app) {
     'FeatureSwitchToggle',
     path.join(__dirname, 'adminComponents', 'FeatureSwitchToggle.jsx'),
   );
+  // PR G1 (#106): the amount + reason form for an order's "Refund" action.
+  const refundOrderComponent = componentLoader.add(
+    'RefundOrder',
+    path.join(__dirname, 'adminComponents', 'RefundOrder.jsx'),
+  );
 
   const dbName = new URL(process.env.DATABASE_URL).pathname.replace(/^\//, '');
   // Explicit `schema: 'public'` (previously unset, silently falling back to
@@ -2490,7 +2501,7 @@ async function mountAdminPanel(app) {
   // the marketing_* resources even before this section's own five
   // additions) — full visibility should extend to what the logs
   // themselves say is actually mounted, not just the panel's own UI.
-  const resources = suppressReferencesToUnregisteredTables(buildResources(db, { FeatureSwitchToggle: featureSwitchToggleComponent }));
+  const resources = suppressReferencesToUnregisteredTables(buildResources(db, { FeatureSwitchToggle: featureSwitchToggleComponent, RefundOrder: refundOrderComponent }));
 
   const admin = new AdminJS({
     rootPath: ADMIN_PANEL_PATH,
